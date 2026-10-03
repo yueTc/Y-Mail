@@ -312,3 +312,263 @@ select:focus {
   margin: 0;
   word-break: break-all;
 }
+/* ---------- Wave 3 统一收件箱三栏布局 ---------- */
+
+.app-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.app-head h1 {
+  margin: 0;
+}
+
+.tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.tab {
+  padding: 6px 14px;
+  border-radius: 999px;
+}
+
+.tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.inbox-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 260px;
+  gap: 14px;
+  align-items: stretch;
+  height: calc(100vh - 190px);
+  min-height: 420px;
+}
+
+.inbox-sidebar,
+.inbox-main,
+.inbox-reader {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-bg);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.inbox-sidebar {
+  padding: 10px 8px;
+  overflow-y: auto;
+}
+
+.inbox-reader {
+  padding: 16px;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 6px;
+}
+
+.sidebar-item.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.sidebar-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-account {
+  margin-top: 2px;
+}
+
+.sidebar-account-item {
+  font-weight: 600;
+}
+
+.sidebar-folders {
+  margin: 2px 0 4px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sidebar-folder {
+  font-size: 0.92rem;
+  opacity: 0.9;
+}
+
+.unread-badge {
+  flex: none;
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.inbox-main {
+  display: flex;
+  flex-direction: column;
+}
+
+.inbox-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.inbox-toolbar .hint {
+  margin: 0;
+}
+
+.inbox-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  position: relative;
+}
+
+.inbox-virtual {
+  width: 100%;
+}
+
+.inbox-virtual-item {
+  padding: 0 6px;
+}
+
+.inbox-empty {
+  padding: 20px;
+}
+
+.inbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 100%;
+  padding: 8px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  cursor: default;
+}
+
+.inbox-row[role="button"] {
+  cursor: pointer;
+}
+
+.inbox-row:hover {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.inbox-row[data-read="false"] .inbox-row-sender,
+.inbox-row[data-read="false"] .inbox-row-subject {
+  font-weight: 700;
+}
+
+.inbox-row-child {
+  padding-left: 34px;
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+
+.inbox-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.inbox-row-top,
+.inbox-row-bottom {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.inbox-row-sender {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-row-time {
+  flex: none;
+  font-size: 0.82rem;
+  opacity: 0.7;
+}
+
+.inbox-row-subject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.94rem;
+}
+
+.inbox-row-marks {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+
+.inbox-row-sub {
+  font-size: 0.8rem;
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-count {
+  margin-left: 6px;
+  font-size: 0.78rem;
+  opacity: 0.72;
+}
+
+.thread-arrow {
+  flex: none;
+  opacity: 0.65;
+}
+
+@media (max-width: 900px) {
+  .inbox-layout {
+    grid-template-columns: 190px minmax(0, 1fr);
+    height: auto;
+  }
+
+  .inbox-scroll {
+    height: 60vh;
+  }
+
+  .inbox-reader {
+    display: none;
+  }
+}

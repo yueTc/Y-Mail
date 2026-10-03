@@ -131,6 +131,90 @@ export interface DbStatus {
   fts5Available: boolean;
 }
 
+// ============================ 统一收件箱类型（Wave 3） ============================
+
+/** 统一收件箱里的一封邮件。 */
+export interface InboxMessage {
+  id: number;
+  accountId: number;
+  folderId: number;
+  uid: number;
+  threadKey: string;
+  subject: string;
+  fromName: string;
+  fromAddr: string;
+  dateUtc: string;
+  size: number;
+  hasAttachments: boolean;
+  isRead: boolean;
+  isFlagged: boolean;
+  snippet: string;
+  accountEmail: string;
+  accountName: string;
+  accountColor: string;
+  folderPath: string;
+}
+
+/** 折叠后的一条会话线程。 */
+export interface InboxThread {
+  accountId: number;
+  threadKey: string;
+  messageCount: number;
+  unreadCount: number;
+  latest: InboxMessage;
+}
+
+/** 一个账号的收件箱汇总。 */
+export interface AccountInboxSummary {
+  accountId: number;
+  email: string;
+  displayName: string;
+  color: string;
+  enabled: boolean;
+  messageCount: number;
+  unreadCount: number;
+}
+
+/** 一个账号下的文件夹（带本地邮件条数）。 */
+export interface InboxFolder {
+  accountId: number;
+  folderId: number;
+  fullPath: string;
+  kind: string;
+  messageCount: number;
+  unreadCount: number;
+}
+/** 收件箱总览：各账号汇总 + 合计。 */
+export interface InboxSummary {
+  accounts: AccountInboxSummary[];
+  totalUnread: number;
+  totalMessages: number;
+}
+
+/** 收件箱查询条件；不带条件时看全部账号的收件箱。 */
+export interface InboxQuery {
+  accountId?: number;
+  folderId?: number;
+  unreadOnly?: boolean;
+  offset?: number;
+  limit?: number;
+}
+
+/** 一页邮件（含总数）。 */
+export interface InboxMessagePage {
+  items: InboxMessage[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+/** 一页线程（含总数）。 */
+export interface InboxThreadPage {
+  items: InboxThread[];
+  total: number;
+  offset: number;
+  limit: number;
+}
 // ============================ 错误 ============================
 
 /** 命令错误：对 Rust 侧 `CommandError` 的还原。 */
@@ -227,4 +311,22 @@ export const api = {
     call<void>("stop_sync", accountId === undefined ? {} : { accountId }),
   testProxy: (id: number, target?: string) =>
     call<void>("test_proxy", target === undefined ? { id } : { id, target }),
+
+  // ===== 统一收件箱（Wave 3） =====
+
+  inboxSummary: () => call<InboxSummary>("inbox_summary"),
+
+  listInboxFolders: () => call<InboxFolder[]>("list_inbox_folders"),
+
+  listInboxMessages: (query: InboxQuery = {}) =>
+    call<InboxMessagePage>("list_inbox_messages", { query }),
+
+  listInboxThreads: (query: InboxQuery = {}) =>
+    call<InboxThreadPage>("list_inbox_threads", { query }),
+
+  listThreadMessages: (accountId: number, threadKey: string, limit?: number) =>
+    call<InboxMessage[]>(
+      "list_thread_messages",
+      limit === undefined ? { accountId, threadKey } : { accountId, threadKey, limit },
+    ),
 };

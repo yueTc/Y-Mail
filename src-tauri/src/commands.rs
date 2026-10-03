@@ -6,7 +6,9 @@
 //! 安全约定：授权码与代理密码只从界面传入、写进系统凭据管理器；出参一律不含凭据本体，
 //! 已保存的账号只回一个 `hasCredential` 布尔值。命令入参不写日志。
 
-use mail_core::{ConnectionReport, EngineError};
+use mail_core::{
+    AccountInboxSummary, ConnectionReport, EngineError, InboxFolder, InboxMessage, InboxQuery, InboxThread,
+};
 use mail_domain::account::{Account, AccountDraft, AccountProxyMode, AuthType, Security, ServerConfig};
 use mail_domain::proxy::{GlobalProxyMode, ProxyConfig, ProxyId, ProxyKind, Secret};
 use serde::{Deserialize, Serialize};
@@ -770,4 +772,330 @@ pub async fn stop_sync(
     let engine = state.engine().await;
     engine.stop_sync(account_id).await;
     Ok(())
+}
+
+// ============================ 统一收件箱命令（Wave 3） ============================
+
+/// 收件箱默认每页条数。
+const INBOX_DEFAULT_LIMIT: i64 = 200;
+/// 收件箱每页条数上限（列表与线程展开共用）。
+const INBOX_MAX_LIMIT: i64 = 500;
+
+/// 统一收件箱查询条件（前端传入，全部字段可选）。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct InboxQueryDto {
+    /// 只看某个账号；省略表示全部账号。
+    pub account_id: Option<i64>,
+    /// 只看某个文件夹；省略表示各账号的收件箱。
+    pub folder_id: Option<i64>,
+    /// 只看未读。
+    pub unread_only: bool,
+    /// 跳过条数。
+    pub offset: i64,
+    /// 最多返回条数；省略用默认值。
+    pub limit: Option<i64>,
+}
+
+impl InboxQueryDto {
+    /// 转成存储层查询；顺带把条数与偏移量夹在合法范围。
+    fn to_query(&self) -> Result<InboxQuery, CommandError> {
+        if self.offset < 0 {
+            return Err(CommandError::input("分页偏移量不能是负数"));
+        }
+        let limit = self.limit.unwrap_or(INBOX_DEFAULT_LIMIT);
+        if limit <= 0 {
+            return Err(CommandError::input("每页条数要大于 0"));
+        }
+        if limit > INBOX_MAX_LIMIT {
+            return Err(CommandError::input(format!("每页最多 {INBOX_MAX_LIMIT} 条")));
+        }
+        Ok(InboxQuery {
+            account_id: self.account_id,
+            folder_id: self.folder_id,
+            unread_only: self.unread_only,
+            offset: self.offset,
+            limit,
+        })
+    }
+}
+
+/// 一个账号的收件箱汇总。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountInboxDto {
+    /// 账号编号。
+    pub account_id: i64,
+    /// 邮箱地址。
+    pub email: String,
+    /// 显示名。
+    pub display_name: String,
+    /// 色标。
+    pub color: String,
+    /// 是否启用。
+    pub enabled: bool,
+    /// 收件箱邮件总数。
+    pub message_count: i64,
+    /// 收件箱未读数。
+    pub unread_count: i64,
+}
+
+impl AccountInboxDto {
+    fn from_summary(summary: &AccountInboxSummary) -> Self {
+        Self {
+            account_id: summary.account_id,
+            email: summary.email.clone(),
+            display_name: summary.display_name.clone(),
+            color: summary.color.clone(),
+            enabled: summary.enabled,
+            message_count: summary.message_count,
+            unread_count: summary.unread_count,
+        }
+    }
+}
+
+/// 收件箱总览：各账号汇总 + 未读与邮件合计。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxSummaryDto {
+    /// 每个账号的汇总（含未启用账号）。
+    pub accounts: Vec<AccountInboxDto>,
+    /// 所有账号的未读合计。
+    pub total_unread: i64,
+    /// 所有账号的邮件合计。
+    pub total_messages: i64,
+}
+
+/// 收件箱里的一封邮件。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxMessageDto {
+    /// 邮件编号。
+    pub id: i64,
+    /// 所属账号。
+    pub account_id: i64,
+    /// 所属文件夹。
+    pub folder_id: i64,
+    /// 服务器 UID。
+    pub uid: u32,
+    /// 会话键。
+    pub thread_key: String,
+    /// 主题。
+    pub subject: String,
+    /// 发件人显示名。
+    pub from_name: String,
+    /// 发件人邮箱。
+    pub from_addr: String,
+    /// 日期（UTC）。
+    pub date_utc: String,
+    /// 大小（字节）。
+    pub size: u32,
+    /// 是否含附件。
+    pub has_attachments: bool,
+    /// 是否已读。
+    pub is_read: bool,
+    /// 是否星标。
+    pub is_flagged: bool,
+    /// 摘要。
+    pub snippet: String,
+    /// 账号邮箱。
+    pub account_email: String,
+    /// 账号显示名。
+    pub account_name: String,
+    /// 账号色标。
+    pub account_color: String,
+    /// 文件夹路径。
+    pub folder_path: String,
+}
+
+impl InboxMessageDto {
+    fn from_message(message: &InboxMessage) -> Self {
+        Self {
+            id: message.id,
+            account_id: message.account_id,
+            folder_id: message.folder_id,
+            uid: message.uid,
+            thread_key: message.thread_key.clone(),
+            subject: message.subject.clone(),
+            from_name: message.from_name.clone(),
+            from_addr: message.from_addr.clone(),
+            date_utc: message.date_utc.clone(),
+            size: message.size,
+            has_attachments: message.has_attachments,
+            is_read: message.is_read,
+            is_flagged: message.is_flagged,
+            snippet: message.snippet.clone(),
+            account_email: message.account_email.clone(),
+            account_name: message.account_display_name.clone(),
+            account_color: message.account_color.clone(),
+            folder_path: message.folder_path.clone(),
+        }
+    }
+}
+
+/// 折叠后的一条会话线程。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxThreadDto {
+    /// 所属账号。
+    pub account_id: i64,
+    /// 会话键。
+    pub thread_key: String,
+    /// 线程里的邮件条数。
+    pub message_count: i64,
+    /// 线程里的未读条数。
+    pub unread_count: i64,
+    /// 最新一封。
+    pub latest: InboxMessageDto,
+}
+
+impl InboxThreadDto {
+    fn from_thread(thread: &InboxThread) -> Self {
+        Self {
+            account_id: thread.account_id,
+            thread_key: thread.thread_key.clone(),
+            message_count: thread.message_count,
+            unread_count: thread.unread_count,
+            latest: InboxMessageDto::from_message(&thread.latest),
+        }
+    }
+}
+
+/// 一页邮件（含总数）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxMessagePageDto {
+    /// 本页邮件。
+    pub items: Vec<InboxMessageDto>,
+    /// 符合条件的总条数。
+    pub total: i64,
+    /// 本页跳过的条数。
+    pub offset: i64,
+    /// 本页最大条数。
+    pub limit: i64,
+}
+
+/// 一页线程（含总数）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxThreadPageDto {
+    /// 本页线程。
+    pub items: Vec<InboxThreadDto>,
+    /// 符合条件的总行数。
+    pub total: i64,
+    /// 本页跳过的条数。
+    pub offset: i64,
+    /// 本页最大条数。
+    pub limit: i64,
+}
+
+/// 一个账号下的文件夹（带本地邮件条数）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxFolderDto {
+    /// 所属账号。
+    pub account_id: i64,
+    /// 文件夹编号。
+    pub folder_id: i64,
+    /// 服务器上的完整路径。
+    pub full_path: String,
+    /// 归类结果。
+    pub kind: String,
+    /// 本地邮件条数。
+    pub message_count: i64,
+    /// 本地未读条数。
+    pub unread_count: i64,
+}
+
+impl InboxFolderDto {
+    fn from_folder(folder: &InboxFolder) -> Self {
+        Self {
+            account_id: folder.account_id,
+            folder_id: folder.folder_id,
+            full_path: folder.full_path.clone(),
+            kind: folder.kind.clone(),
+            message_count: folder.message_count,
+            unread_count: folder.unread_count,
+        }
+    }
+}
+
+/// 列出全部账号的文件夹（带本地条数，供左侧文件夹树）。
+#[tauri::command]
+pub async fn list_inbox_folders(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<InboxFolderDto>, CommandError> {
+    let engine = state.engine().await;
+    let folders = engine.inbox_folders()?;
+    Ok(folders.iter().map(InboxFolderDto::from_folder).collect())
+}
+/// 收件箱总览：各账号未读与邮件合计。
+#[tauri::command]
+pub async fn inbox_summary(state: tauri::State<'_, AppState>) -> Result<InboxSummaryDto, CommandError> {
+    let engine = state.engine().await;
+    let accounts = engine.inbox_account_summary()?;
+    let total_unread = accounts.iter().map(|s| s.unread_count).sum();
+    let total_messages = accounts.iter().map(|s| s.message_count).sum();
+    Ok(InboxSummaryDto {
+        accounts: accounts.iter().map(AccountInboxDto::from_summary).collect(),
+        total_unread,
+        total_messages,
+    })
+}
+
+/// 平铺模式：一页邮件（每封一行，时间倒序）。
+#[tauri::command]
+pub async fn list_inbox_messages(
+    state: tauri::State<'_, AppState>,
+    query: Option<InboxQueryDto>,
+) -> Result<InboxMessagePageDto, CommandError> {
+    let query = query.unwrap_or_default().to_query()?;
+    let engine = state.engine().await;
+    let page = engine.inbox_messages(&query)?;
+    Ok(InboxMessagePageDto {
+        items: page.items.iter().map(InboxMessageDto::from_message).collect(),
+        total: page.total,
+        offset: page.offset,
+        limit: page.limit,
+    })
+}
+
+/// 会话模式：一页线程（每个账号的同名主题折叠一行）。
+#[tauri::command]
+pub async fn list_inbox_threads(
+    state: tauri::State<'_, AppState>,
+    query: Option<InboxQueryDto>,
+) -> Result<InboxThreadPageDto, CommandError> {
+    let query = query.unwrap_or_default().to_query()?;
+    let engine = state.engine().await;
+    let page = engine.inbox_threads(&query)?;
+    Ok(InboxThreadPageDto {
+        items: page.items.iter().map(InboxThreadDto::from_thread).collect(),
+        total: page.total,
+        offset: page.offset,
+        limit: page.limit,
+    })
+}
+
+/// 展开一条会话：取该账号该线程的邮件（新的在前）。
+#[tauri::command]
+pub async fn list_thread_messages(
+    state: tauri::State<'_, AppState>,
+    account_id: i64,
+    thread_key: String,
+    limit: Option<i64>,
+) -> Result<Vec<InboxMessageDto>, CommandError> {
+    if thread_key.trim().is_empty() {
+        return Err(CommandError::input("会话键不能为空"));
+    }
+    let limit = limit.unwrap_or(INBOX_DEFAULT_LIMIT);
+    if limit <= 0 {
+        return Err(CommandError::input("每页条数要大于 0"));
+    }
+    if limit > INBOX_MAX_LIMIT {
+        return Err(CommandError::input(format!("每页最多 {INBOX_MAX_LIMIT} 条")));
+    }
+    let engine = state.engine().await;
+    let messages = engine.thread_messages(account_id, thread_key.trim(), limit)?;
+    Ok(messages.iter().map(InboxMessageDto::from_message).collect())
 }

@@ -38,6 +38,11 @@ pub fn run() {
             commands::sync_status,
             commands::start_sync,
             commands::stop_sync,
+            commands::inbox_summary,
+            commands::list_inbox_folders,
+            commands::list_inbox_messages,
+            commands::list_inbox_threads,
+            commands::list_thread_messages,
         ])
         .setup(|app| {
             // 1) 应用数据目录。Windows 下形如 %APPDATA%\com.emmaster.desktop。

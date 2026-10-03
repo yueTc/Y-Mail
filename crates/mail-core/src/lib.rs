@@ -8,6 +8,7 @@
 pub mod accounts;
 pub mod checks;
 pub mod engine;
+pub mod inbox;
 pub mod paths;
 pub mod proxies;
 pub mod secrets;
@@ -15,6 +16,10 @@ pub mod sync;
 
 pub use checks::ConnectionReport;
 pub use engine::{EngineError, EngineInit, MailEngine, KEYRING_SERVICE};
+pub use inbox::{InboxMessagePage, InboxThreadPage};
+
+// 存储层的收件箱类型在这里重新导出，外壳无需直接依赖 mail-store。
+pub use mail_store::{AccountInboxSummary, InboxFolder, InboxMessage, InboxQuery, InboxThread};
 pub use paths::SqlitePaths;
 pub use secrets::{KeyringSecretStore, MemorySecretStore, SecretStore, SecretStoreError};
 pub use sync::{AccountSyncStatus, SyncConfig, SyncService, SyncState};
