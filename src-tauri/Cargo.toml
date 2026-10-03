@@ -1,0 +1,34 @@
+[package]
+name = "em-master"
+description = "Tauri 2 桌面外壳：只做窗口、生命周期与命令转发，业务逻辑在 mail-core。"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+name = "em_master_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+mail-core.workspace = true
+serde.workspace = true
+tauri.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+# tauri-build 生成 Windows 资源文件（版本信息 + 图标）所需的元数据。
+[package.metadata.tauri]
+icon = "icons/icon.ico"

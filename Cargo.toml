@@ -1,0 +1,55 @@
+# em-master Rust 工作区：桌面外壳 + 引擎分层
+# 依赖方向（单向、无环）：mail-domain ← 其它全部；mail-store ← mail-core；
+# 协议/解析/认证/AI crate ← mail-core；mail-core ← src-tauri ← 前端 UI。
+
+[workspace]
+resolver = "2"
+members = [
+  "crates/mail-domain",
+  "crates/mail-store",
+  "crates/mail-mime",
+  "crates/mail-imap",
+  "crates/mail-smtp",
+  "crates/mail-oauth",
+  "crates/mail-ai",
+  "crates/mail-core",
+  "src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["em-master"]
+
+[workspace.dependencies]
+# 内部 crate（路径依赖集中声明，版本随工作区）
+mail-domain = { path = "crates/mail-domain" }
+mail-store = { path = "crates/mail-store" }
+mail-mime = { path = "crates/mail-mime" }
+mail-imap = { path = "crates/mail-imap" }
+mail-smtp = { path = "crates/mail-smtp" }
+mail-oauth = { path = "crates/mail-oauth" }
+mail-ai = { path = "crates/mail-ai" }
+mail-core = { path = "crates/mail-core" }
+
+# 外部依赖（统一版本，避免各 crate 版本漂移）
+tauri = { version = "2.12.1" }
+tauri-build = { version = "2.7.1" }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.21"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
+tracing-appender = "0.2.5"
+sha2 = "0.10"
+tempfile = "3.27.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+todo = "warn"

@@ -1,0 +1,15 @@
+[package]
+name = "mail-mime"
+description = "邮件解析：MIME 结构、正文与附件提取、HTML 清洗（Wave 4 起填充）。"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mail-domain.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

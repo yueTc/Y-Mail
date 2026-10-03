@@ -1,0 +1,24 @@
+[package]
+name = "mail-core"
+description = "引擎门面：对外只暴露干净接口，内部编排存储与各协议层。"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mail-domain.workspace = true
+mail-store.workspace = true
+mail-mime.workspace = true
+mail-imap.workspace = true
+mail-smtp.workspace = true
+mail-oauth.workspace = true
+mail-ai.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

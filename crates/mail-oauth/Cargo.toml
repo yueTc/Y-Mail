@@ -1,0 +1,15 @@
+[package]
+name = "mail-oauth"
+description = "OAuth2 授权：回环回调 + PKCE + 令牌刷新（Wave 6 起填充）。"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mail-domain.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

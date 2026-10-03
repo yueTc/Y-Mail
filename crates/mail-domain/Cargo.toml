@@ -1,0 +1,12 @@
+[package]
+name = "mail-domain"
+description = "领域模型与共享类型：账号、文件夹、邮件、线程的最小表达（无 I/O、无依赖）。"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

@@ -1,0 +1,20 @@
+[package]
+name = "mail-store"
+description = "本地存储：SQLite 连接、迁移与数据访问；唯一写库者。"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mail-domain.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

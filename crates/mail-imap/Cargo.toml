@@ -1,0 +1,15 @@
+[package]
+name = "mail-imap"
+description = "IMAP 客户端：连接、认证、同步与 IDLE（Wave 2 起填充）。"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mail-domain.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
