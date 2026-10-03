@@ -19,3 +19,4 @@ tokio.workspace = true
 
 [dev-dependencies]
 tokio = { version = "1.44", features = ["net", "io-util", "time", "macros", "rt", "rt-multi-thread"] }
+tracing-subscriber.workspace = true

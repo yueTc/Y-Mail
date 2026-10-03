@@ -4,7 +4,7 @@
 //! 会明确返回「不支持」，让界面提示用户改用全局自定义代理。
 
 use mail_domain::error::ConnectionError;
-use mail_domain::proxy::{ProxyKind, ProxyRoute};
+use mail_domain::proxy::{ProxyConfig, ProxyKind, ProxyRoute};
 
 /// 系统代理的读取结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +23,42 @@ pub enum SystemProxy {
 /// 读取当前用户的系统代理设置。
 pub fn read_system_proxy() -> Result<SystemProxy, ConnectionError> {
     platform::read()
+}
+
+/// 根据注册表读到的三个值，决定系统代理怎么走。
+///
+/// 只有「确认没开代理」时才静默直连；开关开着但地址读不出来必须明确报错，
+/// 免得用户以为走了代理、实际却是直连。
+fn decide_system_proxy(enabled: bool, server: &str, auto_url: &str) -> Result<SystemProxy, ConnectionError> {
+    if enabled {
+        if let Some((kind, host, port)) = parse_proxy_server(server) {
+            return Ok(SystemProxy::Static(ProxyRoute {
+                config: ProxyConfig {
+                    id: None,
+                    label: "系统代理".to_string(),
+                    kind,
+                    host,
+                    port,
+                    username: String::new(),
+                },
+                password: None,
+            }));
+        }
+        if !auto_url.trim().is_empty() {
+            return Ok(SystemProxy::AutoConfig {
+                url: auto_url.to_string(),
+            });
+        }
+        return Err(ConnectionError::proxy(
+            "系统代理已开启，但代理地址读不到或格式不正确；请检查系统代理设置，或改用「自定义代理」或「直连」",
+        ));
+    }
+    if !auto_url.trim().is_empty() {
+        return Ok(SystemProxy::AutoConfig {
+            url: auto_url.to_string(),
+        });
+    }
+    Ok(SystemProxy::None)
 }
 
 /// 解析 Windows 的「代理服务器」字符串。
@@ -97,11 +133,10 @@ fn split_host_port(address: &str) -> Option<(String, u16)> {
 #[cfg(windows)]
 mod platform {
     use mail_domain::error::ConnectionError;
-    use mail_domain::proxy::{ProxyConfig, ProxyRoute};
     use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
     use winreg::RegKey;
 
-    use super::{parse_proxy_server, SystemProxy};
+    use super::{decide_system_proxy, SystemProxy};
 
     const INTERNET_SETTINGS: &str = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
 
@@ -115,27 +150,7 @@ mod platform {
         let server: String = key.get_value("ProxyServer").unwrap_or_default();
         let auto_url: String = key.get_value("AutoConfigURL").unwrap_or_default();
 
-        if enabled == 1 {
-            if let Some((kind, host, port)) = parse_proxy_server(&server) {
-                return Ok(SystemProxy::Static(ProxyRoute {
-                    config: ProxyConfig {
-                        id: None,
-                        label: "系统代理".to_string(),
-                        kind,
-                        host,
-                        port,
-                        username: String::new(),
-                    },
-                    password: None,
-                }));
-            }
-        }
-
-        if !auto_url.trim().is_empty() {
-            return Ok(SystemProxy::AutoConfig { url: auto_url });
-        }
-
-        Ok(SystemProxy::None)
+        decide_system_proxy(enabled == 1, &server, &auto_url)
     }
 }
 
@@ -153,9 +168,10 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
+    use mail_domain::error::ConnectionErrorKind;
     use mail_domain::proxy::ProxyKind;
 
-    use super::parse_proxy_server;
+    use super::{decide_system_proxy, parse_proxy_server, SystemProxy};
 
     #[test]
     fn 解析http与https条目() {
@@ -189,7 +205,63 @@ mod tests {
     }
 
     #[test]
-    fn 本机读取系统代理不应报错() {
-        let _ = super::read_system_proxy().expect("读取系统代理不应报错");
+    fn 开关打开且地址可用时返回静态代理() {
+        let proxy = decide_system_proxy(true, "127.0.0.1:8080", "").expect("应成功");
+        match proxy {
+            SystemProxy::Static(route) => {
+                assert_eq!(route.config.kind, ProxyKind::Http);
+                assert_eq!(route.config.host, "127.0.0.1");
+                assert_eq!(route.config.port, 8080);
+            }
+            other => panic!("应是静态代理：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn 开关打开但地址无效时明确报错() {
+        let err = decide_system_proxy(true, "proxy.example.com", "").expect_err("应该报错");
+        assert_eq!(err.kind, ConnectionErrorKind::ProxyFailure);
+        assert!(err.message.contains("系统代理已开启"));
+    }
+
+    #[test]
+    fn 开关打开地址无效但有自动配置时返回自动配置() {
+        let proxy = decide_system_proxy(true, "坏地址", "http://wpad.example/proxy.pac").expect("应成功");
+        match proxy {
+            SystemProxy::AutoConfig { url } => {
+                assert_eq!(url, "http://wpad.example/proxy.pac");
+            }
+            other => panic!("应是自动配置：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn 开关关闭但有自动配置时返回自动配置() {
+        let proxy = decide_system_proxy(false, "", "http://wpad.example/proxy.pac").expect("应成功");
+        assert!(matches!(proxy, SystemProxy::AutoConfig { .. }));
+    }
+
+    #[test]
+    fn 开关关闭且没有配置时才直连() {
+        assert_eq!(
+            decide_system_proxy(false, "", "").expect("应成功"),
+            SystemProxy::None
+        );
+    }
+
+    #[test]
+    fn 开关关闭时忽略无效地址() {
+        assert_eq!(
+            decide_system_proxy(false, "坏地址", "").expect("应成功"),
+            SystemProxy::None
+        );
+    }
+
+    #[test]
+    fn 本机读取系统代理不应崩溃() {
+        match super::read_system_proxy() {
+            Ok(_) => {}
+            Err(err) => assert_eq!(err.kind, ConnectionErrorKind::ProxyFailure),
+        }
     }
 }

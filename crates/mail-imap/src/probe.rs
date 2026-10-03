@@ -1,4 +1,4 @@
-//! IMAP 连接自检：连上服务器 → 可选 STARTTLS → 登录 → 数文件夹 → 退出。
+//! IMAP 连接自检：连上服务器 → 可选 STARTTLS → 登录 → 数文件夹 → 选收件箱 → 退出。
 //!
 //! 安全约定：授权码只用于拼 LOGIN 命令；错误信息与日志里必须先脱敏。
 
@@ -123,7 +123,15 @@ async fn run(request: &ProbeRequest, route: Option<&ProxyRoute>) -> Result<Probe
         .filter(|line| line.to_ascii_uppercase().starts_with("* LIST"))
         .count();
 
-    let _ = send_command(&mut stream, "a004", "LOGOUT").await;
+    // 规格要求自检必须真的能打开收件箱，只数文件夹不算过。
+    let reply = send_command(&mut stream, "a004", "SELECT \"INBOX\"").await?;
+    if reply.status != "OK" {
+        return Err(ConnectionError::rejected(
+            "打开收件箱失败：服务器不允许选择 INBOX",
+        ));
+    }
+
+    let _ = send_command(&mut stream, "a005", "LOGOUT").await;
 
     Ok(ProbeReport { folder_count })
 }
@@ -220,11 +228,18 @@ mod tests {
                 )
                 .await
                 .expect("写入失败");
-            let logout = read_line(&mut reader).await;
-            assert_eq!(logout, "a004 LOGOUT");
+            let select = read_line(&mut reader).await;
+            assert_eq!(select, "a004 SELECT \"INBOX\"");
             reader
                 .get_mut()
-                .write_all(b"* BYE\r\na004 OK\r\n")
+                .write_all(b"* 12 EXISTS\r\na004 OK SELECT completed\r\n")
+                .await
+                .expect("写入失败");
+            let logout = read_line(&mut reader).await;
+            assert_eq!(logout, "a005 LOGOUT");
+            reader
+                .get_mut()
+                .write_all(b"* BYE\r\na005 OK\r\n")
                 .await
                 .expect("写入失败");
         });
@@ -233,6 +248,46 @@ mod tests {
             .await
             .expect("自检应通过");
         assert_eq!(report.folder_count, 2);
+    }
+
+    #[tokio::test]
+    async fn 无法打开收件箱时归类为服务器拒绝() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定失败");
+        let addr = listener.local_addr().expect("取地址失败");
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("接受连接失败");
+            let mut reader = BufReader::new(socket);
+            reader
+                .get_mut()
+                .write_all(b"* OK IMAP4rev1 ready\r\n")
+                .await
+                .expect("写入失败");
+            let _ = read_line(&mut reader).await;
+            reader
+                .get_mut()
+                .write_all(b"a002 OK LOGIN completed\r\n")
+                .await
+                .expect("写入失败");
+            let _ = read_line(&mut reader).await;
+            reader
+                .get_mut()
+                .write_all(b"a003 OK LIST completed\r\n")
+                .await
+                .expect("写入失败");
+            let select = read_line(&mut reader).await;
+            assert_eq!(select, "a004 SELECT \"INBOX\"");
+            reader
+                .get_mut()
+                .write_all(b"a004 NO SELECT failed\r\n")
+                .await
+                .expect("写入失败");
+        });
+
+        let err = probe(&request(addr.port(), Security::Plain), None)
+            .await
+            .expect_err("应打开失败");
+        assert_eq!(err.kind, ConnectionErrorKind::Rejected);
+        assert!(err.message.contains("打开收件箱失败"));
     }
 
     #[tokio::test]

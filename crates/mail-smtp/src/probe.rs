@@ -42,13 +42,6 @@ struct Reply {
     lines: Vec<String>,
 }
 
-impl Reply {
-    /// 把应答拼成一行，用于内部排查（调用方必须先脱敏）。
-    fn detail(&self) -> String {
-        self.lines.join(" ")
-    }
-}
-
 /// 执行一次发件服务器连接自检。
 pub async fn probe(
     request: &ProbeRequest,
@@ -181,35 +174,32 @@ fn plain_token(username: &str, password: &str) -> String {
 async fn auth_plain(stream: &mut Stream, request: &ProbeRequest) -> Result<(), ConnectionError> {
     let token = plain_token(&request.username, request.password.expose());
     let reply = send_command(stream, &format!("AUTH PLAIN {token}")).await?;
-    check_auth_reply(&reply, request, "PLAIN")
+    check_auth_reply(&reply, "PLAIN")
 }
 
 async fn auth_login(stream: &mut Stream, request: &ProbeRequest) -> Result<(), ConnectionError> {
     let reply = send_command(stream, "AUTH LOGIN").await?;
     if reply.code != 334 {
-        return Err(auth_error(&reply, request));
+        return Err(auth_error(&reply));
     }
     let reply = send_command(stream, &STANDARD.encode(&request.username)).await?;
     if reply.code != 334 {
-        return Err(auth_error(&reply, request));
+        return Err(auth_error(&reply));
     }
     let reply = send_command(stream, &STANDARD.encode(request.password.expose())).await?;
-    check_auth_reply(&reply, request, "LOGIN")
+    check_auth_reply(&reply, "LOGIN")
 }
 
-fn check_auth_reply(reply: &Reply, request: &ProbeRequest, mechanism: &str) -> Result<(), ConnectionError> {
+fn check_auth_reply(reply: &Reply, mechanism: &str) -> Result<(), ConnectionError> {
     if reply.code == 235 {
         return Ok(());
     }
-    tracing::debug!(
-        reply = %mail_net::error::redact(&reply.detail(), &[request.password.expose()]),
-        mechanism,
-        "SMTP 认证未通过"
-    );
-    Err(auth_error(reply, request))
+    // 服务器应答正文可能回显 base64 后的账号与授权码，认证失败时整段不写日志。
+    tracing::debug!(code = reply.code, mechanism, "SMTP 认证未通过，响应正文不记录");
+    Err(auth_error(reply))
 }
 
-fn auth_error(reply: &Reply, _request: &ProbeRequest) -> ConnectionError {
+fn auth_error(reply: &Reply) -> ConnectionError {
     ConnectionError::auth(format!(
         "登录被服务器拒绝（返回码 {}）：请检查登录名与授权码",
         reply.code
@@ -247,6 +237,7 @@ async fn read_reply(stream: &mut Stream) -> Result<Reply, ConnectionError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use base64::engine::general_purpose::STANDARD;
@@ -274,6 +265,21 @@ mod tests {
         let mut line = String::new();
         reader.read_line(&mut line).await.expect("读取失败");
         line.trim_end().to_string()
+    }
+
+    /// 把 tracing 输出收进内存，用来断言日志里没有敏感内容。
+    #[derive(Clone, Default)]
+    struct LogCapture(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogCapture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("日志锁").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     #[tokio::test]
@@ -325,7 +331,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn 认证被拒时归类为认证失败且不泄露授权码() {
+    async fn 认证被拒时归类为认证失败且日志不泄露授权码() {
+        let expected = {
+            let mut raw = vec![0];
+            raw.extend_from_slice(b"user@example.com");
+            raw.push(0);
+            raw.extend_from_slice(b"pw-secret");
+            STANDARD.encode(raw)
+        };
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定失败");
         let addr = listener.local_addr().expect("取地址失败");
         tokio::spawn(async move {
@@ -350,11 +363,27 @@ mod tests {
                 .expect("写入失败");
         });
 
+        let logs = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer({
+                let logs = logs.clone();
+                move || LogCapture(logs.clone())
+            })
+            .with_max_level(tracing::Level::DEBUG)
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+
         let err = probe(&request(addr.port(), Security::Plain), None)
             .await
             .expect_err("应认证失败");
+        drop(guard);
+
         assert_eq!(err.kind, ConnectionErrorKind::AuthFailed);
         assert!(!err.message.contains("pw-secret"));
+        let text = String::from_utf8(logs.lock().expect("日志锁").clone()).expect("日志应是文本");
+        assert!(text.contains("SMTP 认证未通过"), "应记录失败日志：{text}");
+        assert!(!text.contains(&expected), "日志不得包含 base64 认证令牌");
+        assert!(!text.contains("pw-secret"), "日志不得包含明文授权码");
     }
 
     #[tokio::test]

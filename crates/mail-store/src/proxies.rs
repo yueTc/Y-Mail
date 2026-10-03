@@ -105,12 +105,32 @@ impl Store {
     }
 
     /// 删除代理；引用它的账号自动改回「跟随全局」。
+    ///
+    /// 如果被删的正是全局自定义代理，同一事务里把全局策略改回「跟随系统」，
+    /// 不留指向已删除代理的悬空编号。
     pub fn delete_proxy(&self, id: ProxyId) -> Result<bool, StoreError> {
         let tx = self.conn().unchecked_transaction()?;
         tx.execute(
             "UPDATE account SET proxy_mode = 'inherit', proxy_id = NULL WHERE proxy_id = ?1",
             [id.0],
         )?;
+
+        let global_id: Option<String> = tx
+            .query_row(
+                "SELECT value FROM setting WHERE key = 'proxy.global_id'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if global_id.as_deref().and_then(|value| value.parse::<i64>().ok()) == Some(id.0) {
+            tx.execute(
+                "INSERT INTO setting (key, value) VALUES ('proxy.global_mode', 'system')
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [],
+            )?;
+            tx.execute("DELETE FROM setting WHERE key = 'proxy.global_id'", [])?;
+        }
+
         let changed = tx.execute("DELETE FROM proxy WHERE id = ?1", [id.0])?;
         tx.commit()?;
         Ok(changed > 0)
@@ -230,6 +250,65 @@ mod tests {
         store.delete_proxy(proxy_id).expect("删除代理");
         let account = store.get_account(account_id).expect("查询账号").expect("应存在");
         assert_eq!(account.proxy, mail_domain::AccountProxyMode::InheritGlobal);
+    }
+
+    #[test]
+    fn 删除全局自定义代理会同时清掉全局设置() {
+        use rusqlite::OptionalExtension;
+
+        let store = migrated();
+        let proxy_id = store
+            .insert_proxy(&config("127.0.0.1", 1080), None)
+            .expect("插入代理");
+        store
+            .set_global_proxy_mode(GlobalProxyMode::Custom(proxy_id))
+            .expect("设为全局自定义");
+        let account_id = store
+            .insert_account(
+                &sample_draft(mail_domain::AccountProxyMode::Custom(proxy_id)),
+                None,
+            )
+            .expect("插入账号");
+
+        store.delete_proxy(proxy_id).expect("删除代理");
+
+        let account = store.get_account(account_id).expect("查询账号").expect("应存在");
+        assert_eq!(account.proxy, mail_domain::AccountProxyMode::InheritGlobal);
+        assert_eq!(
+            store.global_proxy_mode().expect("读取全局"),
+            GlobalProxyMode::System
+        );
+        let dangling: Option<String> = store
+            .conn()
+            .query_row(
+                "SELECT value FROM setting WHERE key = 'proxy.global_id'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .expect("查询全局编号");
+        assert!(dangling.is_none(), "不应留下悬空的全局代理编号");
+    }
+
+    #[test]
+    fn 删除非全局代理不影响全局设置() {
+        let store = migrated();
+        let first = store
+            .insert_proxy(&config("127.0.0.1", 1080), None)
+            .expect("插入第一个代理");
+        let second = store
+            .insert_proxy(&config("127.0.0.1", 1081), None)
+            .expect("插入第二个代理");
+        store
+            .set_global_proxy_mode(GlobalProxyMode::Custom(second))
+            .expect("设为全局自定义");
+
+        store.delete_proxy(first).expect("删除第一个代理");
+
+        assert_eq!(
+            store.global_proxy_mode().expect("读取全局"),
+            GlobalProxyMode::Custom(second)
+        );
     }
 
     #[test]
