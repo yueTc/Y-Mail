@@ -35,6 +35,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "0002_accounts_and_proxies",
         sql: include_str!("sql/0002_accounts_and_proxies.sql"),
     },
+    Migration {
+        version: 3,
+        name: "0003_email_case_insensitive_unique",
+        sql: include_str!("sql/0003_email_case_insensitive_unique.sql"),
+    },
 ];
 
 /// 单条迁移的执行结果。
@@ -245,15 +250,18 @@ mod tests {
         let mut store = Store::open_in_memory().expect("打开内存库");
 
         let first = store.run_migrations().expect("首次迁移");
-        assert_eq!(first.applied_count(), 2, "首次应应用 2 条迁移");
-        assert_eq!(first.current_version, 2);
+        assert_eq!(first.applied_count(), 3, "首次应应用 3 条迁移");
+        assert_eq!(first.current_version, 3);
         assert_eq!(first.applied[0].name, "0001_core_bootstrap");
         assert!(!first.applied[0].applied_at.is_empty(), "登记时间不应为空");
 
         let second = store.run_migrations().expect("二次迁移");
         assert_eq!(second.applied_count(), 0, "二次执行不应重复应用");
 
-        assert_eq!(store.applied_migration_versions().expect("读取版本"), vec![1, 2]);
+        assert_eq!(
+            store.applied_migration_versions().expect("读取版本"),
+            vec![1, 2, 3]
+        );
     }
 
     #[test]
@@ -293,9 +301,49 @@ mod tests {
     }
 
     #[test]
+    fn 从二号库升级到三号库后邮箱索引不区分大小写() {
+        let mut store = Store::open_in_memory().expect("打开内存库");
+        {
+            let conn = store.raw_connection_for_test();
+            conn.execute_batch(super::MIGRATION_TABLE_SQL).expect("建登记表");
+            for migration in &MIGRATIONS[..2] {
+                conn.execute_batch(migration.sql).expect("应用旧迁移");
+                conn.execute(
+                    "INSERT INTO schema_migration (version, name, checksum) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![migration.version, migration.name, checksum(migration.sql)],
+                )
+                .expect("登记旧迁移");
+            }
+            conn.execute(
+                "INSERT INTO account (display_name, email, auth_type, username, \
+                 imap_host, imap_port, imap_security, smtp_host, smtp_port, smtp_security) \
+                 VALUES ('旧账号', 'Someone@example.com', 'password', 'Someone@example.com', \
+                 'imap.example.com', 993, 'tls', 'smtp.example.com', 465, 'tls')",
+                [],
+            )
+            .expect("插入旧账号");
+        }
+
+        store.run_migrations().expect("升级到三号库");
+        assert_eq!(
+            store.applied_migration_versions().expect("读取版本"),
+            vec![1, 2, 3]
+        );
+
+        let duplicate = store.raw_connection_for_test().execute(
+            "INSERT INTO account (display_name, email, auth_type, username, \
+             imap_host, imap_port, imap_security, smtp_host, smtp_port, smtp_security) \
+             VALUES ('重复账号', 'SOMEONE@example.com', 'password', 'SOMEONE@example.com', \
+             'imap.example.com', 993, 'tls', 'smtp.example.com', 465, 'tls')",
+            [],
+        );
+        assert!(duplicate.is_err(), "升级后大小写不同的同一邮箱应被唯一索引拒绝");
+    }
+
+    #[test]
     fn 迁移清单与校验和的基本性质() {
-        assert_eq!(MIGRATIONS.len(), 2);
-        assert_eq!(supported_version(), 2);
+        assert_eq!(MIGRATIONS.len(), 3);
+        assert_eq!(supported_version(), 3);
         assert_eq!(checksum("abc"), checksum("abc"));
         assert_ne!(checksum("abc"), checksum("abd"));
     }

@@ -16,7 +16,7 @@ env:
 
 jobs:
   checks:
-    name: 格式 / 静态检查 / 测试 / 前端构建
+    name: 格式 / 静态检查 / Rust 测试 / 前端构建与测试
     runs-on: windows-latest
     steps:
       - name: 检出代码
@@ -49,6 +49,9 @@ jobs:
 
       - name: 构建前端
         run: npm run build
+
+      - name: 运行前端测试
+        run: npm test
 
       - name: 检查格式
         run: cargo fmt --all --check

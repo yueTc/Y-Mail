@@ -4,6 +4,7 @@
 
 use mail_domain::account::AccountProxyMode;
 use mail_domain::proxy::{decide_proxy, GlobalProxyMode, ProxyConfig, ProxyId, ProxyRoute, Secret};
+use mail_domain::ValidationError;
 use mail_store::StoredProxy;
 
 use crate::engine::{EngineError, MailEngine};
@@ -48,6 +49,7 @@ impl MailEngine {
         password: Option<&Secret>,
     ) -> Result<StoredProxy, EngineError> {
         config.validate()?;
+        self.ensure_proxy_credentials(config, password)?;
 
         match config.id {
             None => {
@@ -127,6 +129,37 @@ impl MailEngine {
                 }
             }
         }
+    }
+
+    /// 代理登录名与密码必须成对：登录名非空时一定得能拿到密码。
+    ///
+    /// `None` 表示沿用旧密码，所以编辑时只要原凭据还在就放行；但「改成无认证」
+    /// （清空密码）必须把登录名也一起清空，避免留下「有登录名却没密码」的坏配置。
+    fn ensure_proxy_credentials(
+        &self,
+        config: &ProxyConfig,
+        password: Option<&Secret>,
+    ) -> Result<(), EngineError> {
+        if config.username.trim().is_empty() {
+            return Ok(());
+        }
+        // 本次带来了非空新密码。
+        if matches!(password, Some(secret) if !secret.is_empty()) {
+            return Ok(());
+        }
+        // 没带密码（None）且原本就存过密码：沿用旧密码。
+        if password.is_none() {
+            if let Some(id) = config.id {
+                if self.get_proxy(id)?.password_key.is_some() {
+                    return Ok(());
+                }
+            }
+        }
+        Err(ValidationError::new(vec![
+            "填了代理登录名就必须有密码：新建请填密码，编辑可留空沿用原密码，或先清空登录名再清空密码"
+                .to_string(),
+        ])
+        .into())
     }
 
     /// 删除代理；账号对它的引用由存储层改回「跟随全局」。
@@ -289,6 +322,12 @@ mod tests {
             username: "user".to_string(),
         }
     }
+    /// 无认证代理：登录名与密码都留空。
+    fn config_without_auth(label: &str) -> ProxyConfig {
+        let mut config = config(label);
+        config.username = String::new();
+        config
+    }
 
     #[test]
     fn 保存代理时密码进保险箱而不进库() {
@@ -334,6 +373,7 @@ mod tests {
         let old_key = stored.password_key.clone().expect("应有凭据键");
 
         let mut edited = config("无认证");
+        edited.username = String::new();
         edited.id = Some(id);
         let updated = engine
             .save_proxy(&edited, Some(&Secret::new("")))
@@ -350,7 +390,9 @@ mod tests {
             .expect_err("不存在的代理应被拦住");
         assert!(err.to_string().contains("999"), "错误应带编号：{err}");
 
-        let stored = engine.save_proxy(&config("可用"), None).expect("保存代理");
+        let stored = engine
+            .save_proxy(&config_without_auth("可用"), None)
+            .expect("保存代理");
         engine
             .set_global_proxy_mode(GlobalProxyMode::Custom(stored.config.id.expect("应有编号")))
             .expect("存在的代理应能设为全局");
@@ -359,7 +401,9 @@ mod tests {
     #[test]
     fn 解析路线时账号直连优先() {
         let (_dir, engine, _secrets) = temp_engine();
-        let stored = engine.save_proxy(&config("可用"), None).expect("保存代理");
+        let stored = engine
+            .save_proxy(&config_without_auth("可用"), None)
+            .expect("保存代理");
         engine
             .set_global_proxy_mode(GlobalProxyMode::Custom(stored.config.id.expect("应有编号")))
             .expect("设为全局");
@@ -414,5 +458,61 @@ mod tests {
         assert!(!secrets.contains(&key), "凭据应一并删除");
         // SecretStore 的引用只是为了确认 trait 可用。
         let _ = secrets.len();
+    }
+
+    #[test]
+    fn 新建代理填了登录名却没密码会被引擎拦住() {
+        let (_dir, engine, secrets) = temp_engine();
+        let err = engine
+            .save_proxy(&config("缺密码"), None)
+            .expect_err("没有密码应被拦住");
+        assert!(err.to_string().contains("登录名"), "错误应说明原因：{err}");
+        let err = engine
+            .save_proxy(&config("空密码"), Some(&Secret::new("")))
+            .expect_err("空密码应被拦住");
+        assert!(err.to_string().contains("登录名"), "错误应说明原因：{err}");
+        assert!(
+            engine.list_proxies().expect("列代理").is_empty(),
+            "被拦下的代理不应落库"
+        );
+        assert_eq!(secrets.len(), 0, "被拦下时不该写保险箱");
+    }
+
+    #[test]
+    fn 编辑代理时只清密码不清登录名会被拦住() {
+        let (_dir, engine, secrets) = temp_engine();
+        let stored = engine
+            .save_proxy(&config("本机"), Some(&Secret::new("keep")))
+            .expect("保存代理");
+        let id = stored.config.id.expect("应有编号");
+        let key = stored.password_key.clone().expect("应有凭据键");
+
+        let mut edited = config("想清密码");
+        edited.id = Some(id);
+        let err = engine
+            .save_proxy(&edited, Some(&Secret::new("")))
+            .expect_err("登录名还在就不能清密码");
+        assert!(err.to_string().contains("登录名"), "错误应说明原因：{err}");
+
+        // 被拦下之后，库里的旧凭据必须原样保留。
+        let reloaded = engine.get_proxy(id).expect("代理还在");
+        assert_eq!(reloaded.password_key, Some(key.clone()));
+        assert_eq!(secrets.plain(&key).as_deref(), Some("keep"));
+    }
+
+    #[test]
+    fn 编辑代理时原本没密码又不补密码会被拦住() {
+        let (_dir, engine, _secrets) = temp_engine();
+        let stored = engine
+            .save_proxy(&config_without_auth("无认证"), None)
+            .expect("保存无认证代理");
+        let id = stored.config.id.expect("应有编号");
+
+        let mut edited = config("补登录名");
+        edited.id = Some(id);
+        let err = engine
+            .save_proxy(&edited, None)
+            .expect_err("补登录名却不补密码应被拦住");
+        assert!(err.to_string().contains("登录名"), "错误应说明原因：{err}");
     }
 }

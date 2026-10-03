@@ -270,6 +270,22 @@ mod tests {
             .email_taken("SOMEONE@example.com", Some(id))
             .expect("排除自己后不算重复"));
     }
+    #[test]
+    fn 邮箱唯一索引也不区分大小写() {
+        let store = migrated();
+        store.insert_account(&sample_draft(), None).expect("插入第一个");
+
+        let mut duplicate = sample_draft();
+        duplicate.email = "SOMEONE@EXAMPLE.COM".to_string();
+        let err = store
+            .insert_account(&duplicate, None)
+            .expect_err("大小写不同的同一邮箱应被唯一索引拦住");
+        assert!(
+            matches!(err, crate::StoreError::Sqlite(_)),
+            "应是唯一约束错误：{err}"
+        );
+        assert_eq!(store.list_accounts().expect("列表").len(), 1);
+    }
 
     #[test]
     fn 数据库文件里查不到明文授权码() {

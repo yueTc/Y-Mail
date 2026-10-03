@@ -2,9 +2,9 @@
 
 | 项 | 值 |
 |---|---|
-| 文档版本 | v1.1 |
+| 文档版本 | v1.2 |
 | 日期 | 2026-10-03 |
-| 状态 | 已确认（用户于 2026-10-03 确认 v1.1） |
+| 状态 | 已确认（用户于 2026-10-03 确认 v1.1；v1.2 为 2026-10-04 的模块清单补充） |
 | 需求发起人 | 项目所有者（个人自用） |
 | 技术路线 | Tauri 2 + Rust 引擎 + React/TS |
 
@@ -145,21 +145,22 @@ Provider 配置 MUST 支持：
 ### 4.1 架构与模块边界
 
 ```
-UI (React/TS)  ──invoke/event──▶  src-tauri (Tauri 壳)
+UI (React/TS)  ──invoke/event──▶  src-tauri（Tauri 壳）
                                         │
                                         ▼
                                   mail-core（引擎门面 MailEngine）
-             ┌──────────────┬───────────┼────────────┬──────────────┐
-             ▼              ▼           ▼            ▼              ▼
-        mail-imap      mail-smtp   mail-mime    mail-oauth      mail-ai
-             └──────────────┴───────────┼────────────┴──────────────┘
-                                        ▼
-                                   mail-store  ★唯一写库者
-                                        ▼
-                                  SQLite + FTS5
+        ┌───────────────┬───────────────┼───────────────┬───────────────┐
+        ▼               ▼               ▼               ▼               ▼
+   mail-imap       mail-smtp       mail-mime      mail-oauth      mail-ai
+        │               │
+        └───────┬───────┘
+                ▼
+          mail-net（共享连接：直连 / 代理隧道 / TLS 包装）
+
+   mail-core ──▶ mail-store ★唯一写库者 ──▶ SQLite + FTS5
 ```
 
-- 依赖方向单向无环：`mail-domain` ← 全部；`mail-store` ← `mail-core`；协议 / 解析 / 认证 / AI crate ← `mail-core`；`mail-core` ← `src-tauri` ← UI。
+- 依赖方向单向无环：`mail-domain` ← 全部；`mail-store` ← `mail-core`；`mail-net` ← `mail-imap` / `mail-smtp`（只做共用连接、代理选路与加密包装，不懂任何邮件协议）；协议 / 解析 / 认证 / AI crate ← `mail-core`；`mail-core` ← `src-tauri` ← UI。
 - 数据实体唯一归属：所有表由 `mail-store` 独占写入，其它模块只能通过其接口访问。
 - 未来演进：mail-core 可抽为独立 daemon 进程，供 Web / 移动端复用，UI 层无需重写。
 - 可选外围：`mail-ai`（Wave 7）与 `mail-mcp`（Wave 8）均为通过 `mail-core` 门面访问引擎的旁路 crate，不直连数据库。
@@ -323,7 +324,7 @@ UI (React/TS)  ──invoke/event──▶  src-tauri (Tauri 壳)
 | `.ai-memory/project_memory.md` | new | 项目规则与决策 |
 | `README.md` | new | 项目说明与 spec 入口 |
 | `src-tauri/` | new | Tauri 壳（Wave 0） |
-| `crates/mail-domain`、`mail-store`、`mail-mime`、`mail-imap`、`mail-smtp`、`mail-oauth`、`mail-ai`、`mail-mcp`、`mail-core` | new | Rust 引擎分层（Wave 0 起逐步填充；mail-mcp 于 Wave 8） |
+| `crates/mail-domain`、`mail-store`、`mail-mime`、`mail-imap`、`mail-smtp`、`mail-net`、`mail-oauth`、`mail-ai`、`mail-mcp`、`mail-core` | new | Rust 引擎分层（Wave 0 起逐步填充；mail-net 提供 IMAP/SMTP 共用的连接、代理与加密；mail-mcp 于 Wave 8） |
 | `src/` | new | React 前端（Wave 0 起逐步填充） |
 
 ---
@@ -352,7 +353,7 @@ UI (React/TS)  ──invoke/event──▶  src-tauri (Tauri 壳)
 - [x] 模糊词已转化为判断标准（性能阈值、数量上限、安全用例）
 - [x] 多候选决策已含反选理由、接受代价与 Revisit 条件
 - [x] 外部接入（MCP）边界明确（默认关闭 / 只读 / 审计 / 可一键关闭）
-- [x] 用户审核（已于 2026-10-03 确认 v1.1）
+- [x] 用户审核（已于 2026-10-03 确认 v1.1；v1.2 仅补充 mail-net 模块说明，不改变需求）
 
 ---
 
@@ -361,4 +362,5 @@ UI (React/TS)  ──invoke/event──▶  src-tauri (Tauri 壳)
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v1.0 | 2026-10-03 | 初稿：确认方案一（Tauri 2 + Rust + React/TS）、代理分层、历史三档拉取、翻译、AI（Wave 7、opt-in）、v1 增值项全含 |
+| v1.2 | 2026-10-04 | 模块清单补充 `mail-net`（IMAP/SMTP 共用的连接、代理选路与 TLS 包装），同步更新架构图与依赖方向说明；不涉及需求变更 |
 | v1.1 | 2026-10-03 | R10 增补：自定义站点（base_url + CDKey）、模型列表与功能级选择、思考程度四档（自动降级）、翻译三模式（对照 / 行内 / 直接，共用段落对齐译文）；新增 R12 MCP 外部 Agent 接入（默认关闭 / stdio / 只读 + 审计）；Wave 拆分为 7 AI、8 MCP、9 交付 |
