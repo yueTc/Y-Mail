@@ -5,16 +5,23 @@
 //!
 //! Wave 1 起提供账号、代理与「可读连接错误」的纯类型；代理优先级判断也放在这里，
 //! 因为它不涉及 I/O，可以在没有数据库和网络的情况下完整测试。
+//! Wave 2 起补上同步相关的纯逻辑：文件夹归类、历史范围、退避计算与线程键。
 
 pub mod account;
+pub mod dates;
 pub mod error;
 pub mod proxy;
+pub mod sync;
 
 pub use account::{Account, AccountDraft, AccountId, AccountProxyMode, AuthType, Security, ServerConfig};
+pub use dates::{civil_from_days, days_from_civil, format_imap_date, format_iso8601_utc, parse_mail_date};
 pub use error::{ConnectionError, ConnectionErrorKind, ValidationError};
 pub use proxy::{
     decide_proxy, GlobalProxyMode, ProxyConfig, ProxyDecision, ProxyId, ProxyKind, ProxyRoute, ProxySource,
     Secret,
+};
+pub use sync::{
+    backoff_delay, normalize_subject, thread_key, FolderKind, HistoryRange, SyncJobKind, SyncJobState,
 };
 
 /// 本 crate 的用途标识，供工作区自检与日志使用。

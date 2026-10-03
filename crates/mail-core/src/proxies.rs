@@ -5,7 +5,7 @@
 use mail_domain::account::AccountProxyMode;
 use mail_domain::proxy::{decide_proxy, GlobalProxyMode, ProxyConfig, ProxyId, ProxyRoute, Secret};
 use mail_domain::ValidationError;
-use mail_store::StoredProxy;
+use mail_store::{Store, StoredProxy};
 
 use crate::engine::{EngineError, MailEngine};
 use crate::secrets::SecretStore;
@@ -213,43 +213,60 @@ impl MailEngine {
         &self,
         account_mode: AccountProxyMode,
     ) -> Result<Option<ProxyRoute>, EngineError> {
-        let global = self.store().global_proxy_mode()?;
+        resolve_route_with(&self.store, self.secrets(), account_mode)
+    }
+}
 
-        // 只有「账号跟随全局、且全局跟随系统」时才需要读系统代理。
-        let needs_system = matches!(account_mode, AccountProxyMode::InheritGlobal)
-            && matches!(global, GlobalProxyMode::System);
-        let mut system_route = None;
-        if needs_system {
-            match mail_net::read_system_proxy()? {
-                mail_net::SystemProxy::None => {}
-                mail_net::SystemProxy::Static(route) => system_route = Some(route),
-                mail_net::SystemProxy::AutoConfig { url } => {
-                    return Err(EngineError::SystemProxyAutoConfig(url));
-                }
+/// 不依赖引擎句柄的代理决议：同步线程与自检都能用。
+///
+/// 只短暂持有存储锁，绝不跨网络等待；密码在建连前一刻才从保险箱取出。
+pub(crate) fn resolve_route_with(
+    store: &std::sync::Mutex<Store>,
+    secrets: &dyn SecretStore,
+    account_mode: AccountProxyMode,
+) -> Result<Option<ProxyRoute>, EngineError> {
+    let global = {
+        let guard = store.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard.global_proxy_mode()?
+    };
+
+    // 只有「账号跟随全局、且全局跟随系统」时才需要读系统代理。
+    let needs_system =
+        matches!(account_mode, AccountProxyMode::InheritGlobal) && matches!(global, GlobalProxyMode::System);
+    let mut system_route = None;
+    if needs_system {
+        match mail_net::read_system_proxy()? {
+            mail_net::SystemProxy::None => {}
+            mail_net::SystemProxy::Static(route) => system_route = Some(route),
+            mail_net::SystemProxy::AutoConfig { url } => {
+                return Err(EngineError::SystemProxyAutoConfig(url));
             }
         }
+    }
 
-        let proxies = self.store().list_proxies()?;
-        let lookup = |id: ProxyId| {
-            proxies
-                .iter()
-                .find(|stored| stored.config.id == Some(id))
-                .map(|stored| ProxyRoute {
-                    config: stored.config.clone(),
-                    password: None,
-                })
-        };
-        let decision = decide_proxy(account_mode, global, &lookup, system_route)?;
+    let proxies = {
+        let guard = store.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard.list_proxies()?
+    };
+    let lookup = |id: ProxyId| {
+        proxies
+            .iter()
+            .find(|stored| stored.config.id == Some(id))
+            .map(|stored| ProxyRoute {
+                config: stored.config.clone(),
+                password: None,
+            })
+    };
+    let decision = decide_proxy(account_mode, global, &lookup, system_route)?;
 
-        match decision.route {
-            Some(route) if route.config.id.is_some() => {
-                match proxies.iter().find(|stored| stored.config.id == route.config.id) {
-                    Some(stored) => Ok(Some(route_from_stored(stored, self.secrets())?)),
-                    None => Err(EngineError::ProxyNotFound(route.config.id.map_or(0, |id| id.0))),
-                }
+    match decision.route {
+        Some(route) if route.config.id.is_some() => {
+            match proxies.iter().find(|stored| stored.config.id == route.config.id) {
+                Some(stored) => Ok(Some(route_from_stored(stored, secrets)?)),
+                None => Err(EngineError::ProxyNotFound(route.config.id.map_or(0, |id| id.0))),
             }
-            other => Ok(other),
         }
+        other => Ok(other),
     }
 }
 

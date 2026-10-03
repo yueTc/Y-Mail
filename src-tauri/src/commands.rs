@@ -696,3 +696,78 @@ fn parse_target(target: Option<String>) -> Result<(String, u16), CommandError> {
         .map_err(|_| CommandError::input("测试目标的端口要在 1 到 65535 之间"))?;
     Ok((host.to_string(), port))
 }
+
+// ============================ 同步命令 ============================
+
+/// 一个账号的同步状态；字段名与前端 TypeScript 类型保持一致。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatusDto {
+    /// 账号编号。
+    pub account_id: i64,
+    /// 邮箱地址。
+    pub email: String,
+    /// 状态标识（idle / connecting / syncing / backfilling / idle_waiting / error / needs_reauth / stopped）。
+    pub state: String,
+    /// 状态的中文名。
+    pub state_label: String,
+    /// 已处理条数。
+    pub progress: i64,
+    /// 本轮总条数；未知时为 0。
+    pub total: i64,
+    /// 给用户看的一句话说明。
+    pub message: String,
+    /// 是否需要用户重新填写授权码。
+    pub needs_reauth: bool,
+    /// 状态更新时间（UTC ISO-8601）。
+    pub updated_at: String,
+}
+
+impl SyncStatusDto {
+    /// 由引擎的状态快照转换。
+    fn from_status(status: &mail_core::AccountSyncStatus) -> Self {
+        Self {
+            account_id: status.account_id,
+            email: status.email.clone(),
+            state: status.state.as_str().to_string(),
+            state_label: status.state.label().to_string(),
+            progress: status.progress,
+            total: status.total,
+            message: status.message.clone(),
+            needs_reauth: status.needs_reauth,
+            updated_at: status.updated_at.clone(),
+        }
+    }
+}
+
+/// 读取各账号的同步状态（只读内存快照，不联网）。
+#[tauri::command]
+pub async fn sync_status(state: tauri::State<'_, AppState>) -> Result<Vec<SyncStatusDto>, CommandError> {
+    let engine = state.engine().await;
+    Ok(engine
+        .sync_statuses()
+        .iter()
+        .map(SyncStatusDto::from_status)
+        .collect())
+}
+
+/// 启动同步：传入账号编号就只起这一个，省略就起全部启用账号。
+#[tauri::command]
+pub async fn start_sync(
+    state: tauri::State<'_, AppState>,
+    account_id: Option<i64>,
+) -> Result<usize, CommandError> {
+    let engine = state.engine().await;
+    Ok(engine.start_sync(account_id)?)
+}
+
+/// 停止同步：传入账号编号就只停这一个，省略就全停。
+#[tauri::command]
+pub async fn stop_sync(
+    state: tauri::State<'_, AppState>,
+    account_id: Option<i64>,
+) -> Result<(), CommandError> {
+    let engine = state.engine().await;
+    engine.stop_sync(account_id).await;
+    Ok(())
+}

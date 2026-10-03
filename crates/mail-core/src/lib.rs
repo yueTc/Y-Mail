@@ -11,11 +11,13 @@ pub mod engine;
 pub mod paths;
 pub mod proxies;
 pub mod secrets;
+pub mod sync;
 
 pub use checks::ConnectionReport;
 pub use engine::{EngineError, EngineInit, MailEngine, KEYRING_SERVICE};
 pub use paths::SqlitePaths;
 pub use secrets::{KeyringSecretStore, MemorySecretStore, SecretStore, SecretStoreError};
+pub use sync::{AccountSyncStatus, SyncConfig, SyncService, SyncState};
 
 /// 本 crate 的用途标识，供工作区自检与日志使用。
 pub const CRATE_PURPOSE: &str = "引擎门面（唯一对外接口）";

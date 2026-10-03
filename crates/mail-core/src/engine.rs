@@ -15,6 +15,7 @@ use mail_store::{MigrationOutcome, Store, StoreError};
 
 use crate::paths::SqlitePaths;
 use crate::secrets::{KeyringSecretStore, SecretStore, SecretStoreError};
+use crate::sync::{SyncConfig, SyncService};
 
 /// Windows 凭据管理器里，本应用使用的服务名。
 pub const KEYRING_SERVICE: &str = "com.emmaster.desktop";
@@ -74,6 +75,10 @@ pub enum EngineError {
     #[error("{0}")]
     BadRequest(String),
 
+    /// 同步任务相关的失败（启动、停止等）。
+    #[error("同步失败：{0}")]
+    Sync(String),
+
     /// 账号不存在或已被删除。
     #[error("账号不存在或已被删除（编号 {0}）")]
     AccountNotFound(i64),
@@ -100,9 +105,10 @@ pub struct MailEngine {
     /// 存储句柄套一层互斥锁：`rusqlite::Connection` 能跨线程移动但不能被多线程共享，
     /// 而门面要能被 Tauri 的应用状态共享、也允许界面在多个命令间并发调用。
     /// 锁只包住同步的库操作，绝不跨 `.await` 持有。
-    store: std::sync::Mutex<Store>,
+    pub(crate) store: Arc<std::sync::Mutex<Store>>,
     init: EngineInit,
     secrets: Arc<dyn SecretStore>,
+    pub(crate) sync: Arc<SyncService>,
 }
 
 impl std::fmt::Debug for MailEngine {
@@ -156,10 +162,18 @@ impl MailEngine {
             "引擎初始化完成"
         );
 
+        let store = Arc::new(std::sync::Mutex::new(store));
+        let sync = Arc::new(SyncService::new(
+            store.clone(),
+            secrets.clone(),
+            SyncConfig::default(),
+        ));
+
         Ok(Self {
-            store: std::sync::Mutex::new(store),
+            store,
             init,
             secrets,
+            sync,
         })
     }
 

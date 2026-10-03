@@ -35,6 +35,9 @@ pub fn run() {
             commands::get_proxy_settings,
             commands::set_proxy_settings,
             commands::test_proxy,
+            commands::sync_status,
+            commands::start_sync,
+            commands::stop_sync,
         ])
         .setup(|app| {
             // 1) 应用数据目录。Windows 下形如 %APPDATA%\com.emmaster.desktop。
@@ -63,6 +66,17 @@ pub fn run() {
 
             // 4) 把引擎与摘要交给命令层；日志句柄随之进入应用状态，保证写线程存活。
             app.manage(AppState::new(engine, logging));
+
+            // 5) 自动启动已启用账号的后台同步；起不来只记日志，不拦应用启动。
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = handle.state::<AppState>();
+                let engine = state.engine().await;
+                match engine.start_sync(None) {
+                    Ok(started) => tracing::info!(started, "后台同步已自动启动"),
+                    Err(err) => tracing::warn!(error = %err, "后台同步自动启动失败"),
+                }
+            });
 
             Ok(())
         })

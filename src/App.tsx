@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api, describeError, type DbStatus } from "./api";
 import AccountPanel from "./AccountPanel";
 import ProxyPanel from "./ProxyPanel";
+import SyncPanel from "./SyncPanel";
 
 type LoadState =
   | { kind: "loading" }
@@ -37,6 +38,8 @@ export default function App() {
       <p className="subtitle">
         Wave 1：先配置邮箱账号与代理。授权码只进 Windows 凭据管理器，保存前会先做一次连接自检。
       </p>
+
+      <SyncPanel />
 
       <AccountPanel proxiesVersion={proxiesVersion} />
 

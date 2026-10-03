@@ -92,6 +92,29 @@ export interface GlobalProxy {
   proxyId?: number;
 }
 
+/** 同步状态标识。 */
+export type SyncState =
+  | "idle"
+  | "connecting"
+  | "syncing"
+  | "backfilling"
+  | "idle_waiting"
+  | "error"
+  | "needs_reauth"
+  | "stopped";
+
+/** 一个账号的同步状态快照。 */
+export interface SyncStatus {
+  accountId: number;
+  email: string;
+  state: SyncState;
+  stateLabel: string;
+  progress: number;
+  total: number;
+  message: string;
+  needsReauth: boolean;
+  updatedAt: string;
+}
 /** 连接自检结果。 */
 export interface ConnectionReport {
   imapFolderCount: number;
@@ -195,6 +218,13 @@ export const api = {
 
   setProxySettings: (mode: GlobalProxy) => call<GlobalProxy>("set_proxy_settings", { mode }),
 
+  syncStatus: () => call<SyncStatus[]>("sync_status"),
+
+  startSync: (accountId?: number) =>
+    call<number>("start_sync", accountId === undefined ? {} : { accountId }),
+
+  stopSync: (accountId?: number) =>
+    call<void>("stop_sync", accountId === undefined ? {} : { accountId }),
   testProxy: (id: number, target?: string) =>
     call<void>("test_proxy", target === undefined ? { id } : { id, target }),
 };
