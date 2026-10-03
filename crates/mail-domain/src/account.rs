@@ -193,10 +193,6 @@ impl AccountDraft {
             problems.push("登录名不能为空".to_string());
         }
 
-        if self.display_name.trim().is_empty() {
-            problems.push("显示名不能为空".to_string());
-        }
-
         self.imap.validate("收件服务器", &mut problems);
         self.smtp.validate("发件服务器", &mut problems);
 
@@ -205,6 +201,15 @@ impl AccountDraft {
         } else {
             Err(ValidationError::new(problems))
         }
+    }
+
+    /// 返回一份「显示名已填好」的副本：显示名留空时回落到邮箱地址。
+    pub fn normalized(&self) -> Self {
+        let mut draft = self.clone();
+        if draft.display_name.trim().is_empty() {
+            draft.display_name = draft.email.trim().to_string();
+        }
+        draft
     }
 }
 
@@ -304,6 +309,17 @@ mod tests {
     #[test]
     fn 合法草稿校验通过() {
         draft().validate().expect("应通过校验");
+    }
+
+    #[test]
+    fn 显示名可留空并回落邮箱() {
+        let mut blank = draft();
+        blank.display_name = "   ".to_string();
+        blank.validate().expect("显示名留空不应拦住校验");
+        assert_eq!(blank.normalized().display_name, "someone@example.com");
+
+        let kept = draft().normalized();
+        assert_eq!(kept.display_name, "我的邮箱");
     }
 
     #[test]

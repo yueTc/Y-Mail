@@ -87,6 +87,37 @@ describe("账号面板的授权码输入", () => {
     expect(input.getAttribute("autocomplete")).toBe("off");
   });
 
+  it("显示名留空时保存用邮箱地址兜底", async () => {
+    vi.mocked(api.testAccountConnection).mockResolvedValue({
+      imapFolderCount: 3,
+      smtpMechanism: "PLAIN",
+    });
+    vi.mocked(api.createAccount).mockResolvedValue(SAVED_ACCOUNT);
+
+    render(<AccountPanel proxiesVersion={0} />);
+    fireEvent.click(await screen.findByRole("button", { name: "新增账号" }));
+
+    const displayName = screen.getByLabelText(/显示名/) as HTMLInputElement;
+    expect(displayName.placeholder).toBe("可留空，默认用邮箱地址");
+    expect(displayName.value).toBe("");
+
+    fireEvent.change(screen.getByLabelText(/邮箱地址/), {
+      target: { value: "someone@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText(/登录名/), {
+      target: { value: "someone@example.com" },
+    });
+    fireEvent.change(secretInput(/授权码 \/ 密码/), { target: { value: "auth-code" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "连接自检" }));
+    await screen.findByText(/自检通过/);
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await vi.waitFor(() => expect(api.createAccount).toHaveBeenCalledTimes(1));
+    const [sentDraft, sentSecret] = vi.mocked(api.createAccount).mock.calls[0];
+    expect(sentDraft.displayName).toBe("someone@example.com");
+    expect(sentSecret).toBe("auth-code");
+  });
   it("编辑已保存账号时不会把旧授权码回显出来", async () => {
     vi.mocked(api.listAccounts).mockResolvedValue([SAVED_ACCOUNT]);
     render(<AccountPanel proxiesVersion={0} />);

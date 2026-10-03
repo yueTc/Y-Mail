@@ -29,6 +29,8 @@ impl MailEngine {
         draft: &AccountDraft,
         secret: &Secret,
     ) -> Result<ConnectionReport, EngineError> {
+        let normalized = draft.normalized();
+        let draft = &normalized;
         draft.validate()?;
         if secret.is_empty() {
             return Err(EngineError::BadRequest("请先填写授权码".to_string()));
@@ -53,6 +55,8 @@ impl MailEngine {
         draft: &AccountDraft,
         secret: &Secret,
     ) -> Result<Account, EngineError> {
+        let normalized = draft.normalized();
+        let draft = &normalized;
         draft.validate()?;
         if secret.is_empty() {
             return Err(EngineError::BadRequest("请先填写授权码".to_string()));
@@ -88,6 +92,8 @@ impl MailEngine {
         draft: &AccountDraft,
         secret: Option<&Secret>,
     ) -> Result<Account, EngineError> {
+        let normalized = draft.normalized();
+        let draft = &normalized;
         draft.validate()?;
         let existing = self
             .store()
@@ -134,14 +140,18 @@ impl MailEngine {
                     }
                 }
             }
-            None => match self
-                .store()
-                .update_account(id, draft, existing.credential_key.as_deref())
-            {
-                Ok(true) => self.get_account(id),
-                Ok(false) => Err(EngineError::AccountNotFound(id.0)),
-                Err(err) => Err(err.into()),
-            },
+            None => {
+                // 先把结果取出来、放掉数据库锁，再按结果读账号；
+                // 锁没放就在分支里再读一次，会把自己锁死（曾经的挂起根因）。
+                let updated = self
+                    .store()
+                    .update_account(id, draft, existing.credential_key.as_deref());
+                match updated {
+                    Ok(true) => self.get_account(id),
+                    Ok(false) => Err(EngineError::AccountNotFound(id.0)),
+                    Err(err) => Err(err.into()),
+                }
+            }
         }
     }
 
@@ -233,7 +243,25 @@ mod tests {
         line.trim_end().to_string()
     }
 
-    /// 起一个能多次应答的假 IMAP 服务器。
+    /// 读到一行就返回；对端断开时返回 `None`。
+    async fn read_optional_line(reader: &mut BufReader<TcpStream>) -> Option<String> {
+        let mut line = String::new();
+        match reader.read_line(&mut line).await {
+            Ok(0) | Err(_) => None,
+            Ok(_) => Some(line.trim_end().to_string()),
+        }
+    }
+
+    /// 往假服务器回一段应答。
+    async fn reply(reader: &mut BufReader<TcpStream>, payload: &str) {
+        reader
+            .get_mut()
+            .write_all(payload.as_bytes())
+            .await
+            .expect("写应答失败");
+    }
+
+    /// 起一个能多次应答的假 IMAP 服务器；按客户端实际发出的命令逐条应答。
     async fn spawn_imap(accept_login: bool) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定失败");
         let port = listener.local_addr().expect("取地址失败").port();
@@ -249,33 +277,48 @@ mod tests {
                         .write_all(b"* OK IMAP4rev1 ready\r\n")
                         .await
                         .expect("写欢迎语失败");
-                    let _login = read_line(&mut reader).await;
-                    if accept_login {
-                        reader
-                            .get_mut()
-                            .write_all(b"a002 OK LOGIN completed\r\n")
-                            .await
-                            .expect("写登录结果失败");
-                        let _list = read_line(&mut reader).await;
-                        reader
-                            .get_mut()
-                            .write_all(
-                                b"* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\na003 OK LIST completed\r\n",
+                    while let Some(line) = read_optional_line(&mut reader).await {
+                        let upper = line.to_ascii_uppercase();
+                        let tag = line.split_whitespace().next().unwrap_or_default().to_string();
+                        if upper.ends_with("LOGIN") || upper.contains(" LOGIN ") {
+                            if accept_login {
+                                reply(&mut reader, &format!("{tag} OK LOGIN completed\r\n")).await;
+                            } else {
+                                reply(&mut reader, &format!("{tag} NO login failed\r\n")).await;
+                                break;
+                            }
+                        } else if upper.contains("CAPABILITY") {
+                            reply(
+                                &mut reader,
+                                &format!("* CAPABILITY IMAP4rev1 ID\r\n{tag} OK CAPABILITY completed\r\n"),
                             )
-                            .await
-                            .expect("写文件夹失败");
-                        let _logout = read_line(&mut reader).await;
-                        reader
-                            .get_mut()
-                            .write_all(b"* BYE\r\na004 OK\r\n")
-                            .await
-                            .expect("写退出结果失败");
-                    } else {
-                        reader
-                            .get_mut()
-                            .write_all(b"a002 NO login failed\r\n")
-                            .await
-                            .expect("写拒绝结果失败");
+                            .await;
+                        } else if upper.ends_with("ID") || upper.contains(" ID ") {
+                            reply(
+                                &mut reader,
+                                &format!("* ID (\"name\" \"EmMaster\")\r\n{tag} OK ID completed\r\n"),
+                            )
+                            .await;
+                        } else if upper.contains("LIST") {
+                            reply(
+                                &mut reader,
+                                &format!(
+                                    "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n{tag} OK LIST completed\r\n"
+                                ),
+                            )
+                            .await;
+                        } else if upper.contains("SELECT") {
+                            reply(
+                                &mut reader,
+                                &format!("* 1 EXISTS\r\n{tag} OK SELECT completed\r\n"),
+                            )
+                            .await;
+                        } else if upper.contains("LOGOUT") {
+                            reply(&mut reader, &format!("* BYE\r\n{tag} OK\r\n")).await;
+                            break;
+                        } else {
+                            reply(&mut reader, &format!("{tag} BAD unexpected\r\n")).await;
+                        }
                     }
                 });
             }
@@ -483,6 +526,29 @@ mod tests {
         assert_eq!(secrets.plain(&new_key).as_deref(), Some("new-pw"));
     }
 
+    #[tokio::test]
+    async fn 显示名留空保存为邮箱地址() {
+        let (imap_port, smtp_port) = ok_servers().await;
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (engine, _secrets) = engine(dir.path());
+
+        let mut blank = draft(imap_port, smtp_port, "blank@example.com");
+        blank.display_name = "   ".to_string();
+        let account = engine
+            .create_account(&blank, &Secret::new("pw"))
+            .await
+            .expect("显示名留空也应保存成功");
+        assert_eq!(account.display_name, "blank@example.com");
+
+        // 编辑时把显示名清空，保存后同样回落到邮箱地址。
+        let mut cleared = draft(imap_port, smtp_port, "blank@example.com");
+        cleared.display_name = String::new();
+        let updated = engine
+            .update_account(account.id, &cleared, None)
+            .await
+            .expect("清空显示名后仍应更新成功");
+        assert_eq!(updated.display_name, "blank@example.com");
+    }
     #[tokio::test]
     async fn 修改时自检失败会保持原样() {
         let (imap_port, smtp_port) = ok_servers().await;

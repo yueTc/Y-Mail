@@ -1,6 +1,8 @@
-//! IMAP 连接自检：连上服务器 → 可选 STARTTLS → 登录 → 数文件夹 → 选收件箱 → 退出。
+//! IMAP 连接自检：连上服务器 → 可选 STARTTLS → 登录 → 报身份 → 数文件夹 → 选收件箱 → 退出。
 //!
 //! 安全约定：授权码只用于拼 LOGIN 命令；错误信息与日志里必须先脱敏。
+//! 兼容约定：网易 163/126 这类 Coremail 服务器要求登录后先用 ID 命令自报身份（RFC 2971），
+//! 否则会以「Unsafe Login」为由拒绝打开收件箱；服务器广告了 ID 能力就主动发送。
 
 use std::time::Duration;
 
@@ -33,6 +35,9 @@ pub struct ProbeReport {
     /// 能看到的文件夹数量（至少应有收件箱）。
     pub folder_count: usize,
 }
+
+/// 自报身份时用的客户端名字，出现在 IMAP ID 命令里。
+const IMAP_CLIENT_NAME: &str = "em-master";
 
 /// 一条服务器命令的应答。
 struct CommandReply {
@@ -113,9 +118,40 @@ async fn run(request: &ProbeRequest, route: Option<&ProxyRoute>) -> Result<Probe
         }
     }
 
-    let reply = send_command(&mut stream, "a003", "LIST \"\" \"*\"").await?;
+    // 先问能力：广告了 ID 才发，普通服务器不受影响。
+    let capability = send_command(&mut stream, "a003", "CAPABILITY").await?;
+    // 命令编号按实际发出的命令顺延；跳过的命令不占号。
+    let mut next_tag = 4u32;
+    if capability.status == "OK" {
+        let supports_id = capability.lines.iter().any(|line| {
+            line.to_ascii_uppercase()
+                .strip_prefix("* CAPABILITY")
+                .is_some_and(|rest| rest.split_whitespace().any(|token| token == "ID"))
+        });
+        if supports_id {
+            let id = format!(
+                "ID (\"name\" \"{}\" \"version\" \"{}\" \"vendor\" \"{}\")",
+                IMAP_CLIENT_NAME,
+                env!("CARGO_PKG_VERSION"),
+                IMAP_CLIENT_NAME
+            );
+            match send_command(&mut stream, &format!("a{next_tag:03}"), &id).await {
+                Ok(reply) if reply.status == "OK" => {}
+                Ok(reply) => {
+                    // 服务器不收 ID 不致命，继续往下走，让真正的问题自己暴露。
+                    tracing::debug!(status = %reply.status, "IMAP ID 命令未被接受");
+                }
+                Err(err) => return Err(err),
+            }
+            next_tag += 1;
+        }
+    }
+
+    let reply = send_command(&mut stream, &format!("a{next_tag:03}"), "LIST \"\" \"*\"").await?;
+    next_tag += 1;
     if reply.status != "OK" {
-        return Err(ConnectionError::protocol("读取文件夹列表失败"));
+        let detail = sanitize_detail(&reply.detail, request.password.expose());
+        return Err(ConnectionError::protocol(format!("读取文件夹列表失败：{detail}")));
     }
     let folder_count = reply
         .lines
@@ -124,14 +160,14 @@ async fn run(request: &ProbeRequest, route: Option<&ProxyRoute>) -> Result<Probe
         .count();
 
     // 规格要求自检必须真的能打开收件箱，只数文件夹不算过。
-    let reply = send_command(&mut stream, "a004", "SELECT \"INBOX\"").await?;
+    let reply = send_command(&mut stream, &format!("a{next_tag:03}"), "SELECT \"INBOX\"").await?;
+    next_tag += 1;
     if reply.status != "OK" {
-        return Err(ConnectionError::rejected(
-            "打开收件箱失败：服务器不允许选择 INBOX",
-        ));
+        let detail = sanitize_detail(&reply.detail, request.password.expose());
+        return Err(ConnectionError::rejected(format!("打开收件箱失败：{detail}")));
     }
 
-    let _ = send_command(&mut stream, "a005", "LOGOUT").await;
+    let _ = send_command(&mut stream, &format!("a{next_tag:03}"), "LOGOUT").await;
 
     Ok(ProbeReport { folder_count })
 }
@@ -160,6 +196,12 @@ async fn send_command(
         }
         lines.push(line);
     }
+}
+
+/// 服务器原文先脱敏再展示，避免任何角落回显授权码。
+fn sanitize_detail(detail: &str, secret: &str) -> String {
+    let cleaned = mail_net::error::redact(detail, &[secret]);
+    cleaned.trim().to_string()
 }
 
 /// 把字符串包成 IMAP 的引号形式，转义反斜杠与引号。
@@ -219,27 +261,42 @@ mod tests {
                 .write_all(b"a002 OK LOGIN completed\r\n")
                 .await
                 .expect("写入失败");
+            let capability = read_line(&mut reader).await;
+            assert_eq!(capability, "a003 CAPABILITY");
+            reader
+                .get_mut()
+                .write_all(b"* CAPABILITY IMAP4rev1 ID\r\na003 OK CAPABILITY completed\r\n")
+                .await
+                .expect("写入失败");
+            let id = read_line(&mut reader).await;
+            assert!(id.starts_with("a004 ID ("), "应发出 ID 命令：{id}");
+            assert!(id.contains("\"name\" \"em-master\""));
+            reader
+                .get_mut()
+                .write_all(b"* ID (\"name\" \"em-master\")\r\na004 OK ID completed\r\n")
+                .await
+                .expect("写入失败");
             let list = read_line(&mut reader).await;
-            assert_eq!(list, "a003 LIST \"\" \"*\"");
+            assert_eq!(list, "a005 LIST \"\" \"*\"");
             reader
                 .get_mut()
                 .write_all(
-                    b"* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n* LIST (\\HasNoChildren) \"/\" \"Sent\"\r\na003 OK LIST completed\r\n",
+                    b"* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n* LIST (\\HasNoChildren) \"/\" \"Sent\"\r\na005 OK LIST completed\r\n",
                 )
                 .await
                 .expect("写入失败");
             let select = read_line(&mut reader).await;
-            assert_eq!(select, "a004 SELECT \"INBOX\"");
+            assert_eq!(select, "a006 SELECT \"INBOX\"");
             reader
                 .get_mut()
-                .write_all(b"* 12 EXISTS\r\na004 OK SELECT completed\r\n")
+                .write_all(b"* 12 EXISTS\r\na006 OK SELECT completed\r\n")
                 .await
                 .expect("写入失败");
             let logout = read_line(&mut reader).await;
-            assert_eq!(logout, "a005 LOGOUT");
+            assert_eq!(logout, "a007 LOGOUT");
             reader
                 .get_mut()
-                .write_all(b"* BYE\r\na005 OK\r\n")
+                .write_all(b"* BYE\r\na007 OK\r\n")
                 .await
                 .expect("写入失败");
         });
@@ -262,23 +319,31 @@ mod tests {
                 .write_all(b"* OK IMAP4rev1 ready\r\n")
                 .await
                 .expect("写入失败");
-            let _ = read_line(&mut reader).await;
+            let _login = read_line(&mut reader).await;
             reader
                 .get_mut()
                 .write_all(b"a002 OK LOGIN completed\r\n")
                 .await
                 .expect("写入失败");
-            let _ = read_line(&mut reader).await;
+            let capability = read_line(&mut reader).await;
+            assert_eq!(capability, "a003 CAPABILITY");
             reader
                 .get_mut()
-                .write_all(b"a003 OK LIST completed\r\n")
+                .write_all(b"* CAPABILITY IMAP4rev1\r\na003 OK CAPABILITY completed\r\n")
+                .await
+                .expect("写入失败");
+            let list = read_line(&mut reader).await;
+            assert_eq!(list, "a004 LIST \"\" \"*\"");
+            reader
+                .get_mut()
+                .write_all(b"a004 OK LIST completed\r\n")
                 .await
                 .expect("写入失败");
             let select = read_line(&mut reader).await;
-            assert_eq!(select, "a004 SELECT \"INBOX\"");
+            assert_eq!(select, "a005 SELECT \"INBOX\"");
             reader
                 .get_mut()
-                .write_all(b"a004 NO SELECT failed\r\n")
+                .write_all(b"a005 NO Unsafe Login, please contact kefu@188.com\r\n")
                 .await
                 .expect("写入失败");
         });
@@ -288,6 +353,11 @@ mod tests {
             .expect_err("应打开失败");
         assert_eq!(err.kind, ConnectionErrorKind::Rejected);
         assert!(err.message.contains("打开收件箱失败"));
+        assert!(
+            err.message.contains("Unsafe Login"),
+            "错误文案应带上服务器原文：{}",
+            err.message
+        );
     }
 
     #[tokio::test]
@@ -372,6 +442,121 @@ mod tests {
         assert_eq!(err.kind, ConnectionErrorKind::NetworkUnreachable);
     }
 
+    #[tokio::test]
+    async fn 服务器不广告id时跳过并完成自检() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定失败");
+        let addr = listener.local_addr().expect("取地址失败");
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("接受连接失败");
+            let mut reader = BufReader::new(socket);
+            reader
+                .get_mut()
+                .write_all(b"* OK ready\r\n")
+                .await
+                .expect("写入失败");
+            let _login = read_line(&mut reader).await;
+            reader
+                .get_mut()
+                .write_all(b"a002 OK LOGIN completed\r\n")
+                .await
+                .expect("写入失败");
+            let capability = read_line(&mut reader).await;
+            assert_eq!(capability, "a003 CAPABILITY");
+            reader
+                .get_mut()
+                .write_all(b"* CAPABILITY IMAP4rev1 AUTH=PLAIN\r\na003 OK CAPABILITY completed\r\n")
+                .await
+                .expect("写入失败");
+            // 没有 ID 能力，下一个命令必须直接是 LIST，绝不能是 ID。
+            let list = read_line(&mut reader).await;
+            assert_eq!(list, "a004 LIST \"\" \"*\"");
+            reader
+                .get_mut()
+                .write_all(b"* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\na004 OK LIST completed\r\n")
+                .await
+                .expect("写入失败");
+            let select = read_line(&mut reader).await;
+            assert_eq!(select, "a005 SELECT \"INBOX\"");
+            reader
+                .get_mut()
+                .write_all(b"a005 OK SELECT completed\r\n")
+                .await
+                .expect("写入失败");
+            let logout = read_line(&mut reader).await;
+            assert_eq!(logout, "a006 LOGOUT");
+            reader
+                .get_mut()
+                .write_all(b"a006 OK\r\n")
+                .await
+                .expect("写入失败");
+        });
+
+        let report = probe(&request(addr.port(), Security::Plain), None)
+            .await
+            .expect("自检应通过");
+        assert_eq!(report.folder_count, 1);
+    }
+
+    #[tokio::test]
+    async fn id被拒也不影响自检通过() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定失败");
+        let addr = listener.local_addr().expect("取地址失败");
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("接受连接失败");
+            let mut reader = BufReader::new(socket);
+            reader
+                .get_mut()
+                .write_all(b"* OK ready\r\n")
+                .await
+                .expect("写入失败");
+            let _login = read_line(&mut reader).await;
+            reader
+                .get_mut()
+                .write_all(b"a002 OK LOGIN completed\r\n")
+                .await
+                .expect("写入失败");
+            let capability = read_line(&mut reader).await;
+            assert_eq!(capability, "a003 CAPABILITY");
+            reader
+                .get_mut()
+                .write_all(b"* CAPABILITY IMAP4rev1 ID\r\na003 OK CAPABILITY completed\r\n")
+                .await
+                .expect("写入失败");
+            let id = read_line(&mut reader).await;
+            assert!(id.starts_with("a004 ID ("), "应发出 ID 命令：{id}");
+            reader
+                .get_mut()
+                .write_all(b"a004 BAD ID not allowed\r\n")
+                .await
+                .expect("写入失败");
+            let list = read_line(&mut reader).await;
+            assert_eq!(list, "a005 LIST \"\" \"*\"");
+            reader
+                .get_mut()
+                .write_all(b"* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\na005 OK LIST completed\r\n")
+                .await
+                .expect("写入失败");
+            let select = read_line(&mut reader).await;
+            assert_eq!(select, "a006 SELECT \"INBOX\"");
+            reader
+                .get_mut()
+                .write_all(b"a006 OK SELECT completed\r\n")
+                .await
+                .expect("写入失败");
+            let logout = read_line(&mut reader).await;
+            assert_eq!(logout, "a007 LOGOUT");
+            reader
+                .get_mut()
+                .write_all(b"a007 OK\r\n")
+                .await
+                .expect("写入失败");
+        });
+
+        let report = probe(&request(addr.port(), Security::Plain), None)
+            .await
+            .expect("ID 被拒也不该影响自检");
+        assert_eq!(report.folder_count, 1);
+    }
     #[test]
     fn 引号转义正确且换行被拒绝() {
         assert_eq!(quote_imap_string("a\"b\\c").expect("应成功"), "\"a\\\"b\\\\c\"");

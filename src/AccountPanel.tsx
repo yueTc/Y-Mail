@@ -139,7 +139,7 @@ function formFromAccount(account: Account): FormState {
 
 function toDraft(form: FormState): AccountDraft {
   return {
-    displayName: form.displayName.trim(),
+    displayName: form.displayName.trim() || form.email.trim(),
     email: form.email.trim(),
     authType: form.authType,
     username: form.username.trim(),
@@ -156,7 +156,6 @@ function toDraft(form: FormState): AccountDraft {
 
 /** 提交前的本地检查；只拦明显问题，真正的校验与自检在引擎里做。 */
 function validate(form: FormState): string | null {
-  if (form.displayName.trim() === "") return "请填写显示名";
   if (!form.email.includes("@")) return "请填写完整的邮箱地址";
   if (form.authType === "oauth2") return "OAuth2 登录要到 Wave 6 才支持，现在请选授权码";
   if (form.username.trim() === "") return "请填写登录名（多数邮箱就是完整地址）";
@@ -450,7 +449,7 @@ export default function AccountPanel({ proxiesVersion }: Props) {
               <input
                 value={form.displayName}
                 onChange={(event) => patch({ displayName: event.target.value })}
-                placeholder="例如：工作邮箱"
+                placeholder="可留空，默认用邮箱地址"
               />
             </label>
             <label>
