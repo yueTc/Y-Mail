@@ -1,0 +1,43 @@
+# === Rust / Cargo ===
+/target/
+**/target/
+
+# === Node / 前端 ===
+node_modules/
+/dist/
+/dist-ssr/
+*.local
+
+# === Tauri ===
+src-tauri/target/
+src-tauri/gen/
+
+# === 本地数据与密钥（绝不入库）===
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# === 日志 ===
+*.log
+logs/
+
+# === OS / IDE ===
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# === AI 记忆：仅提交项目级规则与交接，忽略按日期的个人上下文 ===
+.ai-memory/*/
+!.ai-memory/project_memory.md
+!.ai-memory/handoff.md
