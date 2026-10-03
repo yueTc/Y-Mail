@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 mail-domain.workspace = true
+mail-net.workspace = true
 mail-store.workspace = true
 mail-mime.workspace = true
 mail-imap.workspace = true
@@ -19,6 +20,9 @@ mail-oauth.workspace = true
 mail-ai.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+sha2.workspace = true
+keyring.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }

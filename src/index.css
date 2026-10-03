@@ -1,10 +1,16 @@
-/* Wave 0 骨架样式：只求可读、无远程资源；真正的收件箱布局自 Wave 3 起设计。 */
+/* Wave 1 界面样式：账号与代理配置。只求可读、无远程资源。 */
 
 :root {
   color-scheme: light dark;
   font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
   font-size: 15px;
   line-height: 1.6;
+  --line: rgba(128, 128, 128, 0.35);
+  --panel-bg: rgba(255, 255, 255, 0.72);
+  --field-bg: rgba(255, 255, 255, 0.9);
+  --accent: #2f6fed;
+  --ok: #1a7f4b;
+  --danger: #b42318;
 }
 
 * {
@@ -23,12 +29,18 @@ body {
     background: #1c1f23;
     color: #e6e8ea;
   }
+  :root {
+    --panel-bg: rgba(255, 255, 255, 0.04);
+    --field-bg: rgba(255, 255, 255, 0.06);
+    --ok: #6fd39b;
+    --danger: #ff9c92;
+  }
 }
 
 .shell {
-  max-width: 760px;
+  max-width: 980px;
   margin: 0 auto;
-  padding: 48px 24px 64px;
+  padding: 40px 24px 64px;
 }
 
 h1 {
@@ -37,27 +49,252 @@ h1 {
 }
 
 h2 {
-  margin: 0 0 12px;
+  margin: 0;
   font-size: 1.05rem;
 }
 
+h3 {
+  margin: 0 0 12px;
+  font-size: 1rem;
+}
+
 .subtitle {
-  margin: 0 0 28px;
+  margin: 0 0 24px;
   opacity: 0.72;
 }
 
 .panel {
-  border: 1px solid rgba(128, 128, 128, 0.35);
+  border: 1px solid var(--line);
   border-radius: 10px;
   padding: 20px;
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--panel-bg);
+  margin-bottom: 20px;
 }
 
-@media (prefers-color-scheme: dark) {
-  .panel {
-    background: rgba(255, 255, 255, 0.04);
-  }
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
 }
+
+/* ---------- 按钮与表单控件 ---------- */
+
+button {
+  font: inherit;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--field-bg);
+  color: inherit;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+button.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+input,
+select {
+  font: inherit;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--field-bg);
+  color: inherit;
+  min-width: 0;
+}
+
+input:focus,
+select:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 1px;
+}
+
+/* ---------- 提示 ---------- */
+
+.hint {
+  margin: 6px 0;
+  opacity: 0.72;
+  font-size: 0.92rem;
+}
+
+.notice {
+  margin: 6px 0;
+  color: var(--ok);
+}
+
+.error {
+  margin: 6px 0;
+  color: var(--danger);
+}
+
+.path {
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 0.9em;
+}
+
+/* ---------- 账号 / 代理列表 ---------- */
+
+.card-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--field-bg);
+}
+
+.dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.card-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  flex-wrap: wrap;
+}
+
+.card-sub {
+  font-size: 0.9rem;
+  opacity: 0.8;
+  word-break: break-all;
+}
+
+.tag {
+  font-size: 0.78rem;
+  font-weight: 400;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  opacity: 0.85;
+}
+
+.tag.warn {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+.card-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+/* ---------- 表单 ---------- */
+
+.form {
+  margin-top: 16px;
+  border-top: 1px dashed var(--line);
+  padding-top: 16px;
+}
+
+.field-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.field-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.88rem;
+  opacity: 0.95;
+  flex: 1;
+  min-width: 160px;
+}
+
+.field-row label.checkbox,
+.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  min-width: 0;
+}
+
+.field-row label.checkbox input,
+.checkbox input {
+  width: auto;
+}
+
+.secret-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.88rem;
+  margin-bottom: 6px;
+}
+
+.form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* ---------- 全局策略一行 ---------- */
+
+.global-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.global-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.88rem;
+}
+
+.global-row .target-field {
+  flex: 1;
+  min-width: 240px;
+}
+
+/* ---------- 数据库状态 ---------- */
 
 .status {
   display: grid;
@@ -74,25 +311,4 @@ h2 {
 .status dd {
   margin: 0;
   word-break: break-all;
-}
-
-.path {
-  font-family: Consolas, "Cascadia Mono", monospace;
-  font-size: 0.92em;
-}
-
-.hint {
-  margin: 0;
-  opacity: 0.7;
-}
-
-.error {
-  margin: 0;
-  color: #b42318;
-}
-
-@media (prefers-color-scheme: dark) {
-  .error {
-    color: #ff9c92;
-  }
 }

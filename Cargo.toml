@@ -6,6 +6,7 @@
 resolver = "2"
 members = [
   "crates/mail-domain",
+  "crates/mail-net",
   "crates/mail-store",
   "crates/mail-mime",
   "crates/mail-imap",
@@ -25,6 +26,7 @@ authors = ["em-master"]
 [workspace.dependencies]
 # 内部 crate（路径依赖集中声明，版本随工作区）
 mail-domain = { path = "crates/mail-domain" }
+mail-net = { path = "crates/mail-net" }
 mail-store = { path = "crates/mail-store" }
 mail-mime = { path = "crates/mail-mime" }
 mail-imap = { path = "crates/mail-imap" }
@@ -45,6 +47,12 @@ tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 tracing-appender = "0.2.5"
 sha2 = "0.10"
 tempfile = "3.27.0"
+tokio = { version = "1.44", features = ["net", "io-util", "time", "macros", "rt"] }
+tokio-native-tls = "0.3.1"
+native-tls = "0.2.14"
+base64 = "0.22.1"
+winreg = "0.55"
+keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

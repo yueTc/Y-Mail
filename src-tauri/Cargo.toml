@@ -19,6 +19,8 @@ tauri-build.workspace = true
 
 [dependencies]
 mail-core.workspace = true
+mail-domain.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 serde.workspace = true
 tauri.workspace = true
 thiserror.workspace = true

@@ -105,6 +105,11 @@ impl Store {
         }
     }
 
+    /// crate 内部使用：账号、代理等存储模块通过它拿到底层连接。
+    pub(crate) fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
     /// 仅测试使用：拿到底层连接，用来构造损坏数据等边界场景。
     #[cfg(test)]
     pub(crate) fn raw_connection_for_test(&self) -> &Connection {

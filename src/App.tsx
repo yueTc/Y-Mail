@@ -1,15 +1,8 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 
-/** 与 Rust 侧 `DbStatus` 一一对应（camelCase）。 */
-interface DbStatus {
-  databaseFile: string;
-  logDir: string;
-  schemaVersion: number;
-  appliedCount: number;
-  appliedVersions: number[];
-  fts5Available: boolean;
-}
+import { api, describeError, type DbStatus } from "./api";
+import AccountPanel from "./AccountPanel";
+import ProxyPanel from "./ProxyPanel";
 
 type LoadState =
   | { kind: "loading" }
@@ -18,16 +11,19 @@ type LoadState =
 
 export default function App() {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
+  // 代理列表变过一次就加一，用来通知账号面板重新拉取「指定代理」的可选项。
+  const [proxiesVersion, setProxiesVersion] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
 
-    invoke<DbStatus>("db_status")
+    api
+      .dbStatus()
       .then((status) => {
         if (!cancelled) setState({ kind: "ready", status });
       })
       .catch((error: unknown) => {
-        if (!cancelled) setState({ kind: "error", message: String(error) });
+        if (!cancelled) setState({ kind: "error", message: describeError(error) });
       });
 
     return () => {
@@ -37,15 +33,19 @@ export default function App() {
 
   return (
     <main className="shell">
-      <h1>统一收件箱（骨架）</h1>
-      <p className="subtitle">Wave 0：外壳、数据库与迁移链路已就位，账号与邮件功能尚未实现。</p>
+      <h1>统一收件箱</h1>
+      <p className="subtitle">
+        Wave 1：先配置邮箱账号与代理。授权码只进 Windows 凭据管理器，保存前会先做一次连接自检。
+      </p>
+
+      <AccountPanel proxiesVersion={proxiesVersion} />
+
+      <ProxyPanel onChanged={() => setProxiesVersion((value) => value + 1)} />
 
       <section className="panel">
         <h2>数据库状态</h2>
         {state.kind === "loading" && <p className="hint">正在读取……</p>}
-        {state.kind === "error" && (
-          <p className="error">读取失败：{state.message}</p>
-        )}
+        {state.kind === "error" && <p className="error">读取失败：{state.message}</p>}
         {state.kind === "ready" && (
           <dl className="status">
             <dt>数据库文件</dt>

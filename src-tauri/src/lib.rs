@@ -21,7 +21,21 @@ use crate::state::AppState;
 /// 不做静默降级（例如数据库打不开却显示一个空窗口）。
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![commands::db_status])
+        .invoke_handler(tauri::generate_handler![
+            commands::db_status,
+            commands::list_accounts,
+            commands::create_account,
+            commands::update_account,
+            commands::delete_account,
+            commands::test_account_connection,
+            commands::test_saved_account,
+            commands::list_proxies,
+            commands::save_proxy,
+            commands::delete_proxy,
+            commands::get_proxy_settings,
+            commands::set_proxy_settings,
+            commands::test_proxy,
+        ])
         .setup(|app| {
             // 1) 应用数据目录。Windows 下形如 %APPDATA%\com.emmaster.desktop。
             let data_dir = app

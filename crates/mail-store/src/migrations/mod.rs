@@ -24,11 +24,18 @@ pub struct Migration {
 }
 
 /// 全部迁移，按版本号升序。新增迁移只能追加在末尾，禁止改动历史条目。
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "0001_core_bootstrap",
-    sql: include_str!("sql/0001_core_bootstrap.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "0001_core_bootstrap",
+        sql: include_str!("sql/0001_core_bootstrap.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "0002_accounts_and_proxies",
+        sql: include_str!("sql/0002_accounts_and_proxies.sql"),
+    },
+];
 
 /// 单条迁移的执行结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,15 +245,15 @@ mod tests {
         let mut store = Store::open_in_memory().expect("打开内存库");
 
         let first = store.run_migrations().expect("首次迁移");
-        assert_eq!(first.applied_count(), 1, "首次应应用 1 条迁移");
-        assert_eq!(first.current_version, 1);
+        assert_eq!(first.applied_count(), 2, "首次应应用 2 条迁移");
+        assert_eq!(first.current_version, 2);
         assert_eq!(first.applied[0].name, "0001_core_bootstrap");
         assert!(!first.applied[0].applied_at.is_empty(), "登记时间不应为空");
 
         let second = store.run_migrations().expect("二次迁移");
         assert_eq!(second.applied_count(), 0, "二次执行不应重复应用");
 
-        assert_eq!(store.applied_migration_versions().expect("读取版本"), vec![1]);
+        assert_eq!(store.applied_migration_versions().expect("读取版本"), vec![1, 2]);
     }
 
     #[test]
@@ -287,8 +294,8 @@ mod tests {
 
     #[test]
     fn 迁移清单与校验和的基本性质() {
-        assert_eq!(MIGRATIONS.len(), 1);
-        assert_eq!(supported_version(), 1);
+        assert_eq!(MIGRATIONS.len(), 2);
+        assert_eq!(supported_version(), 2);
         assert_eq!(checksum("abc"), checksum("abc"));
         assert_ne!(checksum("abc"), checksum("abd"));
     }

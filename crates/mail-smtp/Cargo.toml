@@ -1,6 +1,6 @@
 [package]
 name = "mail-smtp"
-description = "SMTP 客户端：投递与 Sent 追加（Wave 5 起填充）。"
+description = "SMTP 客户端：投递与 Sent 追加（Wave 1 起提供连接自检，Wave 5 起填充投递）。"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,5 +11,11 @@ workspace = true
 
 [dependencies]
 mail-domain.workspace = true
+mail-net.workspace = true
+base64.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1.44", features = ["net", "io-util", "time", "macros", "rt", "rt-multi-thread"] }
