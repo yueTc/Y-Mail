@@ -1,7 +1,7 @@
 //! 统一收件箱面板（Wave 3）。
 //!
-//! 三栏骨架：左栏账号 / 文件夹，中栏虚拟滚动列表，右栏留给 Wave 4 读信。
-//! 数据全部来自外壳的只读命令；这里不接触凭据，也不渲染邮件正文。
+//! 三栏骨架：左栏账号 / 文件夹，中栏虚拟滚动列表，右栏读信窗格。
+//! 数据全部来自外壳的只读命令；这里不接触凭据，正文交给独立的读信组件渲染。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -16,6 +16,7 @@ import {
   type InboxSummary,
   type InboxThread,
 } from "./api";
+import MessageReader from "./MessageReader";
 
 /** 每页条数；外壳上限是 500。 */
 const PAGE_SIZE = 200;
@@ -102,19 +103,23 @@ function senderText(message: InboxMessage): string {
 function MessageRow({
   message,
   child,
-  onOpenThread,
+  selected,
+  onOpen,
 }: {
   message: InboxMessage;
   child?: boolean;
-  onOpenThread?: () => void;
+  selected?: boolean;
+  onOpen?: () => void;
 }) {
-  const className = child ? "inbox-row inbox-row-child" : "inbox-row";
+  const className = ["inbox-row", child ? "inbox-row-child" : "", selected ? "inbox-row-selected" : ""]
+    .filter(Boolean)
+    .join(" ");
   return (
     <div
       className={className}
       data-read={message.isRead ? "true" : "false"}
-      onClick={onOpenThread}
-      role={onOpenThread ? "button" : undefined}
+      onClick={onOpen}
+      role={onOpen ? "button" : undefined}
     >
       <span className="dot" style={{ background: message.accountColor || "#888" }} />
       <div className="inbox-row-main">
@@ -200,6 +205,7 @@ export default function InboxPanel() {
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [children, setChildren] = useState<Map<string, InboxMessage[]>>(new Map());
+  const [selectedMessage, setSelectedMessage] = useState<InboxMessage>();
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -479,7 +485,12 @@ export default function InboxPanel() {
                       onToggle={() => void toggleThread(row.thread)}
                     />
                   ) : (
-                    <MessageRow message={row.message} child={row.kind === "thread-message"} />
+                    <MessageRow
+                      message={row.message}
+                      child={row.kind === "thread-message"}
+                      selected={selectedMessage?.id === row.message.id}
+                      onOpen={() => setSelectedMessage(row.message)}
+                    />
                   )}
                 </div>
               );
@@ -489,7 +500,7 @@ export default function InboxPanel() {
       </section>
 
       <aside className="inbox-reader">
-        <p className="hint">读信窗格将在 Wave 4 上线。</p>
+        <MessageReader message={selectedMessage} />
       </aside>
     </div>
   );

@@ -21,6 +21,8 @@ use super::{
 const MAX_LINE: usize = 8 * 1024 * 1024;
 /// 一条应答里累计内容上限。
 const MAX_TOTAL: usize = 32 * 1024 * 1024;
+/// 单封邮件原文上限（32 MiB，与解析层一致）。
+const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 /// 自报身份用的客户端名。
 const CLIENT_NAME: &str = "em-master";
 const TIMEOUT_TEXT: &str = "连接超时：服务器在规定时间内没有完成应答";
@@ -170,6 +172,67 @@ impl ImapClient {
         Ok(messages)
     }
 
+    /// 按 UID 拉取整封原文，供懒加载正文与附件使用。
+    ///
+    /// 用 `BODY.PEEK[]` 而不是 `BODY[]`，避免顺手把邮件标成已读；应答里的字面量按 `{n}`
+    /// 长度原样读字节，不走会把字面量转义成引号串的通用读取，保证拿到的是原始 MIME 字节。
+    pub async fn fetch_body_raw(&mut self, uid: u32) -> Result<Vec<u8>, ConnectionError> {
+        if uid == 0 {
+            return Err(ConnectionError::protocol("UID 不能为 0"));
+        }
+        let tag = self.next_tag();
+        let line = format!("{tag} UID FETCH {uid} (BODY.PEEK[])");
+        let command_timeout = self.timeout;
+        match tokio::time::timeout(command_timeout, async {
+            write_crlf_line(&mut self.stream, &line).await?;
+            self.read_body_until_tag(&tag).await
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(ConnectionError::timeout(TIMEOUT_TEXT)),
+        }
+    }
+
+    /// 读到 tagged 应答为止，途中把 `{n}` 字面量按长度读成原始字节。
+    async fn read_body_until_tag(&mut self, tag: &str) -> Result<Vec<u8>, ConnectionError> {
+        let prefix = format!("{tag} ");
+        let mut body: Option<Vec<u8>> = None;
+        loop {
+            let line = read_line_bytes(&mut self.stream, MAX_LINE).await?;
+            if line.starts_with(prefix.as_bytes()) {
+                let rest = String::from_utf8_lossy(&line[prefix.len()..]).to_string();
+                let status = rest
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_ascii_uppercase();
+                if status != "OK" {
+                    return Err(ConnectionError::protocol(format!(
+                        "拉取邮件正文失败：{}",
+                        self.sanitize(&rest)
+                    )));
+                }
+                return body.ok_or_else(|| ConnectionError::protocol("服务器没有返回邮件正文"));
+            }
+            if let Some(length) = trailing_literal(&line) {
+                if length > MAX_BODY_BYTES {
+                    return Err(ConnectionError::protocol("邮件原文超过 32 MiB 上限，已拒绝拉取"));
+                }
+                let mut literal = vec![0u8; length];
+                self.stream.read_exact(&mut literal).await.map_err(|err| {
+                    ConnectionError::network(format!(
+                        "读取服务器响应失败：{}",
+                        mail_net::error::describe_io(&err)
+                    ))
+                })?;
+                if body.is_none() {
+                    body = Some(literal);
+                }
+                // 字面量后面还有半行收尾（如 `)`），留到下一轮当普通行读掉。
+            }
+        }
+    }
     /// 在收件箱挂一次 IDLE，最多等 `wait`。
     pub async fn idle_wait(&mut self, wait: Duration) -> Result<IdleOutcome, ConnectionError> {
         let tag = self.next_tag();

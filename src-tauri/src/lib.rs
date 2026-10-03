@@ -43,6 +43,8 @@ pub fn run() {
             commands::list_inbox_messages,
             commands::list_inbox_threads,
             commands::list_thread_messages,
+            commands::get_message_body,
+            commands::download_attachment,
         ])
         .setup(|app| {
             // 1) 应用数据目录。Windows 下形如 %APPDATA%\com.emmaster.desktop。

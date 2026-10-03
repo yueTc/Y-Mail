@@ -8,6 +8,7 @@
 
 use mail_core::{
     AccountInboxSummary, ConnectionReport, EngineError, InboxFolder, InboxMessage, InboxQuery, InboxThread,
+    StoredAttachment,
 };
 use mail_domain::account::{Account, AccountDraft, AccountProxyMode, AuthType, Security, ServerConfig};
 use mail_domain::proxy::{GlobalProxyMode, ProxyConfig, ProxyId, ProxyKind, Secret};
@@ -1098,4 +1099,109 @@ pub async fn list_thread_messages(
     let engine = state.engine().await;
     let messages = engine.thread_messages(account_id, thread_key.trim(), limit)?;
     Ok(messages.iter().map(InboxMessageDto::from_message).collect())
+}
+
+// ============================ 读信与附件（Wave 4） ============================
+
+/// 一个附件的元数据与本地保存状态。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentDto {
+    /// 附件编号。
+    pub id: i64,
+    /// 所属邮件。
+    pub message_id: i64,
+    /// MIME 分片下标。
+    pub part_index: u32,
+    /// 文件名。
+    pub filename: String,
+    /// MIME 类型。
+    pub mime_type: String,
+    /// 字节数。
+    pub size: u64,
+    /// Content-ID（内嵌图片引用用）。
+    pub content_id: Option<String>,
+    /// 是否内嵌展示。
+    pub is_inline: bool,
+    /// 本地保存路径；未下载时为 None。
+    pub local_path: Option<String>,
+    /// 下载状态：pending / downloading / downloaded / failed。
+    pub state: String,
+}
+
+impl AttachmentDto {
+    fn from_attachment(attachment: &StoredAttachment) -> Self {
+        Self {
+            id: attachment.id,
+            message_id: attachment.message_id,
+            part_index: attachment.part_index,
+            filename: attachment.filename.clone(),
+            mime_type: attachment.mime_type.clone(),
+            size: attachment.size,
+            content_id: attachment.content_id.clone(),
+            is_inline: attachment.is_inline,
+            local_path: attachment.local_path.clone(),
+            state: attachment.state.as_str().to_string(),
+        }
+    }
+}
+
+/// 读信窗格要展示的一封邮件。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageBodyDto {
+    /// 邮件编号。
+    pub message_id: i64,
+    /// 纯文本正文。
+    pub text_plain: Option<String>,
+    /// 清洗后的 HTML 正文；只有用户放行本封时才带远程图片地址。
+    pub html: Option<String>,
+    /// 被拦下的远程图片数量。
+    pub blocked_remote_images: usize,
+    /// 附件清单。
+    pub attachments: Vec<AttachmentDto>,
+}
+
+/// 取一封邮件的正文；本地没有就联网拉一次并落库。
+///
+/// `allow_remote_images` 是「本封放行」开关：默认关闭，只有用户点过一次才传 true；
+/// 放行只影响本次返回的 HTML，库里保存的清洗结果不变。
+#[tauri::command]
+pub async fn get_message_body(
+    state: tauri::State<'_, AppState>,
+    message_id: i64,
+    allow_remote_images: Option<bool>,
+) -> Result<MessageBodyDto, CommandError> {
+    if message_id <= 0 {
+        return Err(CommandError::input("邮件编号不合法"));
+    }
+    let engine = state.engine().await;
+    let view = engine
+        .get_message_body(message_id, allow_remote_images.unwrap_or(false))
+        .await?;
+    Ok(MessageBodyDto {
+        message_id: view.message_id,
+        text_plain: view.text_plain,
+        html: view.html,
+        blocked_remote_images: view.blocked_remote_images,
+        attachments: view
+            .attachments
+            .iter()
+            .map(AttachmentDto::from_attachment)
+            .collect(),
+    })
+}
+
+/// 下载一个附件到本地，返回保存路径。
+#[tauri::command]
+pub async fn download_attachment(
+    state: tauri::State<'_, AppState>,
+    attachment_id: i64,
+) -> Result<String, CommandError> {
+    if attachment_id <= 0 {
+        return Err(CommandError::input("附件编号不合法"));
+    }
+    let engine = state.engine().await;
+    let path = engine.download_attachment(attachment_id).await?;
+    Ok(path)
 }

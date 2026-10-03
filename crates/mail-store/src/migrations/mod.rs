@@ -45,6 +45,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "0004_folders_messages_sync",
         sql: include_str!("sql/0004_folders_messages_sync.sql"),
     },
+    Migration {
+        version: 5,
+        name: "0005_reading",
+        sql: include_str!("sql/0005_reading.sql"),
+    },
 ];
 
 /// 单条迁移的执行结果。
@@ -255,8 +260,8 @@ mod tests {
         let mut store = Store::open_in_memory().expect("打开内存库");
 
         let first = store.run_migrations().expect("首次迁移");
-        assert_eq!(first.applied_count(), 4, "首次应应用 4 条迁移");
-        assert_eq!(first.current_version, 4);
+        assert_eq!(first.applied_count(), 5, "首次应应用 5 条迁移");
+        assert_eq!(first.current_version, 5);
         assert_eq!(first.applied[0].name, "0001_core_bootstrap");
         assert!(!first.applied[0].applied_at.is_empty(), "登记时间不应为空");
 
@@ -265,7 +270,7 @@ mod tests {
 
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4]
+            vec![1, 2, 3, 4, 5]
         );
     }
 
@@ -332,7 +337,7 @@ mod tests {
         store.run_migrations().expect("升级到三号库");
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4]
+            vec![1, 2, 3, 4, 5]
         );
 
         let duplicate = store.raw_connection_for_test().execute(
@@ -347,8 +352,8 @@ mod tests {
 
     #[test]
     fn 迁移清单与校验和的基本性质() {
-        assert_eq!(MIGRATIONS.len(), 4);
-        assert_eq!(supported_version(), 4);
+        assert_eq!(MIGRATIONS.len(), 5);
+        assert_eq!(supported_version(), 5);
         assert_eq!(checksum("abc"), checksum("abc"));
         assert_ne!(checksum("abc"), checksum("abd"));
     }

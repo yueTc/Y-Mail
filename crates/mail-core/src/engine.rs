@@ -79,6 +79,14 @@ pub enum EngineError {
     #[error("同步失败：{0}")]
     Sync(String),
 
+    /// 邮件不存在或已被删除。
+    #[error("邮件不存在或已被删除（编号 {0}）")]
+    MessageNotFound(i64),
+
+    /// 附件不存在或已被删除。
+    #[error("附件不存在或已被删除（编号 {0}）")]
+    AttachmentNotFound(i64),
+
     /// 账号不存在或已被删除。
     #[error("账号不存在或已被删除（编号 {0}）")]
     AccountNotFound(i64),

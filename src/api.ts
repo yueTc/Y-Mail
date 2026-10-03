@@ -215,6 +215,35 @@ export interface InboxThreadPage {
   offset: number;
   limit: number;
 }
+// ============================ 读信与附件类型（Wave 4） ============================
+
+/** 附件的本地保存状态。 */
+export type AttachmentState = "pending" | "downloading" | "downloaded" | "failed";
+
+/** 一个附件的元数据与本地保存状态。 */
+export interface MessageAttachment {
+  id: number;
+  messageId: number;
+  partIndex: number;
+  filename: string;
+  mimeType: string;
+  size: number;
+  contentId: string | null;
+  isInline: boolean;
+  localPath: string | null;
+  state: AttachmentState;
+}
+
+/** 读信窗格要展示的一封邮件。 */
+export interface MessageBody {
+  messageId: number;
+  textPlain: string | null;
+  /** 清洗后的 HTML；只有用户放行本封时才带远程图片地址。 */
+  html: string | null;
+  /** 被拦下的远程图片数量。 */
+  blockedRemoteImages: number;
+  attachments: MessageAttachment[];
+}
 // ============================ 错误 ============================
 
 /** 命令错误：对 Rust 侧 `CommandError` 的还原。 */
@@ -329,4 +358,12 @@ export const api = {
       "list_thread_messages",
       limit === undefined ? { accountId, threadKey } : { accountId, threadKey, limit },
     ),
+
+  // ===== 读信与附件（Wave 4） =====
+
+  getMessageBody: (messageId: number, allowRemoteImages = false) =>
+    call<MessageBody>("get_message_body", { messageId, allowRemoteImages }),
+
+  downloadAttachment: (attachmentId: number) =>
+    call<string>("download_attachment", { attachmentId }),
 };

@@ -196,6 +196,81 @@ async fn 抓取带字面量的邮件元数据() {
 }
 
 #[tokio::test]
+async fn 拉原文用peek命令且原始字节不乱码() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+    let addr = listener.local_addr().expect("地址");
+    // 原始邮件里故意放字节 0xFF 与非 ASCII 文本，验证按长度读字节而不是按行解析。
+    let mut raw: Vec<u8> = concat!(
+        "From: a@example.com\r\n",
+        "Subject: 原始\r\n",
+        "\r\n",
+        "正文有尾巴",
+    )
+    .as_bytes()
+    .to_vec();
+    raw.push(0xFF);
+    raw.extend_from_slice(b"\r\n");
+    let raw_for_server = raw.clone();
+
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("接受");
+        let mut reader = greeting(socket).await;
+        let _ = read_line(&mut reader).await;
+        reader.get_mut().write_all(b"a001 OK\r\n").await.expect("写");
+        let _ = read_line(&mut reader).await;
+        reader
+            .get_mut()
+            .write_all(b"* CAPABILITY IMAP4rev1\r\na002 OK\r\n")
+            .await
+            .expect("写");
+        assert_eq!(read_line(&mut reader).await, "a003 UID FETCH 42 (BODY.PEEK[])");
+        let header = format!("* 1 FETCH (UID 42 BODY[] {{{}}}\r\n", raw_for_server.len());
+        reader.get_mut().write_all(header.as_bytes()).await.expect("写头");
+        reader.get_mut().write_all(&raw_for_server).await.expect("写原文");
+        reader
+            .get_mut()
+            .write_all(b")\r\na003 OK FETCH completed\r\n")
+            .await
+            .expect("写尾");
+    });
+
+    let mut client = ImapClient::connect(&config(addr.port()), None)
+        .await
+        .expect("连接");
+    let fetched = client.fetch_body_raw(42).await.expect("拉原文");
+    assert_eq!(fetched, raw);
+}
+
+#[tokio::test]
+async fn 拉原文时服务器报错会归类为协议失败() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+    let addr = listener.local_addr().expect("地址");
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("接受");
+        let mut reader = greeting(socket).await;
+        let _ = read_line(&mut reader).await;
+        reader.get_mut().write_all(b"a001 OK\r\n").await.expect("写");
+        let _ = read_line(&mut reader).await;
+        reader
+            .get_mut()
+            .write_all(b"* CAPABILITY IMAP4rev1\r\na002 OK\r\n")
+            .await
+            .expect("写");
+        assert_eq!(read_line(&mut reader).await, "a003 UID FETCH 42 (BODY.PEEK[])");
+        reader
+            .get_mut()
+            .write_all("a003 NO 邮件不存在\r\n".as_bytes())
+            .await
+            .expect("写");
+    });
+
+    let mut client = ImapClient::connect(&config(addr.port()), None)
+        .await
+        .expect("连接");
+    let err = client.fetch_body_raw(42).await.expect_err("服务器拒绝应报错");
+    assert_eq!(err.kind, ConnectionErrorKind::Protocol);
+}
+#[tokio::test]
 async fn 增补搜索会过滤rfc陷阱() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");
     let addr = listener.local_addr().expect("地址");

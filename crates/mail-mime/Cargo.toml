@@ -10,6 +10,8 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+ammonia = "4.2.1"
 mail-domain.workspace = true
+mail-parser = "0.11.9"
 thiserror.workspace = true
 tracing.workspace = true
