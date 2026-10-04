@@ -735,3 +735,53 @@ export const api = {
 
   clearAiCache: () => call<number>("clear_ai_cache"),
 };
+  // ===== MCP 外部接入（Wave 8）=====
+
+  mcpStatus: () => call<McpStatus>("mcp_status"),
+
+  mcpSetEnabled: (enabled: boolean) => call<McpStatus>("mcp_set_enabled", { enabled }),
+
+  mcpSetWriteTools: (enabled: boolean) => call<McpStatus>("mcp_set_write_tools", { enabled }),
+
+  mcpTools: () => call<McpTool[]>("mcp_tools"),
+
+  mcpAudit: (limit?: number) => call<McpAuditPage>("mcp_audit", limit === undefined ? {} : { limit }),
+};
+
+// ============================ MCP 外部接入（Wave 8） ============================
+
+/** MCP 状态与外部 Agent 配置说明；默认关闭。 */
+export interface McpStatus {
+  enabled: boolean;
+  writeToolsEnabled: boolean;
+  dataDir: string;
+  binaryName: string;
+  dataDirEnv: string;
+  protocolVersions: string[];
+  configExample: string;
+}
+
+/** 工具清单里的一条。 */
+export interface McpTool {
+  name: string;
+  title: string;
+  description: string;
+  readOnly: boolean;
+  enabled: boolean;
+}
+
+/** 一条 MCP 审计记录；只有参数哈希，没有正文。 */
+export interface McpAudit {
+  id: number;
+  tool: string;
+  accountScope: string;
+  argsDigest: string;
+  status: string;
+  ts: string;
+}
+
+/** 审计列表。 */
+export interface McpAuditPage {
+  items: McpAudit[];
+  total: number;
+}

@@ -4,6 +4,7 @@ import { api, describeError, type DbStatus } from "./api";
 import AccountPanel from "./AccountPanel";
 import AiPanel from "./AiPanel";
 import InboxPanel from "./InboxPanel";
+import McpPanel from "./McpPanel";
 import ProxyPanel from "./ProxyPanel";
 import SyncPanel from "./SyncPanel";
 
@@ -100,6 +101,8 @@ export default function App() {
               </dl>
             )}
           </section>
+
+          <McpPanel />
         </>
       )}
     </main>

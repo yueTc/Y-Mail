@@ -13,6 +13,7 @@ members = [
   "crates/mail-smtp",
   "crates/mail-oauth",
   "crates/mail-ai",
+  "crates/mail-mcp",
   "crates/mail-core",
   "src-tauri",
 ]
@@ -34,6 +35,7 @@ mail-smtp = { path = "crates/mail-smtp" }
 mail-oauth = { path = "crates/mail-oauth" }
 mail-ai = { path = "crates/mail-ai" }
 mail-core = { path = "crates/mail-core" }
+mail-mcp = { path = "crates/mail-mcp" }
 
 # 外部依赖（统一版本，避免各 crate 版本漂移）
 tauri = { version = "2.12.1", features = ["tray-icon"] }

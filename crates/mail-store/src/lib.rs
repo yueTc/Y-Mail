@@ -12,6 +12,7 @@ pub mod compose;
 pub mod connection;
 pub mod error;
 pub mod inbox;
+pub mod mcp;
 pub mod migrations;
 pub mod proxies;
 pub mod reading;
@@ -28,6 +29,7 @@ pub use compose::{
 pub use connection::Store;
 pub use error::StoreError;
 pub use inbox::{AccountInboxSummary, InboxFolder, InboxMessage, InboxQuery, InboxThread};
+pub use mcp::{McpAuditRecord, MCP_ENABLED_KEY, MCP_WRITE_TOOLS_KEY};
 pub use migrations::{MigrationOutcome, MigrationReport};
 pub use proxies::StoredProxy;
 pub use reading::{

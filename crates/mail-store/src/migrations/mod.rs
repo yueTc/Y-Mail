@@ -65,6 +65,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "0008_ai",
         sql: include_str!("sql/0008_ai.sql"),
     },
+    Migration {
+        version: 9,
+        name: "0009_mcp",
+        sql: include_str!("sql/0009_mcp.sql"),
+    },
 ];
 
 /// 单条迁移的执行结果。
@@ -275,8 +280,8 @@ mod tests {
         let mut store = Store::open_in_memory().expect("打开内存库");
 
         let first = store.run_migrations().expect("首次迁移");
-        assert_eq!(first.applied_count(), 8, "首次应应用 8 条迁移");
-        assert_eq!(first.current_version, 8);
+        assert_eq!(first.applied_count(), 9, "首次应应用 9 条迁移");
+        assert_eq!(first.current_version, 9);
         assert_eq!(first.applied[0].name, "0001_core_bootstrap");
         assert!(!first.applied[0].applied_at.is_empty(), "登记时间不应为空");
 
@@ -285,7 +290,7 @@ mod tests {
 
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
         );
     }
 
@@ -352,7 +357,7 @@ mod tests {
         store.run_migrations().expect("升级到三号库");
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
         );
 
         // 升级到七号库后，旧账号的授权字段应为空（NULL / 空串），不影响既有数据。
@@ -379,8 +384,8 @@ mod tests {
 
     #[test]
     fn 迁移清单与校验和的基本性质() {
-        assert_eq!(MIGRATIONS.len(), 8);
-        assert_eq!(supported_version(), 8);
+        assert_eq!(MIGRATIONS.len(), 9);
+        assert_eq!(supported_version(), 9);
         assert_eq!(checksum("abc"), checksum("abc"));
         assert_ne!(checksum("abc"), checksum("abd"));
     }

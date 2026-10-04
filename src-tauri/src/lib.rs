@@ -7,6 +7,7 @@
 
 pub mod commands;
 pub mod logging;
+pub mod mcp_commands;
 pub mod notify;
 pub mod state;
 
@@ -81,6 +82,12 @@ pub fn run() {
             commands::list_ai_audit,
             commands::disable_all_ai,
             commands::clear_ai_cache,
+            // Wave 8：MCP 外部接入（开关 / 工具清单 / 审计）。放在末尾，减少与其它工序的冲突。
+            mcp_commands::mcp_status,
+            mcp_commands::mcp_set_enabled,
+            mcp_commands::mcp_set_write_tools,
+            mcp_commands::mcp_tools,
+            mcp_commands::mcp_audit,
         ])
         .setup(|app| {
             // 1) 应用数据目录。Windows 下形如 %APPDATA%\com.emmaster.desktop。

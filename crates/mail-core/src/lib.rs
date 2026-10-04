@@ -11,6 +11,7 @@ pub mod checks;
 pub mod compose;
 pub mod engine;
 pub mod inbox;
+pub mod mcp;
 pub mod oauth;
 pub mod paths;
 pub mod proxies;
@@ -26,6 +27,12 @@ pub use checks::ConnectionReport;
 pub use compose::{ComposeAttachment, ComposeParticipant, DraftSeed, OutboxItem, SendOutcome};
 pub use engine::{EngineError, EngineInit, MailEngine, KEYRING_SERVICE};
 pub use inbox::{InboxMessagePage, InboxThreadPage};
+pub use mcp::{
+    McpAccountView, McpAttachmentView, McpBodyView, McpDraftInput, McpError, McpFolderView,
+    McpMessageDetailView, McpMessageView, McpRecipient, McpSearchPageView, McpStatus, McpThreadView,
+    McpToolInfo, MCP_BODY_MAX_CHARS, MCP_READ_TOOLS, MCP_SEARCH_MAX_LIMIT, MCP_SNIPPET_MAX_CHARS,
+    MCP_THREAD_MAX_LIMIT, MCP_UNTRUSTED_NOTICE, MCP_WRITE_TOOLS,
+};
 pub use oauth::{OAuthAuthorization, OAuthOutcome, OAuthStatus};
 pub use reading::MessageBodyView;
 pub use search::DeepSearchPage;
@@ -33,10 +40,10 @@ pub use search::DeepSearchPage;
 // 存储层的收件箱类型在这里重新导出，外壳无需直接依赖 mail-store。
 pub use mail_store::{
     AccountInboxSummary, AiFunction, AiModelMapEntry, AiProviderKind, AiThinkingLevel, AttachmentState,
-    BodyState, InboxFolder, InboxMessage, InboxQuery, InboxThread, MessageLocation, NewAiAudit,
-    NewAiProvider, NewOutbox, OutboxKind, OutboxState, SearchHit, SearchPage, SearchQuery, SnippetSegment,
-    StoredAiAudit, StoredAiCache, StoredAiProvider, StoredAttachment, StoredContact, StoredOutbox,
-    StoredSignature,
+    BodyState, InboxFolder, InboxMessage, InboxQuery, InboxThread, McpAuditRecord, MessageLocation,
+    NewAiAudit, NewAiProvider, NewOutbox, OutboxKind, OutboxState, SearchHit, SearchPage, SearchQuery,
+    SnippetSegment, StoredAiAudit, StoredAiCache, StoredAiProvider, StoredAttachment, StoredContact,
+    StoredOutbox, StoredSignature,
 };
 pub use paths::SqlitePaths;
 pub use secrets::{KeyringSecretStore, MemorySecretStore, SecretStore, SecretStoreError};
