@@ -1957,9 +1957,18 @@ dependencies = [
 name = "mail-oauth"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "form_urlencoded",
+ "getrandom 0.3.4",
  "mail-domain",
+ "mail-net",
+ "serde",
+ "serde_json",
+ "sha2",
  "thiserror 2.0.21",
+ "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]
