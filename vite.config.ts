@@ -1,13 +1,15 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
-// Tauri 开发约定：端口固定 1420，且不许自动换端口（换了外壳就连不上）。
+// Tauri 开发约定：端口固定，不许自动换端口（换了外壳就连不上）。
+// 1420 落在 Windows 的保留端口段（1374-1473，Hyper-V/WSL 动态保留）里会被拒绝绑定，
+// 所以改用 5173（Vite 默认端口，在保留段之外）。
 export default defineConfig({
   plugins: [react()],
   // 清屏会顶掉 Rust 侧日志，开发时保持关闭。
   clearScreen: false,
   server: {
-    port: 1420,
+    port: 5173,
     strictPort: true,
     watch: {
       // 不监听 Rust 产物，避免前端热更新被编译产物触发。
