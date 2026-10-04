@@ -4,6 +4,7 @@
 //! 数据都来自外壳的只读命令；这里不接触凭据，正文交给独立的读信组件渲染。
 //! 正文与搜索片段一律当普通文本处理，绝不注入 HTML。
 
+import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
@@ -493,6 +494,31 @@ export default function InboxPanel() {
     await refreshSidebar();
     await load(true);
   }, [refreshSidebar, load]);
+
+  // 外壳后台发现新邮件时会推一条事件过来；收到就刷新列表与未读计数。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    const start = async () => {
+      try {
+        const off = await listen("inbox:new-mail", () => {
+          void refreshAll();
+        });
+        if (cancelled) {
+          off();
+        } else {
+          unlisten = off;
+        }
+      } catch {
+        // 单元测试与浏览器预览里没有 Tauri 事件总线，忽略即可。
+      }
+    };
+    void start();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [refreshAll]);
 
   const accounts: AccountInboxSummary[] = summary?.accounts ?? [];
 

@@ -258,6 +258,14 @@ select:focus {
   width: auto;
 }
 
+.authorize-url {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  resize: vertical;
+  margin-bottom: 6px;
+}
+
 .secret-field {
   display: flex;
   flex-direction: column;

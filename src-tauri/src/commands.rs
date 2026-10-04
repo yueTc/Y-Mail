@@ -11,7 +11,9 @@ use mail_core::{
     NewOutbox, OutboxKind, SearchHit, SearchQuery, SnippetSegment, StoredAttachment, StoredContact,
     StoredOutbox, StoredSignature,
 };
-use mail_domain::account::{Account, AccountDraft, AccountProxyMode, AuthType, Security, ServerConfig};
+use mail_domain::account::{
+    Account, AccountDraft, AccountId, AccountProxyMode, AuthType, OAuthProvider, Security, ServerConfig,
+};
 use mail_domain::proxy::{GlobalProxyMode, ProxyConfig, ProxyId, ProxyKind, Secret};
 use serde::{Deserialize, Serialize};
 
@@ -102,6 +104,32 @@ impl AuthTypeDto {
         match value {
             AuthType::Password => Self::Password,
             AuthType::OAuth2 => Self::OAuth2,
+        }
+    }
+}
+
+/// OAuth2 服务商（`gmail` / `microsoft`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OAuthProviderDto {
+    /// 谷歌 Gmail。
+    Gmail,
+    /// 微软 Outlook。
+    Microsoft,
+}
+
+impl OAuthProviderDto {
+    fn to_domain(self) -> OAuthProvider {
+        match self {
+            Self::Gmail => OAuthProvider::Gmail,
+            Self::Microsoft => OAuthProvider::Microsoft,
+        }
+    }
+
+    fn from_domain(value: OAuthProvider) -> Self {
+        match value {
+            OAuthProvider::Gmail => Self::Gmail,
+            OAuthProvider::Microsoft => Self::Microsoft,
         }
     }
 }
@@ -283,6 +311,12 @@ pub struct AccountDraftDto {
     /// 是否启用。
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// OAuth2 服务商；密码登录时为 `None`。
+    #[serde(default)]
+    pub oauth_provider: Option<OAuthProviderDto>,
+    /// OAuth2 客户端编号；密码登录时留空。
+    #[serde(default)]
+    pub oauth_client_id: String,
 }
 
 fn default_enabled() -> bool {
@@ -301,8 +335,8 @@ impl AccountDraftDto {
             proxy: self.proxy.to_domain()?,
             color: self.color.clone(),
             enabled: self.enabled,
-            oauth_provider: None,
-            oauth_client_id: String::new(),
+            oauth_provider: self.oauth_provider.map(OAuthProviderDto::to_domain),
+            oauth_client_id: self.oauth_client_id.clone(),
         })
     }
 }
@@ -331,7 +365,11 @@ pub struct AccountDto {
     pub color: String,
     /// 是否启用。
     pub enabled: bool,
-    /// 系统凭据管理器里是否已有授权码。
+    /// OAuth2 服务商；密码登录时为 `None`。
+    pub oauth_provider: Option<OAuthProviderDto>,
+    /// OAuth2 客户端编号；密码登录时为空串。
+    pub oauth_client_id: String,
+    /// 系统凭据管理器里是否已有凭据。
     pub has_credential: bool,
     /// 创建时间（UTC）。
     pub created_at: String,
@@ -352,6 +390,8 @@ impl AccountDto {
             proxy: AccountProxyDto::from_domain(account.proxy),
             color: account.color.clone(),
             enabled: account.enabled,
+            oauth_provider: account.oauth_provider.map(OAuthProviderDto::from_domain),
+            oauth_client_id: account.oauth_client_id.clone(),
             has_credential: account.credential_key.is_some(),
             created_at: account.created_at.clone(),
             updated_at: account.updated_at.clone(),
@@ -603,6 +643,134 @@ pub async fn test_saved_account(
     let engine = state.engine().await;
     let report = engine.test_saved_account(mail_domain::AccountId(id)).await?;
     Ok(ConnectionReportDto::from_report(&report))
+}
+
+/// 一次待完成的 OAuth2 授权的发起信息。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthAuthorizationDto {
+    /// 已经在系统浏览器里打开的授权页地址；打不开时可手工复制。
+    pub authorize_url: String,
+    /// 本次授权的校验串；收口与取消都要带上它。
+    pub state: String,
+    /// 本机回调地址。
+    pub redirect_uri: String,
+}
+
+/// 授权完成后的账号与自检结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthOutcomeDto {
+    /// 落库后的账号。
+    pub account: AccountDto,
+    /// 连接自检结果。
+    pub report: ConnectionReportDto,
+}
+
+/// OAuth2 账号当前的授权状态。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthStatusDto {
+    /// 保险箱里有没有可用的访问令牌。
+    pub authorized: bool,
+    /// 到期时间（Unix 秒）；服务器没给就是 `None`。
+    pub expires_at: Option<i64>,
+    /// 申请的权限范围。
+    pub scope: Option<String>,
+    /// 有没有刷新令牌。
+    pub has_refresh_token: bool,
+}
+
+/// 发起 OAuth2 浏览器授权，并直接用系统浏览器打开授权页。
+#[tauri::command]
+pub async fn begin_oauth_authorize(
+    state: tauri::State<'_, AppState>,
+    draft: AccountDraftDto,
+    account_id: Option<i64>,
+) -> Result<OAuthAuthorizationDto, CommandError> {
+    let draft = draft.to_domain()?;
+    let authorization = {
+        let engine = state.engine().await;
+        engine
+            .begin_oauth_authorize(&draft, account_id.map(AccountId))
+            .await?
+    };
+    if let Err(error) = open_in_browser(&authorization.authorize_url) {
+        // 打不开浏览器不算失败：界面会把地址显示出来让用户手工复制。
+        tracing::warn!(error = %error, "打开系统浏览器失败，请手工复制授权地址");
+    }
+    Ok(OAuthAuthorizationDto {
+        authorize_url: authorization.authorize_url,
+        state: authorization.state,
+        redirect_uri: authorization.redirect_uri,
+    })
+}
+
+/// 收口一次授权：等回调、换令牌、自检、落库。
+#[tauri::command]
+pub async fn complete_oauth_authorize(
+    state: tauri::State<'_, AppState>,
+    state_key: String,
+) -> Result<OAuthOutcomeDto, CommandError> {
+    let engine = state.engine().await;
+    let outcome = engine.complete_oauth_authorize(&state_key).await?;
+    Ok(OAuthOutcomeDto {
+        account: AccountDto::from_domain(&outcome.account),
+        report: ConnectionReportDto::from_report(&outcome.report),
+    })
+}
+
+/// 取消一次还没收口的授权；返回是否真的取消掉了。
+#[tauri::command]
+pub async fn cancel_oauth_authorize(
+    state: tauri::State<'_, AppState>,
+    state_key: String,
+) -> Result<bool, CommandError> {
+    let engine = state.engine().await;
+    Ok(engine.cancel_oauth_authorize(&state_key))
+}
+
+/// 查一个账号的 OAuth2 授权状态。
+#[tauri::command]
+pub async fn oauth_status(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+) -> Result<OAuthStatusDto, CommandError> {
+    let engine = state.engine().await;
+    let status = engine.oauth_status(AccountId(id))?;
+    Ok(OAuthStatusDto {
+        authorized: status.authorized,
+        expires_at: status.expires_at,
+        scope: status.scope,
+        has_refresh_token: status.has_refresh_token,
+    })
+}
+
+/// 用系统默认浏览器打开一个地址。
+///
+/// 不经过 shell：地址作为参数直接交给系统打开器，避免被当成命令解析。
+#[cfg(target_os = "windows")]
+fn open_in_browser(url: &str) -> std::io::Result<()> {
+    std::process::Command::new("rundll32.exe")
+        .arg("url.dll,FileProtocolHandler")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+}
+
+/// 用系统默认浏览器打开一个地址（macOS）。
+#[cfg(target_os = "macos")]
+fn open_in_browser(url: &str) -> std::io::Result<()> {
+    std::process::Command::new("open").arg(url).spawn().map(|_| ())
+}
+
+/// 用系统默认浏览器打开一个地址（Linux 等）。
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_in_browser(url: &str) -> std::io::Result<()> {
+    std::process::Command::new("xdg-open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
 }
 
 // ============================ 代理命令 ============================

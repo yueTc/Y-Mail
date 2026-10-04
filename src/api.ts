@@ -7,8 +7,11 @@ import { invoke } from "@tauri-apps/api/core";
 
 // ============================ 类型 ============================
 
-/** 认证方式；Wave 1 只用 password（授权码），oauth2 留给 Wave 6。 */
+/** 认证方式：password 是授权码 / 密码，oauth2 是浏览器授权。 */
 export type AuthType = "password" | "oauth2";
+
+/** OAuth2 服务商。 */
+export type OAuthProvider = "gmail" | "microsoft";
 
 /** 传输加密方式。 */
 export type Security = "tls" | "starttls" | "plain";
@@ -46,6 +49,10 @@ export interface AccountDraft {
   proxy: AccountProxy;
   color: string;
   enabled: boolean;
+  /** OAuth2 服务商；密码登录不传。 */
+  oauthProvider?: OAuthProvider;
+  /** OAuth2 客户端编号；密码登录不传。 */
+  oauthClientId?: string;
 }
 
 /** 已保存的账号；不含凭据本体。 */
@@ -60,9 +67,41 @@ export interface Account {
   proxy: AccountProxy;
   color: string;
   enabled: boolean;
+  /** OAuth2 服务商；密码登录为 null。 */
+  oauthProvider: OAuthProvider | null;
+  /** OAuth2 客户端编号；密码登录为空串。 */
+  oauthClientId: string;
   hasCredential: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+/** 一次待完成的 OAuth2 授权。 */
+export interface OAuthAuthorization {
+  /** 已经在系统浏览器里打开的授权页地址。 */
+  authorizeUrl: string;
+  /** 本次授权的校验串；收口与取消都要带上它。 */
+  state: string;
+  /** 本机回调地址。 */
+  redirectUri: string;
+}
+
+/** 授权完成后的账号与自检结果。 */
+export interface OAuthOutcome {
+  account: Account;
+  report: ConnectionReport;
+}
+
+/** 一个 OAuth2 账号当前的授权状态。 */
+export interface OAuthStatus {
+  /** 保险箱里有没有可用的访问令牌。 */
+  authorized: boolean;
+  /** 到期时间（Unix 秒）；服务器没给就是 null。 */
+  expiresAt: number | null;
+  /** 申请的权限范围。 */
+  scope: string | null;
+  /** 有没有刷新令牌。 */
+  hasRefreshToken: boolean;
 }
 
 /** 新建 / 修改代理时提交的配置；不含密码。 */
@@ -443,6 +482,21 @@ export const api = {
   deleteAccount: (id: number) => call<void>("delete_account", { id }),
 
   testSavedAccount: (id: number) => call<ConnectionReport>("test_saved_account", { id }),
+
+  // ===== OAuth2 浏览器授权（Wave 6） =====
+
+  beginOAuthAuthorize: (draft: AccountDraft, accountId?: number) =>
+    call<OAuthAuthorization>(
+      "begin_oauth_authorize",
+      accountId === undefined ? { draft } : { draft, accountId },
+    ),
+
+  completeOAuthAuthorize: (stateKey: string) =>
+    call<OAuthOutcome>("complete_oauth_authorize", { stateKey }),
+
+  cancelOAuthAuthorize: (stateKey: string) => call<boolean>("cancel_oauth_authorize", { stateKey }),
+
+  oauthStatus: (id: number) => call<OAuthStatus>("oauth_status", { id }),
 
   listProxies: () => call<Proxy[]>("list_proxies"),
 

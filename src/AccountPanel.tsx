@@ -8,6 +8,9 @@ import {
   type AccountProxyMode,
   type AuthType,
   type ConnectionReport,
+  type OAuthAuthorization,
+  type OAuthProvider,
+  type OAuthStatus,
   type Proxy,
   type Security,
   type ServerConfig,
@@ -27,6 +30,8 @@ interface FormState {
   color: string;
   enabled: boolean;
   secret: string;
+  oauthProvider: OAuthProvider | "";
+  oauthClientId: string;
 }
 
 const DEFAULT_SERVERS: { imap: ServerConfig; smtp: ServerConfig } = {
@@ -88,7 +93,7 @@ const SECURITY_LABELS: Record<Security, string> = {
 
 const AUTH_LABELS: Record<AuthType, string> = {
   password: "授权码 / 密码",
-  oauth2: "OAuth2（Wave 6 支持）",
+  oauth2: "OAuth2（浏览器授权）",
 };
 
 const PROXY_MODE_LABELS: Record<AccountProxyMode, string> = {
@@ -117,6 +122,8 @@ function emptyForm(): FormState {
     color: "#3b82f6",
     enabled: true,
     secret: "",
+    oauthProvider: "",
+    oauthClientId: "",
   };
 }
 
@@ -134,6 +141,8 @@ function formFromAccount(account: Account): FormState {
     color: account.color || "#3b82f6",
     enabled: account.enabled,
     secret: "",
+    oauthProvider: account.oauthProvider ?? "",
+    oauthClientId: account.oauthClientId ?? "",
   };
 }
 
@@ -151,20 +160,29 @@ function toDraft(form: FormState): AccountDraft {
         : { mode: form.proxyMode },
     color: form.color,
     enabled: form.enabled,
+    oauthProvider: form.authType === "oauth2" && form.oauthProvider !== "" ? form.oauthProvider : undefined,
+    oauthClientId: form.authType === "oauth2" ? form.oauthClientId.trim() : "",
   };
 }
 
 /** 提交前的本地检查；只拦明显问题，真正的校验与自检在引擎里做。 */
 function validate(form: FormState): string | null {
   if (!form.email.includes("@")) return "请填写完整的邮箱地址";
-  if (form.authType === "oauth2") return "OAuth2 登录要到 Wave 6 才支持，现在请选授权码";
+  if (form.authType === "oauth2") {
+    if (form.oauthProvider === "") return "OAuth2 登录要先选服务商（Gmail 或 Outlook）";
+    if (form.oauthClientId.trim() === "") {
+      return "OAuth2 登录要填客户端编号：先在服务商后台注册一个桌面应用才能拿到";
+    }
+  }
   if (form.username.trim() === "") return "请填写登录名（多数邮箱就是完整地址）";
   if (form.imap.host.trim() === "") return "请填写收件服务器地址";
   if (form.smtp.host.trim() === "") return "请填写发件服务器地址";
   if (form.imap.port < 1 || form.imap.port > 65535) return "收件端口要在 1 到 65535 之间";
   if (form.smtp.port < 1 || form.smtp.port > 65535) return "发件端口要在 1 到 65535 之间";
   if (form.proxyMode === "custom" && form.proxyId === "") return "选了「指定代理」就要挑一个具体代理";
-  if (form.id === null && form.secret.trim() === "") return "请填写授权码";
+  if (form.authType !== "oauth2" && form.id === null && form.secret.trim() === "") {
+    return "请填写授权码";
+  }
   return null;
 }
 
@@ -182,6 +200,8 @@ export default function AccountPanel({ proxiesVersion }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [pendingAuth, setPendingAuth] = useState<OAuthAuthorization | null>(null);
+  const [oauthStatus, setOauthStatus] = useState<OAuthStatus | null>(null);
 
   const fingerprint = useMemo(() => (form ? JSON.stringify(form) : ""), [form]);
   const dirty = form !== null && verifiedFingerprint !== fingerprint;
@@ -214,12 +234,34 @@ export default function AccountPanel({ proxiesVersion }: Props) {
     };
   }, [proxiesVersion]);
 
+  // 编辑 OAuth2 账号时顺手查一次授权状态，界面上直接显示。
+  useEffect(() => {
+    if (form === null || form.id === null || form.authType !== "oauth2") {
+      setOauthStatus(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .oauthStatus(form.id)
+      .then((status) => {
+        if (!cancelled) setOauthStatus(status);
+      })
+      .catch(() => {
+        if (!cancelled) setOauthStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [form?.id, form?.authType]);
+
   function openCreate() {
     setForm(emptyForm());
     setReport(null);
     setVerifiedFingerprint(null);
     setError(null);
     setNotice(null);
+    setPendingAuth(null);
+    setOauthStatus(null);
   }
 
   function openEdit(account: Account) {
@@ -228,13 +270,21 @@ export default function AccountPanel({ proxiesVersion }: Props) {
     setVerifiedFingerprint(null);
     setError(null);
     setNotice(null);
+    setPendingAuth(null);
+    setOauthStatus(null);
   }
 
   function closeForm() {
+    // 还没收口的授权要显式取消，免得本机回调端口一直挂着。
+    if (pendingAuth !== null) {
+      void api.cancelOAuthAuthorize(pendingAuth.state).catch(() => undefined);
+    }
     setForm(null);
     setReport(null);
     setVerifiedFingerprint(null);
     setError(null);
+    setPendingAuth(null);
+    setOauthStatus(null);
   }
 
   function patch(change: Partial<FormState>) {
@@ -270,6 +320,12 @@ export default function AccountPanel({ proxiesVersion }: Props) {
 
   async function handleTest() {
     if (form === null) return;
+    if (form.authType === "oauth2") {
+      setError(
+        "OAuth2 账号不走授权码自检：点「浏览器授权」，授权成功后引擎会自动做一次连接自检。",
+      );
+      return;
+    }
     if (form.id !== null && form.secret.trim() === "") {
       setError(
         "要自检这份改动，请先在「新的授权码」里填一次；不想重填就直接点「保存」，引擎会用已保存的授权码先自检、通过才写入。",
@@ -305,7 +361,11 @@ export default function AccountPanel({ proxiesVersion }: Props) {
       setError(problem);
       return;
     }
-    if (form.id === null && (dirty || report === null)) {
+    if (form.authType === "oauth2" && form.id === null) {
+      setError("OAuth2 账号请点「浏览器授权」：授权通过后账号会自动保存，不用走「保存」。");
+      return;
+    }
+    if (form.authType !== "oauth2" && form.id === null && (dirty || report === null)) {
       setError("新建账号要先点「连接自检」，通过之后才能保存");
       return;
     }
@@ -318,7 +378,8 @@ export default function AccountPanel({ proxiesVersion }: Props) {
         await api.createAccount(draft, form.secret);
         setNotice("账号已保存；保存前已完成连接自检。");
       } else {
-        const secret = form.secret.trim() === "" ? undefined : form.secret;
+        const secret =
+          form.authType === "oauth2" || form.secret.trim() === "" ? undefined : form.secret;
         await api.updateAccount(form.id, draft, secret);
         setNotice("账号已更新；引擎在写入前完成了一次连接自检。");
       }
@@ -327,6 +388,54 @@ export default function AccountPanel({ proxiesVersion }: Props) {
       setVerifiedFingerprint(null);
       await reload();
     } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * OAuth2 浏览器授权：先让引擎开好本机回调端口并拿到授权地址，再用系统浏览器打开；
+   * 浏览器里点完同意，本窗口这边收口换令牌。新建账号授权通过后会自动落库。
+   */
+  async function handleAuthorize() {
+    if (form === null) return;
+    const problem = validate(form);
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    const wasNew = form.id === null;
+    let pendingState: string | null = null;
+    setBusy("oauth");
+    setError(null);
+    setNotice(null);
+    setPendingAuth(null);
+    try {
+      const authorization = await api.beginOAuthAuthorize(toDraft(form), form.id ?? undefined);
+      pendingState = authorization.state;
+      setPendingAuth(authorization);
+      setNotice("已尝试打开系统浏览器，请在授权页点同意；本窗口正在等待回调……");
+      const outcome = await api.completeOAuthAuthorize(authorization.state);
+      setPendingAuth(null);
+      setNotice(
+        `授权成功：收件服务器可见 ${outcome.report.imapFolderCount} 个文件夹，发件认证方式 ${outcome.report.smtpMechanism}。`,
+      );
+      await reload();
+      if (wasNew) {
+        setForm(null);
+        setReport(null);
+        setVerifiedFingerprint(null);
+        setOauthStatus(null);
+      } else {
+        setOauthStatus(await api.oauthStatus(outcome.account.id));
+      }
+    } catch (err) {
+      // 收口失败时后端已经清掉了半成品；这里只把还没收口的授权取消掉。
+      if (pendingState !== null) {
+        void api.cancelOAuthAuthorize(pendingState).catch(() => undefined);
+      }
+      setPendingAuth(null);
       setError(describeError(err));
     } finally {
       setBusy(null);
@@ -608,19 +717,68 @@ export default function AccountPanel({ proxiesVersion }: Props) {
             </label>
           </div>
 
-          <label className="secret-field">
-            {form.id === null ? "授权码 / 密码" : "新的授权码（留空表示沿用已保存的）"}
-            <input
-              type="password"
-              autoComplete="off"
-              value={form.secret}
-              onChange={(event) => patch({ secret: event.target.value })}
-              placeholder={form.id === null ? "只保存在 Windows 凭据管理器" : "不填就不改"}
-            />
-          </label>
-          <p className="hint">
-            授权码只在这个输入框和本次请求里存在，不写数据库、不进日志；数据库里只留一个引用键。
-          </p>
+          {form.authType === "oauth2" ? (
+            <>
+              <div className="field-row">
+                <label>
+                  OAuth2 服务商
+                  <select
+                    value={form.oauthProvider}
+                    onChange={(event) =>
+                      patch({ oauthProvider: event.target.value as OAuthProvider | "" })
+                    }
+                  >
+                    <option value="">请选择</option>
+                    <option value="gmail">谷歌 Gmail</option>
+                    <option value="microsoft">微软 Outlook</option>
+                  </select>
+                </label>
+                <label>
+                  客户端编号（client_id）
+                  <input
+                    value={form.oauthClientId}
+                    onChange={(event) => patch({ oauthClientId: event.target.value })}
+                    placeholder="在服务商后台注册桌面应用后拿到"
+                  />
+                </label>
+              </div>
+              <p className="hint">
+                OAuth2 不走授权码：点「浏览器授权」会用系统浏览器打开服务商的授权页，同意后本窗口自动收口；
+                访问令牌与刷新令牌只存进 Windows 凭据管理器，数据库里只留一个引用键。
+              </p>
+              {oauthStatus && (
+                <p className="notice">
+                  授权状态：{oauthStatus.authorized ? "已授权" : "尚未授权"}
+                  {oauthStatus.hasRefreshToken ? "，令牌到期会自动刷新" : "，没有刷新令牌，过期后要重新授权"}
+                  。
+                </p>
+              )}
+              {pendingAuth && (
+                <>
+                  <p className="hint">
+                    正在等待浏览器回调。如果浏览器没有自动打开，请手工复制下面这行地址到浏览器打开：
+                  </p>
+                  <textarea className="authorize-url" readOnly rows={3} value={pendingAuth.authorizeUrl} />
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <label className="secret-field">
+                {form.id === null ? "授权码 / 密码" : "新的授权码（留空表示沿用已保存的）"}
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={form.secret}
+                  onChange={(event) => patch({ secret: event.target.value })}
+                  placeholder={form.id === null ? "只保存在 Windows 凭据管理器" : "不填就不改"}
+                />
+              </label>
+              <p className="hint">
+                授权码只在这个输入框和本次请求里存在，不写数据库、不进日志；数据库里只留一个引用键。
+              </p>
+            </>
+          )}
 
           {report && (
             <p className="notice">
@@ -634,10 +792,25 @@ export default function AccountPanel({ proxiesVersion }: Props) {
           )}
 
           <div className="form-actions">
-            <button type="button" onClick={() => void handleTest()} disabled={busy !== null}>
-              {busy === "test" ? "自检中……" : form.id === null ? "连接自检" : "用上面的授权码自检"}
-            </button>
-            <button type="submit" className="primary" disabled={busy !== null}>
+            {form.authType === "oauth2" ? (
+              <button
+                type="button"
+                className="primary"
+                onClick={() => void handleAuthorize()}
+                disabled={busy !== null}
+              >
+                {busy === "oauth" ? "等待浏览器授权……" : form.id === null ? "浏览器授权并保存" : "重新授权"}
+              </button>
+            ) : (
+              <button type="button" onClick={() => void handleTest()} disabled={busy !== null}>
+                {busy === "test" ? "自检中……" : form.id === null ? "连接自检" : "用上面的授权码自检"}
+              </button>
+            )}
+            <button
+              type="submit"
+              className="primary"
+              disabled={busy !== null || (form.authType === "oauth2" && form.id === null)}
+            >
               {busy === "save" ? "保存中……" : "保存"}
             </button>
             <button type="button" onClick={closeForm} disabled={busy !== null}>

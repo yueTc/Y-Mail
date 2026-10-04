@@ -26,6 +26,10 @@ vi.mock("../api", () => ({
     getProxySettings: vi.fn(),
     setProxySettings: vi.fn(),
     testProxy: vi.fn(),
+    beginOAuthAuthorize: vi.fn(),
+    completeOAuthAuthorize: vi.fn(),
+    cancelOAuthAuthorize: vi.fn(),
+    oauthStatus: vi.fn(),
   },
 }));
 
@@ -40,6 +44,8 @@ const SAVED_ACCOUNT: Account = {
   proxy: { mode: "inherit" },
   color: "#3366ff",
   enabled: true,
+  oauthProvider: null,
+  oauthClientId: "",
   hasCredential: true,
   createdAt: "2026-10-04T00:00:00Z",
   updatedAt: "2026-10-04T00:00:00Z",

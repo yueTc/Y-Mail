@@ -7,10 +7,13 @@
 
 pub mod commands;
 pub mod logging;
+pub mod notify;
 pub mod state;
 
 use mail_core::MailEngine;
-use tauri::Manager;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, WindowEvent};
 
 use crate::logging::Logging;
 use crate::state::AppState;
@@ -21,6 +24,7 @@ use crate::state::AppState;
 /// 不做静默降级（例如数据库打不开却显示一个空窗口）。
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             commands::db_status,
             commands::list_accounts,
@@ -29,6 +33,10 @@ pub fn run() {
             commands::delete_account,
             commands::test_account_connection,
             commands::test_saved_account,
+            commands::begin_oauth_authorize,
+            commands::complete_oauth_authorize,
+            commands::cancel_oauth_authorize,
+            commands::oauth_status,
             commands::list_proxies,
             commands::save_proxy,
             commands::delete_proxy,
@@ -97,8 +105,66 @@ pub fn run() {
                 }
             });
 
+            // 6) 托盘常驻：关窗只是收起来，后台继续收信。
+            setup_tray(app)?;
+
+            // 7) 新邮件提醒：后台轮询本地库，发现新未读就弹通知并通知界面刷新。
+            notify::spawn(app.handle().clone());
+
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // 主窗口按关闭键时收进托盘，不退出进程；真要退出走托盘菜单的「退出」。
+            if window.label() != "main" {
+                return;
+            }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
         })
         .run(tauri::generate_context!())
         .expect("Tauri 应用启动失败");
+}
+
+/// 建托盘图标与中文菜单：左键点图标显示主窗口，菜单里可以显示或退出。
+fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    let mut builder = TrayIconBuilder::with_id("main-tray")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("统一收件箱")
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon().cloned() {
+        builder = builder.icon(icon);
+    }
+    builder.build(app)?;
+    tracing::info!("托盘图标已就绪");
+    Ok(())
+}
+
+/// 显示主窗口并置前。
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
 }
