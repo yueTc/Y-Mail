@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build:mcp-sidecar": "node scripts/build-mcp-sidecar.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.13",

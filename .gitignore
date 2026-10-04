@@ -10,6 +10,7 @@ node_modules/
 
 # === Tauri ===
 src-tauri/target/
+src-tauri/binaries/
 src-tauri/gen/
 
 # === 本地数据与密钥（绝不入库）===

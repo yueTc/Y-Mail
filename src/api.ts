@@ -756,6 +756,7 @@ export interface McpStatus {
   writeToolsEnabled: boolean;
   dataDir: string;
   binaryName: string;
+  binaryPath: string;
   dataDirEnv: string;
   protocolVersions: string[];
   configExample: string;

@@ -30,7 +30,8 @@
 npm ci                      # 安装前端依赖
 npm run build               # 前端类型检查 + 构建（tsc --noEmit && vite build）
 npm run tauri dev           # 启动桌面应用（开发模式）
-npm run tauri build         # 打包（Wave 6 起才启用 bundle）
+npm run tauri build         # 打包（含 MSI / NSIS）
+npm run build:mcp-sidecar   # 单独生成 MCP sidecar（tauri build 会自动调用，一般不用手动跑）
 
 cargo fmt --all --check             # 格式检查
 cargo clippy --workspace --all-targets -- -D warnings   # 静态检查（警告视为错误）
@@ -49,9 +50,10 @@ crates/
   mail-oauth/    OAuth2 / XOAUTH2（Wave 1 起）
   mail-ai/       AI 与翻译旁路（Wave 7 起，默认关闭）
   mail-core/     引擎门面，唯一对外接口
+  mail-mcp/      MCP stdio 服务端（Wave 8 起，可执行入口 em-master-mcp）
 src-tauri/       桌面外壳：窗口、生命周期、命令转发
 src/             React/TS 前端
-scripts/         仓库内辅助脚本（图标生成等）
+scripts/         仓库内辅助脚本（图标生成、MCP sidecar 生成等）
 ```
 
 依赖方向单向、无环：`mail-domain` ← 其余全部；`mail-store` ← `mail-core`；协议层 ← `mail-core`；`mail-core` ← `src-tauri` ← 前端。
@@ -73,3 +75,9 @@ npm run tauri -- icon src-tauri/icons/icon-source.png
 ```
 
 换正式品牌图标时，准备好 1024×1024 源图后直接跑第二条命令即可。
+
+## MCP 外部接入（Wave 8）
+
+- 默认关闭、默认只读，只走本地标准输入输出，不监听任何端口。
+- 安装包自带 `em-master-mcp.exe`：Tauri 的 `bundle.externalBin` 指向 `binaries/em-master-mcp`，打包前由 `npm run build:mcp-sidecar`（构建钩子 `beforeBundleCommand`）编译并复制成 `em-master-mcp-x86_64-pc-windows-msvc.exe`。
+- 需要给外部 Agent（Codex / Claude Desktop / Cursor）配 `command` 时，填应用安装目录里的 `em-master-mcp.exe`；`env.EM_MASTER_DATA_DIR` 指向应用数据目录（设置页会按本机实际路径生成配置示例）。

@@ -24,6 +24,7 @@ const disabledStatus: McpStatus = {
   writeToolsEnabled: false,
   dataDir: "C:/Users/tester/AppData/Roaming/com.emmaster.desktop",
   binaryName: "em-master-mcp",
+  binaryPath: "C:/Users/tester/AppData/Local/em-master/em-master-mcp.exe",
   dataDirEnv: "EM_MASTER_DATA_DIR",
   protocolVersions: ["2025-06-18", "2025-03-26", "2024-11-05"],
   configExample: "{\n  \"mcpServers\": {}\n}",
@@ -89,6 +90,7 @@ describe("MCP 外部接入面板", () => {
     expect(screen.getByText("search_messages")).toBeTruthy();
     expect(screen.getByText("create_draft")).toBeTruthy();
     expect(screen.getAllByText(/不会发送/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/安装包已自带/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/EM_MASTER_DATA_DIR/).length).toBeGreaterThan(0);
     expect(screen.queryByText("send_email")).toBeNull();
     expect(screen.queryByText(/export_all/)).toBeNull();

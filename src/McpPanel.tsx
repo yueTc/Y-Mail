@@ -172,10 +172,13 @@ export default function McpPanel() {
 
           <h3>外部 Agent 配置说明</h3>
           <p className="hint">
-            把 {status.binaryName}.exe 的路径和数据目录填进 Agent 的配置文件。
-            数据目录环境变量名是 <code>{status.dataDirEnv}</code>；本机数据目录：
-            <span className="path">{status.dataDir}</span>。支持的协议版本：
-            {status.protocolVersions.join("、")}。
+            安装包已自带 {status.binaryName}.exe，它和主程序装在同一目录，不用手填路径。
+            下面是按本机安装位置生成的配置（<span className="path">{status.binaryPath}</span>），
+            直接粘进 Agent 的配置文件即可。数据目录环境变量名是
+            <code>{status.dataDirEnv}</code>，本机数据目录：<span className="path">{status.dataDir}</span>。
+            支持的协议版本：{status.protocolVersions.join("、")}。常见安装位置：按用户安装是
+            <code>%LOCALAPPDATA%\em-master</code>，机器级安装是
+            <code>C:\Program Files\em-master</code>，可执行文件都在主程序同目录。
           </p>
           <pre className="path">{status.configExample}</pre>
 
