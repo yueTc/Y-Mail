@@ -440,8 +440,43 @@ async fn start_ai_server() -> (u16, Arc<Mutex<usize>>) {
                 break;
             };
             *counter.lock().expect("锁") += 1;
-            let mut buf = vec![0u8; 16384];
-            let _ = socket.read(&mut buf).await;
+            // 把请求完整读完（请求头 + Content-Length 指定的正文）再应答。
+            // 只读一次会在客户端分多次写请求时过早回包并关连接，导致偶发协议错误。
+            let mut request = Vec::new();
+            let mut buf = [0u8; 4096];
+            let mut header_end: Option<usize> = None;
+            loop {
+                let n = match socket.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                request.extend_from_slice(&buf[..n]);
+                if header_end.is_none() {
+                    if let Some(pos) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        header_end = Some(pos + 4);
+                    }
+                }
+                if let Some(head_len) = header_end {
+                    let head = String::from_utf8_lossy(&request[..head_len]);
+                    let content_length = head
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            if name.eq_ignore_ascii_case("content-length") {
+                                value.trim().parse::<usize>().ok()
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= head_len + content_length {
+                        break;
+                    }
+                }
+                if request.len() > 1 << 20 {
+                    break;
+                }
+            }
             let body = r#"{"choices":[{"message":{"role":"assistant","content":"[\"译一\",\"译二\"]"}}]}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
