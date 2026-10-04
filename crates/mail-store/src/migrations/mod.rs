@@ -55,6 +55,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "0006_search_compose",
         sql: include_str!("sql/0006_search_compose.sql"),
     },
+    Migration {
+        version: 7,
+        name: "0007_oauth_accounts",
+        sql: include_str!("sql/0007_oauth_accounts.sql"),
+    },
 ];
 
 /// 单条迁移的执行结果。
@@ -265,8 +270,8 @@ mod tests {
         let mut store = Store::open_in_memory().expect("打开内存库");
 
         let first = store.run_migrations().expect("首次迁移");
-        assert_eq!(first.applied_count(), 6, "首次应应用 6 条迁移");
-        assert_eq!(first.current_version, 6);
+        assert_eq!(first.applied_count(), 7, "首次应应用 7 条迁移");
+        assert_eq!(first.current_version, 7);
         assert_eq!(first.applied[0].name, "0001_core_bootstrap");
         assert!(!first.applied[0].applied_at.is_empty(), "登记时间不应为空");
 
@@ -275,7 +280,7 @@ mod tests {
 
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6]
+            vec![1, 2, 3, 4, 5, 6, 7]
         );
     }
 
@@ -342,8 +347,20 @@ mod tests {
         store.run_migrations().expect("升级到三号库");
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6]
+            vec![1, 2, 3, 4, 5, 6, 7]
         );
+
+        // 升级到七号库后，旧账号的授权字段应为空（NULL / 空串），不影响既有数据。
+        let (provider, client_id): (Option<String>, String) = store
+            .raw_connection_for_test()
+            .query_row(
+                "SELECT oauth_provider, oauth_client_id FROM account LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("读取授权字段");
+        assert_eq!(provider, None);
+        assert!(client_id.is_empty());
 
         let duplicate = store.raw_connection_for_test().execute(
             "INSERT INTO account (display_name, email, auth_type, username, \
@@ -357,8 +374,8 @@ mod tests {
 
     #[test]
     fn 迁移清单与校验和的基本性质() {
-        assert_eq!(MIGRATIONS.len(), 6);
-        assert_eq!(supported_version(), 6);
+        assert_eq!(MIGRATIONS.len(), 7);
+        assert_eq!(supported_version(), 7);
         assert_eq!(checksum("abc"), checksum("abc"));
         assert_ne!(checksum("abc"), checksum("abd"));
     }

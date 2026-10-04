@@ -48,6 +48,42 @@ impl AuthType {
     }
 }
 
+/// OAuth2 服务商（Wave 6）。密码登录账号用不到。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthProvider {
+    /// 谷歌 Gmail。
+    Gmail,
+    /// 微软 Outlook / 企业邮箱。
+    Microsoft,
+}
+
+impl OAuthProvider {
+    /// 存库用的稳定字符串。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Gmail => "gmail",
+            Self::Microsoft => "microsoft",
+        }
+    }
+
+    /// 从存库字符串还原；认不出来返回 `None`。
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "gmail" | "google" => Some(Self::Gmail),
+            "microsoft" | "outlook" | "office365" | "hotmail" => Some(Self::Microsoft),
+            _ => None,
+        }
+    }
+
+    /// 界面上显示的名字。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Gmail => "谷歌 Gmail",
+            Self::Microsoft => "微软 Outlook",
+        }
+    }
+}
+
 /// 传输加密方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Security {
@@ -176,6 +212,10 @@ pub struct AccountDraft {
     pub color: String,
     /// 是否启用。
     pub enabled: bool,
+    /// OAuth2 服务商；密码登录时为 `None`。
+    pub oauth_provider: Option<OAuthProvider>,
+    /// OAuth2 客户端编号（在谷歌云 / 微软 Entra 注册桌面应用后拿到）；密码登录时留空。
+    pub oauth_client_id: String,
 }
 
 impl AccountDraft {
@@ -195,6 +235,15 @@ impl AccountDraft {
 
         self.imap.validate("收件服务器", &mut problems);
         self.smtp.validate("发件服务器", &mut problems);
+
+        if self.auth_type == AuthType::OAuth2 {
+            if self.oauth_provider.is_none() {
+                problems.push("OAuth2 账号需要选择服务商".to_string());
+            }
+            if self.oauth_client_id.trim().is_empty() {
+                problems.push("OAuth2 账号需要填写客户端编号".to_string());
+            }
+        }
 
         if problems.is_empty() {
             Ok(())
@@ -236,6 +285,10 @@ pub struct Account {
     pub color: String,
     /// 是否启用。
     pub enabled: bool,
+    /// OAuth2 服务商；密码登录时为 `None`。
+    pub oauth_provider: Option<OAuthProvider>,
+    /// OAuth2 客户端编号；密码登录时为空串。
+    pub oauth_client_id: String,
     /// 系统凭据管理器里的引用键；未保存凭据时为 `None`。
     pub credential_key: Option<String>,
     /// 创建时间（UTC）。
@@ -257,6 +310,8 @@ impl Account {
             proxy: self.proxy,
             color: self.color.clone(),
             enabled: self.enabled,
+            oauth_provider: self.oauth_provider,
+            oauth_client_id: self.oauth_client_id.clone(),
         }
     }
 }
@@ -282,7 +337,7 @@ impl fmt::Display for AccountId {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccountDraft, AccountProxyMode, AuthType, Security, ServerConfig};
+    use super::{AccountDraft, AccountProxyMode, AuthType, OAuthProvider, Security, ServerConfig};
 
     fn draft() -> AccountDraft {
         AccountDraft {
@@ -303,6 +358,8 @@ mod tests {
             proxy: AccountProxyMode::InheritGlobal,
             color: String::new(),
             enabled: true,
+            oauth_provider: None,
+            oauth_client_id: String::new(),
         }
     }
 
@@ -350,5 +407,29 @@ mod tests {
             Some(AccountProxyMode::Custom(crate::proxy::ProxyId(3)))
         );
         assert_eq!(AccountProxyMode::parse("custom", None), None);
+    }
+
+    #[test]
+    fn 授权服务商标识可往返且兼容别名() {
+        for provider in [OAuthProvider::Gmail, OAuthProvider::Microsoft] {
+            assert_eq!(OAuthProvider::parse(provider.as_str()), Some(provider));
+        }
+        assert_eq!(OAuthProvider::parse("Google"), Some(OAuthProvider::Gmail));
+        assert_eq!(OAuthProvider::parse("Outlook"), Some(OAuthProvider::Microsoft));
+        assert_eq!(OAuthProvider::parse("yahoo"), None);
+    }
+
+    #[test]
+    fn 授权账号必须填服务商与客户端编号() {
+        let mut oauth = draft();
+        oauth.auth_type = AuthType::OAuth2;
+        let err = oauth.validate().expect_err("缺少服务商与客户端编号应被拦住");
+        let text = err.to_string();
+        assert!(text.contains("服务商"), "应提示选服务商：{text}");
+        assert!(text.contains("客户端编号"), "应提示填客户端编号：{text}");
+
+        oauth.oauth_provider = Some(OAuthProvider::Gmail);
+        oauth.oauth_client_id = "client-123".to_string();
+        oauth.validate().expect("补齐后应通过校验");
     }
 }

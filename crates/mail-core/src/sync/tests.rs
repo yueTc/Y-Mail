@@ -63,6 +63,8 @@ fn draft_for(port: u16, email: &str) -> AccountDraft {
         proxy: AccountProxyMode::Direct,
         color: String::new(),
         enabled: true,
+        oauth_provider: None,
+        oauth_client_id: String::new(),
     }
 }
 

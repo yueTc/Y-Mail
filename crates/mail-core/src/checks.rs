@@ -98,6 +98,8 @@ mod tests {
             proxy: AccountProxyMode::InheritGlobal,
             color: String::new(),
             enabled: true,
+            oauth_provider: None,
+            oauth_client_id: String::new(),
         }
     }
 

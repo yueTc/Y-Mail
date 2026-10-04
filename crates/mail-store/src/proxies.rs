@@ -355,6 +355,8 @@ mod tests {
             proxy,
             color: String::new(),
             enabled: true,
+            oauth_provider: None,
+            oauth_client_id: String::new(),
         }
     }
 }

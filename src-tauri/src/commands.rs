@@ -301,6 +301,8 @@ impl AccountDraftDto {
             proxy: self.proxy.to_domain()?,
             color: self.color.clone(),
             enabled: self.enabled,
+            oauth_provider: None,
+            oauth_client_id: String::new(),
         })
     }
 }

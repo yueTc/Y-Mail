@@ -13,7 +13,9 @@ pub mod error;
 pub mod proxy;
 pub mod sync;
 
-pub use account::{Account, AccountDraft, AccountId, AccountProxyMode, AuthType, Security, ServerConfig};
+pub use account::{
+    Account, AccountDraft, AccountId, AccountProxyMode, AuthType, OAuthProvider, Security, ServerConfig,
+};
 pub use dates::{civil_from_days, days_from_civil, format_imap_date, format_iso8601_utc, parse_mail_date};
 pub use error::{ConnectionError, ConnectionErrorKind, ValidationError};
 pub use proxy::{

@@ -3,7 +3,9 @@
 //! 安全约定：本模块不接受、也不保存授权码本体。授权码存进系统凭据管理器，
 //! 表里只留引用键（`credential_key`）。
 
-use mail_domain::{Account, AccountDraft, AccountId, AccountProxyMode, AuthType, Security, ServerConfig};
+use mail_domain::{
+    Account, AccountDraft, AccountId, AccountProxyMode, AuthType, OAuthProvider, Security, ServerConfig,
+};
 use rusqlite::OptionalExtension;
 
 use crate::connection::Store;
@@ -14,7 +16,8 @@ const SELECT_ACCOUNT: &str = "SELECT
     id, display_name, email, auth_type, username,
     imap_host, imap_port, imap_security,
     smtp_host, smtp_port, smtp_security,
-    proxy_mode, proxy_id, color, enabled, credential_key, created_at, updated_at
+    proxy_mode, proxy_id, color, enabled, credential_key, created_at, updated_at,
+    oauth_provider, oauth_client_id
     FROM account";
 
 fn row_to_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
@@ -26,6 +29,8 @@ fn row_to_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
     let proxy_mode: String = row.get(11)?;
     let proxy_id: Option<i64> = row.get(12)?;
     let enabled: i64 = row.get(14)?;
+    let oauth_provider: Option<String> = row.get(18)?;
+    let oauth_client_id: String = row.get(19)?;
 
     Ok(Account {
         id: AccountId(row.get(0)?),
@@ -46,6 +51,8 @@ fn row_to_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
         proxy: AccountProxyMode::parse(&proxy_mode, proxy_id).unwrap_or(AccountProxyMode::InheritGlobal),
         color: row.get(13)?,
         enabled: enabled != 0,
+        oauth_provider: oauth_provider.as_deref().and_then(OAuthProvider::parse),
+        oauth_client_id,
         credential_key: row.get(15)?,
         created_at: row.get(16)?,
         updated_at: row.get(17)?,
@@ -108,8 +115,9 @@ impl Store {
                 display_name, email, auth_type, username,
                 imap_host, imap_port, imap_security,
                 smtp_host, smtp_port, smtp_security,
-                proxy_mode, proxy_id, color, enabled, credential_key
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                proxy_mode, proxy_id, color, enabled, credential_key,
+                oauth_provider, oauth_client_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             rusqlite::params![
                 draft.display_name,
                 draft.email,
@@ -126,6 +134,8 @@ impl Store {
                 draft.color,
                 i64::from(draft.enabled),
                 credential_key,
+                draft.oauth_provider.map(|provider| provider.as_str()),
+                draft.oauth_client_id,
             ],
         )?;
         Ok(AccountId(self.conn().last_insert_rowid()))
@@ -144,7 +154,8 @@ impl Store {
                 imap_host = ?6, imap_port = ?7, imap_security = ?8,
                 smtp_host = ?9, smtp_port = ?10, smtp_security = ?11,
                 proxy_mode = ?12, proxy_id = ?13, color = ?14, enabled = ?15,
-                credential_key = ?16, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                credential_key = ?16, oauth_provider = ?17, oauth_client_id = ?18,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
              WHERE id = ?1",
             rusqlite::params![
                 id.0,
@@ -163,6 +174,8 @@ impl Store {
                 draft.color,
                 i64::from(draft.enabled),
                 credential_key,
+                draft.oauth_provider.map(|provider| provider.as_str()),
+                draft.oauth_client_id,
             ],
         )?;
         Ok(changed > 0)
@@ -198,7 +211,7 @@ fn proxy_id_of(mode: AccountProxyMode) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use mail_domain::{AccountId, AccountProxyMode, AuthType, Security, ServerConfig};
+    use mail_domain::{AccountId, AccountProxyMode, AuthType, OAuthProvider, Security, ServerConfig};
 
     use crate::Store;
 
@@ -227,6 +240,8 @@ mod tests {
             proxy: AccountProxyMode::InheritGlobal,
             color: "#3366ff".to_string(),
             enabled: true,
+            oauth_provider: None,
+            oauth_client_id: String::new(),
         }
     }
 
@@ -311,5 +326,38 @@ mod tests {
     #[test]
     fn 账号主键可读() {
         assert_eq!(AccountId(7).to_string(), "7");
+    }
+
+    #[test]
+    fn 授权账号字段可存取() {
+        let store = migrated();
+        let mut draft = sample_draft();
+        draft.auth_type = AuthType::OAuth2;
+        draft.oauth_provider = Some(OAuthProvider::Gmail);
+        draft.oauth_client_id = "client-abc.apps.googleusercontent.com".to_string();
+        draft.username = draft.email.clone();
+
+        let id = store.insert_account(&draft, None).expect("插入授权账号");
+        let account = store.get_account(id).expect("查询").expect("应存在");
+        assert_eq!(account.auth_type, AuthType::OAuth2);
+        assert_eq!(account.oauth_provider, Some(OAuthProvider::Gmail));
+        assert_eq!(account.oauth_client_id, "client-abc.apps.googleusercontent.com");
+
+        let mut changed = draft.clone();
+        changed.oauth_provider = Some(OAuthProvider::Microsoft);
+        changed.oauth_client_id = "ms-client".to_string();
+        assert!(store.update_account(id, &changed, None).expect("更新"));
+        let account = store.get_account(id).expect("查询").expect("应存在");
+        assert_eq!(account.oauth_provider, Some(OAuthProvider::Microsoft));
+        assert_eq!(account.oauth_client_id, "ms-client");
+    }
+
+    #[test]
+    fn 密码账号的授权字段为空() {
+        let store = migrated();
+        let id = store.insert_account(&sample_draft(), None).expect("插入");
+        let account = store.get_account(id).expect("查询").expect("应存在");
+        assert_eq!(account.oauth_provider, None);
+        assert!(account.oauth_client_id.is_empty());
     }
 }

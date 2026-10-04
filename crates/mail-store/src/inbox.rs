@@ -412,6 +412,8 @@ mod tests {
             proxy: mail_domain::AccountProxyMode::InheritGlobal,
             color: color.to_string(),
             enabled: true,
+            oauth_provider: None,
+            oauth_client_id: String::new(),
         };
         store.insert_account(&draft, None).expect("插入账号").0
     }
