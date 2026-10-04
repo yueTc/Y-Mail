@@ -290,6 +290,8 @@ export default function InboxPanel() {
 
   // 写信窗格的打开请求；为空表示当前在收件箱。
   const [composeRequest, setComposeRequest] = useState<ComposeRequest>();
+  // 有没有启用的 AI 站点；只控制按钮是否可用，不触发任何请求。
+  const [aiEnabled, setAiEnabled] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -299,6 +301,22 @@ export default function InboxPanel() {
     if (selectedFolder !== undefined) value.folderId = selectedFolder.folderId;
     return value;
   }, [selectedAccount, selectedFolder, unreadOnly]);
+
+  /** 静默检查 AI 站点状态；默认关闭时按钮显示「需启用」。 */
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .listAiProviders()
+      .then((providers) => {
+        if (!cancelled) setAiEnabled(providers.some((provider) => provider.enabled));
+      })
+      .catch(() => {
+        if (!cancelled) setAiEnabled(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   /** 文件夹模式下用 folderId 收窄；不然按各账号收件箱。 */
   const currentCount = threadMode ? threads.length : messages.length;
@@ -732,9 +750,10 @@ export default function InboxPanel() {
             accounts={accounts}
             onClose={() => setComposeRequest(undefined)}
             onSent={() => void refreshAll()}
+            aiEnabled={aiEnabled}
           />
         ) : (
-          <MessageReader message={selectedMessage} />
+          <MessageReader message={selectedMessage} aiEnabled={aiEnabled} />
         )}
       </aside>
     </div>

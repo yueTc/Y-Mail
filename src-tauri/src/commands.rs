@@ -7,9 +7,11 @@
 //! 已保存的账号只回一个 `hasCredential` 布尔值。命令入参不写日志。
 
 use mail_core::{
-    AccountInboxSummary, ConnectionReport, EngineError, InboxFolder, InboxMessage, InboxQuery, InboxThread,
-    NewOutbox, OutboxKind, SearchHit, SearchQuery, SnippetSegment, StoredAttachment, StoredContact,
-    StoredOutbox, StoredSignature,
+    AccountInboxSummary, AiAuthorizationPreview, AiFunction, AiModelMapEntry, AiProviderInput,
+    AiProviderKind, AiProviderView, AiTextOutcome, AiThinkingLevel, AiTranslation, ConnectionReport,
+    EngineError, InboxFolder, InboxMessage, InboxQuery, InboxThread, NewOutbox, OutboxKind, SearchHit,
+    SearchQuery, SnippetSegment, StoredAiAudit, StoredAttachment, StoredContact, StoredOutbox,
+    StoredSignature,
 };
 use mail_domain::account::{
     Account, AccountDraft, AccountId, AccountProxyMode, AuthType, OAuthProvider, Security, ServerConfig,
@@ -2027,4 +2029,497 @@ pub async fn send_outbox(state: tauri::State<'_, AppState>) -> Result<SendOutcom
             })
             .collect(),
     })
+}
+
+// ============================ AI 与翻译命令（Wave 7） ============================
+
+/// 一个 AI 站点提交给引擎的配置；这里只带界面字段，不包含密钥明文。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiProviderDraftDto {
+    /// 已有站点编号；新建时省略。
+    #[serde(default)]
+    pub id: Option<i64>,
+    /// 便于识别的站点名称。
+    pub label: String,
+    /// 站点类型：openai_compatible / deepl / ollama。
+    pub kind: String,
+    /// 站点根地址。
+    pub base_url: String,
+    /// 站点默认模型。
+    #[serde(default)]
+    pub default_model: String,
+    /// 拉取或手工填写的模型列表。
+    #[serde(default)]
+    pub models: Vec<String>,
+    /// 默认思考程度：off / low / medium / high。
+    #[serde(default)]
+    pub thinking_level: String,
+    /// 是否启用。
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+impl AiProviderDraftDto {
+    fn to_input(&self) -> Result<AiProviderInput, CommandError> {
+        let kind = AiProviderKind::parse(&self.kind)
+            .ok_or_else(|| CommandError::input("AI 站点类型只能是 openai_compatible、deepl 或 ollama"))?;
+        let level = self.thinking_level.trim().to_ascii_lowercase();
+        if !matches!(level.as_str(), "" | "off" | "low" | "medium" | "high") {
+            return Err(CommandError::input("思考程度只能是 off、low、medium 或 high"));
+        }
+        let thinking_level = if level.is_empty() {
+            AiThinkingLevel::Off
+        } else {
+            AiThinkingLevel::parse(&level)
+        };
+        Ok(AiProviderInput {
+            id: self.id,
+            label: self.label.clone(),
+            kind,
+            base_url: self.base_url.clone(),
+            default_model: self.default_model.clone(),
+            models: self.models.clone(),
+            thinking_level,
+            enabled: self.enabled,
+        })
+    }
+}
+
+/// 界面看到的 AI 站点；不包含 CDKey / API Key / 凭据引用键。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiProviderDto {
+    /// 主键。
+    pub id: i64,
+    /// 显示名。
+    pub label: String,
+    /// 站点类型。
+    pub kind: String,
+    /// 站点根地址。
+    pub base_url: String,
+    /// 默认模型。
+    pub default_model: String,
+    /// 模型列表。
+    pub models: Vec<String>,
+    /// 默认思考程度。
+    pub thinking_level: String,
+    /// 是否启用。
+    pub enabled: bool,
+    /// 保险箱里是否已有密钥。
+    pub has_key: bool,
+}
+
+impl AiProviderDto {
+    fn from_view(view: &AiProviderView) -> Self {
+        Self {
+            id: view.id,
+            label: view.label.clone(),
+            kind: view.kind.as_str().to_string(),
+            base_url: view.base_url.clone(),
+            default_model: view.default_model.clone(),
+            models: view.models.clone(),
+            thinking_level: view.thinking_level.as_str().to_string(),
+            enabled: view.enabled,
+            has_key: view.has_key,
+        }
+    }
+}
+
+/// 功能级模型配置。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiModelMapDto {
+    /// 功能：translate / summary / polish / draft。
+    pub function: String,
+    /// 使用的站点主键。
+    pub provider_id: i64,
+    /// 功能级模型；空串表示回退站点默认。
+    pub model: String,
+    /// 功能级思考程度；null 表示回退站点默认。
+    pub thinking_level: Option<String>,
+    /// 更新时间。
+    pub updated_at: String,
+}
+
+impl AiModelMapDto {
+    fn from_entry(entry: &AiModelMapEntry) -> Self {
+        Self {
+            function: entry.function.as_str().to_string(),
+            provider_id: entry.provider_id,
+            model: entry.model.clone(),
+            thinking_level: entry.thinking_level.map(|level| level.as_str().to_string()),
+            updated_at: entry.updated_at.clone(),
+        }
+    }
+}
+
+/// 外发授权弹窗展示的目标信息。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiAuthorizationDto {
+    /// 功能。
+    pub function: String,
+    /// 站点主键。
+    pub provider_id: i64,
+    /// 站点显示名。
+    pub provider_label: String,
+    /// 外发域名。
+    pub host: String,
+    /// 模型。
+    pub model: String,
+    /// 是否本机服务。
+    pub local: bool,
+    /// 内容哈希；不包含正文。
+    pub content_hash: String,
+    /// 一次性授权令牌；缓存命中时为空串。
+    pub authorization_token: String,
+    /// 有效期（秒）。
+    pub expires_in_seconds: u64,
+    /// 是否命中本地缓存。
+    pub from_cache: bool,
+}
+
+impl AiAuthorizationDto {
+    fn from_preview(preview: AiAuthorizationPreview) -> Self {
+        Self {
+            function: preview.function,
+            provider_id: preview.provider_id,
+            provider_label: preview.provider_label,
+            host: preview.host,
+            model: preview.model,
+            local: preview.local,
+            content_hash: preview.content_hash,
+            authorization_token: preview.authorization_token,
+            expires_in_seconds: preview.expires_in_seconds,
+            from_cache: preview.from_cache,
+        }
+    }
+}
+
+/// 摘要、润色、起草共用的纯文本结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiTextOutcomeDto {
+    /// 模型输出的纯文本。
+    pub text: String,
+    /// 是否因为模型不支持思考程度而降级。
+    pub thinking_downgraded: bool,
+    /// 是否命中本地缓存。
+    pub from_cache: bool,
+}
+
+impl AiTextOutcomeDto {
+    fn from_outcome(outcome: AiTextOutcome) -> Self {
+        Self {
+            text: outcome.text,
+            thinking_downgraded: outcome.thinking_downgraded,
+            from_cache: outcome.from_cache,
+        }
+    }
+}
+
+/// 段落对齐的翻译结果；三种显示模式共用这一份数据。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiTranslationDto {
+    /// 原文段落。
+    pub original: Vec<String>,
+    /// 对齐译文段落。
+    pub translated: Vec<String>,
+    /// 是否因为模型不支持思考程度而降级。
+    pub thinking_downgraded: bool,
+    /// 是否命中本地缓存。
+    pub from_cache: bool,
+}
+
+impl AiTranslationDto {
+    fn from_translation(translation: AiTranslation) -> Self {
+        Self {
+            original: translation.original,
+            translated: translation.translated,
+            thinking_downgraded: translation.thinking_downgraded,
+            from_cache: translation.from_cache,
+        }
+    }
+}
+
+/// AI 调用审计；只读元数据，不含邮件正文与密钥。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiAuditDto {
+    /// 主键。
+    pub id: i64,
+    /// 创建时间。
+    pub created_at: String,
+    /// 功能。
+    pub function: String,
+    /// 站点主键。
+    pub provider_id: Option<i64>,
+    /// 站点显示名。
+    pub provider_label: String,
+    /// 模型。
+    pub model: String,
+    /// 外发域名。
+    pub target_host: String,
+    /// 是否本机服务。
+    pub local: bool,
+    /// 是否发生外发。
+    pub outbound: bool,
+    /// 结果分类。
+    pub outcome: String,
+    /// 脱敏说明。
+    pub detail: String,
+}
+
+impl AiAuditDto {
+    fn from_audit(audit: &StoredAiAudit) -> Self {
+        Self {
+            id: audit.id,
+            created_at: audit.created_at.clone(),
+            function: audit.function.clone(),
+            provider_id: audit.provider_id,
+            provider_label: audit.provider_label.clone(),
+            model: audit.model.clone(),
+            target_host: audit.target_host.clone(),
+            local: audit.local,
+            outbound: audit.outbound,
+            outcome: audit.outcome.clone(),
+            detail: audit.detail.clone(),
+        }
+    }
+}
+
+fn parse_ai_function(value: &str) -> Result<AiFunction, CommandError> {
+    AiFunction::parse(value)
+        .ok_or_else(|| CommandError::input("AI 功能只能是 translate、summary、polish 或 draft"))
+}
+
+/// 列出全部 AI 站点；不含密钥明文。
+#[tauri::command]
+pub async fn list_ai_providers(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<AiProviderDto>, CommandError> {
+    let engine = state.engine().await;
+    Ok(engine
+        .list_ai_providers()?
+        .iter()
+        .map(AiProviderDto::from_view)
+        .collect())
+}
+
+/// 新建或修改 AI 站点。
+///
+/// `apiKey` 语义：省略沿用旧密钥；空串清空；非空替换。密钥只进系统保险箱。
+#[tauri::command]
+pub async fn save_ai_provider(
+    state: tauri::State<'_, AppState>,
+    draft: AiProviderDraftDto,
+    api_key: Option<String>,
+) -> Result<AiProviderDto, CommandError> {
+    let input = draft.to_input()?;
+    let secret = api_key.map(Secret::new);
+    let engine = state.engine().await;
+    let view = engine.save_ai_provider(&input, secret.as_ref())?;
+    Ok(AiProviderDto::from_view(&view))
+}
+
+/// 删除 AI 站点，并一并清理它的保险箱密钥和缓存。
+#[tauri::command]
+pub async fn delete_ai_provider(state: tauri::State<'_, AppState>, id: i64) -> Result<(), CommandError> {
+    if id <= 0 {
+        return Err(CommandError::input("AI 站点编号不合法"));
+    }
+    let engine = state.engine().await;
+    engine.delete_ai_provider(id)?;
+    Ok(())
+}
+
+/// 用尚未保存的配置测试连接并拉取模型列表；不写库、不写保险箱。
+#[tauri::command]
+pub async fn test_ai_provider(
+    state: tauri::State<'_, AppState>,
+    kind: String,
+    base_url: String,
+    api_key: Option<String>,
+) -> Result<Vec<String>, CommandError> {
+    let kind = AiProviderKind::parse(&kind)
+        .ok_or_else(|| CommandError::input("AI 站点类型只能是 openai_compatible、deepl 或 ollama"))?;
+    let secret = api_key.map(Secret::new);
+    let engine = state.engine().await;
+    let models = engine.test_ai_provider(kind, &base_url, secret.as_ref()).await?;
+    Ok(models)
+}
+
+/// 对已保存站点重新拉取模型列表并落库。
+#[tauri::command]
+pub async fn refresh_ai_provider_models(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+) -> Result<Vec<String>, CommandError> {
+    if id <= 0 {
+        return Err(CommandError::input("AI 站点编号不合法"));
+    }
+    let engine = state.engine().await;
+    Ok(engine.refresh_ai_provider_models(id).await?)
+}
+
+/// 列出功能级模型与思考程度配置。
+#[tauri::command]
+pub async fn list_ai_model_maps(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<AiModelMapDto>, CommandError> {
+    let engine = state.engine().await;
+    Ok(engine
+        .list_ai_model_maps()?
+        .iter()
+        .map(AiModelMapDto::from_entry)
+        .collect())
+}
+
+/// 设置某个功能使用哪个站点、模型和思考程度。
+#[tauri::command]
+pub async fn set_ai_feature(
+    state: tauri::State<'_, AppState>,
+    function: String,
+    provider_id: i64,
+    model: String,
+    thinking_level: Option<String>,
+) -> Result<(), CommandError> {
+    if provider_id <= 0 {
+        return Err(CommandError::input("请选择 AI 站点"));
+    }
+    let function = parse_ai_function(&function)?;
+    let level = match thinking_level {
+        Some(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                None
+            } else if matches!(normalized.as_str(), "off" | "low" | "medium" | "high") {
+                Some(AiThinkingLevel::parse(&normalized))
+            } else {
+                return Err(CommandError::input("思考程度只能是 off、low、medium 或 high"));
+            }
+        }
+        None => None,
+    };
+    let engine = state.engine().await;
+    engine.set_ai_feature(function, provider_id, &model, level)?;
+    Ok(())
+}
+
+/// 清除某个功能的配置，回退到站点默认。
+#[tauri::command]
+pub async fn clear_ai_feature(
+    state: tauri::State<'_, AppState>,
+    function: String,
+) -> Result<(), CommandError> {
+    let function = parse_ai_function(&function)?;
+    let engine = state.engine().await;
+    engine.clear_ai_feature(function)?;
+    Ok(())
+}
+
+/// 外发前先拿目标信息；这一步不发网络请求，也不会把正文发出去。
+#[tauri::command]
+pub async fn ai_authorization_preview(
+    state: tauri::State<'_, AppState>,
+    function: String,
+    message_id: Option<i64>,
+    target_language: String,
+    text: Option<String>,
+) -> Result<AiAuthorizationDto, CommandError> {
+    let function = parse_ai_function(&function)?;
+    let engine = state.engine().await;
+    let preview = engine.ai_authorization_preview(function, message_id, &target_language, text.as_deref())?;
+    Ok(AiAuthorizationDto::from_preview(preview))
+}
+
+/// 翻译一封邮件，返回段落对齐译文。
+#[tauri::command]
+pub async fn translate_message(
+    state: tauri::State<'_, AppState>,
+    message_id: i64,
+    target_language: String,
+    authorization_token: String,
+) -> Result<AiTranslationDto, CommandError> {
+    if message_id <= 0 {
+        return Err(CommandError::input("邮件编号不合法"));
+    }
+    if target_language.trim().is_empty() {
+        return Err(CommandError::input("请先选择目标语言"));
+    }
+    let engine = state.engine().await;
+    let result = engine
+        .translate_message(message_id, &target_language, &authorization_token)
+        .await?;
+    Ok(AiTranslationDto::from_translation(result))
+}
+
+/// 总结一封邮件。
+#[tauri::command]
+pub async fn summarize_message(
+    state: tauri::State<'_, AppState>,
+    message_id: i64,
+    authorization_token: String,
+) -> Result<AiTextOutcomeDto, CommandError> {
+    if message_id <= 0 {
+        return Err(CommandError::input("邮件编号不合法"));
+    }
+    let engine = state.engine().await;
+    let outcome = engine.summarize_message(message_id, &authorization_token).await?;
+    Ok(AiTextOutcomeDto::from_outcome(outcome))
+}
+
+/// 润色一段用户正在写的文字。
+#[tauri::command]
+pub async fn polish_text(
+    state: tauri::State<'_, AppState>,
+    text: String,
+    authorization_token: String,
+) -> Result<AiTextOutcomeDto, CommandError> {
+    let engine = state.engine().await;
+    let outcome = engine.polish_text(&text, &authorization_token).await?;
+    Ok(AiTextOutcomeDto::from_outcome(outcome))
+}
+
+/// 按一句要求起草正文。
+#[tauri::command]
+pub async fn draft_text(
+    state: tauri::State<'_, AppState>,
+    instruction: String,
+    authorization_token: String,
+) -> Result<AiTextOutcomeDto, CommandError> {
+    let engine = state.engine().await;
+    let outcome = engine.draft_text(&instruction, &authorization_token).await?;
+    Ok(AiTextOutcomeDto::from_outcome(outcome))
+}
+
+/// 查询最近的 AI 审计；默认最多 200 条。
+#[tauri::command]
+pub async fn list_ai_audit(
+    state: tauri::State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<AiAuditDto>, CommandError> {
+    let limit = limit.unwrap_or(200).clamp(1, 1000);
+    let engine = state.engine().await;
+    Ok(engine
+        .list_ai_audit(limit)?
+        .iter()
+        .map(AiAuditDto::from_audit)
+        .collect())
+}
+
+/// 一键关闭所有 AI 站点，同时让待授权令牌失效。
+#[tauri::command]
+pub async fn disable_all_ai(state: tauri::State<'_, AppState>) -> Result<usize, CommandError> {
+    let engine = state.engine().await;
+    Ok(engine.disable_all_ai()?)
+}
+
+/// 清空 AI 本地缓存；不会联网，也不会动站点与密钥。
+#[tauri::command]
+pub async fn clear_ai_cache(state: tauri::State<'_, AppState>) -> Result<usize, CommandError> {
+    let engine = state.engine().await;
+    Ok(engine.clear_ai_cache()?)
 }

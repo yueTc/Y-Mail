@@ -2121,14 +2121,20 @@ name = "mail-ai"
 version = "0.1.0"
 dependencies = [
  "mail-domain",
+ "mail-net",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
+ "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]
 name = "mail-core"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.4.3",
  "keyring",
  "mail-ai",
  "mail-domain",
@@ -2234,6 +2240,7 @@ version = "0.1.0"
 dependencies = [
  "mail-domain",
  "rusqlite",
+ "serde_json",
  "sha2",
  "tempfile",
  "thiserror 2.0.21",

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { api, describeError, type DbStatus } from "./api";
 import AccountPanel from "./AccountPanel";
+import AiPanel from "./AiPanel";
 import InboxPanel from "./InboxPanel";
 import ProxyPanel from "./ProxyPanel";
 import SyncPanel from "./SyncPanel";
@@ -72,6 +73,8 @@ export default function App() {
           <AccountPanel proxiesVersion={proxiesVersion} />
 
           <ProxyPanel onChanged={() => setProxiesVersion((value) => value + 1)} />
+
+          <AiPanel />
 
           <section className="panel">
             <h2>数据库状态</h2>

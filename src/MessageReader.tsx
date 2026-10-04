@@ -11,10 +11,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api,
   describeError,
+  type AiAuthorization,
+  type AiTranslation,
   type InboxMessage,
   type MessageAttachment,
   type MessageBody,
 } from "./api";
+import AiAuthorizationDialog from "./AiAuthorizationDialog";
 
 /** 深色模式偏好；三档存本地，只记界面偏好，不涉及任何敏感信息。 */
 export type ReaderTheme = "auto" | "light" | "dark";
@@ -136,14 +139,52 @@ export function buildReaderDocument(
   ].join("");
 }
 
+/** 翻译三种显示模式。 */
+export type TranslationMode = "side_by_side" | "inline" | "direct";
+
+/** 目标语言选项。 */
+export const TRANSLATION_LANGUAGES = [
+  { value: "zh-CN", label: "简体中文" },
+  { value: "zh-TW", label: "繁体中文" },
+  { value: "en", label: "英语" },
+  { value: "ja", label: "日语" },
+  { value: "ko", label: "韩语" },
+  { value: "fr", label: "法语" },
+  { value: "de", label: "德语" },
+  { value: "es", label: "西班牙语" },
+] as const;
+
 /** 读信窗格属性。 */
 export interface MessageReaderProps {
   /** 当前选中的邮件；为空时只显示提示。 */
   message?: InboxMessage;
+  /** 当前有没有启用的 AI 站点；没有时显示「需启用」。 */
+  aiEnabled?: boolean;
+}
+
+/** 段落对齐译文的纯文本渲染；不注入 HTML，也不会自动跳转链接。 */
+function TranslationPair({
+  original,
+  translated,
+  mode,
+}: {
+  original: string;
+  translated: string;
+  mode: TranslationMode;
+}) {
+  if (mode === "side_by_side") {
+    return (
+      <div className="reader-translation-pair">
+        <p className="reader-translation-original">{original}</p>
+        <p className="reader-translation-translated">{translated}</p>
+      </div>
+    );
+  }
+  return <p className="reader-translation-translated">{translated}</p>;
 }
 
 /** 右栏读信窗格：正文、远程图片放行提示与附件清单。 */
-export default function MessageReader({ message }: MessageReaderProps) {
+export default function MessageReader({ message, aiEnabled = false }: MessageReaderProps) {
   const [body, setBody] = useState<MessageBody>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
@@ -153,6 +194,19 @@ export default function MessageReader({ message }: MessageReaderProps) {
   const [systemDark, setSystemDark] = useState(false);
   const [downloading, setDownloading] = useState<ReadonlySet<number>>(new Set());
   const [downloadedPaths, setDownloadedPaths] = useState<Record<number, string>>({});
+  const [targetLanguage, setTargetLanguage] = useState("zh-CN");
+  const [translationMode, setTranslationMode] = useState<TranslationMode>("side_by_side");
+  const [translation, setTranslation] = useState<AiTranslation>();
+  const [translationBusy, setTranslationBusy] = useState(false);
+  const [translationError, setTranslationError] = useState("");
+  const [translationAuth, setTranslationAuth] = useState<AiAuthorization>();
+  const [translationAuthBusy, setTranslationAuthBusy] = useState(false);
+  const [summaryText, setSummaryText] = useState("");
+  const [summaryBusy, setSummaryBusy] = useState(false);
+  const [summaryError, setSummaryError] = useState("");
+  const [summaryAuth, setSummaryAuth] = useState<AiAuthorization>();
+  const [summaryAuthBusy, setSummaryAuthBusy] = useState(false);
+  const [aiDowngraded, setAiDowngraded] = useState(false);
 
   const messageId = message?.id;
   const allowRemote = messageId !== undefined && remoteAllowedFor === messageId;
@@ -194,6 +248,17 @@ export default function MessageReader({ message }: MessageReaderProps) {
     };
   }, [messageId, allowRemote]);
 
+  /** 切邮件时清掉上一封的 AI 结果，避免串封。 */
+  useEffect(() => {
+    setTranslation(undefined);
+    setSummaryText("");
+    setTranslationError("");
+    setSummaryError("");
+    setAiDowngraded(false);
+    setTranslationAuth(undefined);
+    setSummaryAuth(undefined);
+  }, [messageId]);
+
   const dark = theme === "dark" || (theme === "auto" && systemDark);
 
   const changeTheme = useCallback((value: ReaderTheme) => {
@@ -234,6 +299,88 @@ export default function MessageReader({ message }: MessageReaderProps) {
     }
   }, []);
 
+  /** 翻译按钮：先拿只读预览；缓存命中不弹窗，直接取结果。 */
+  const requestTranslation = useCallback(async () => {
+    if (messageId === undefined || translationBusy) return;
+    setTranslationBusy(true);
+    setTranslationError("");
+    try {
+      const preview = await api.aiAuthorizationPreview("translate", {
+        messageId,
+        targetLanguage,
+      });
+      if (preview.fromCache) {
+        const result = await api.translateMessage(messageId, targetLanguage, "");
+        setTranslation(result);
+        setAiDowngraded(result.thinkingDowngraded);
+        return;
+      }
+      setTranslationAuth(preview);
+    } catch (caught) {
+      setTranslationError(describeError(caught));
+    } finally {
+      setTranslationBusy(false);
+    }
+  }, [messageId, targetLanguage, translationBusy]);
+
+  /** 用户在授权框点了确认后才真正外发。 */
+  const confirmTranslation = useCallback(async () => {
+    if (!translationAuth || messageId === undefined) return;
+    setTranslationAuthBusy(true);
+    setTranslationError("");
+    try {
+      const result = await api.translateMessage(
+        messageId,
+        targetLanguage,
+        translationAuth.authorizationToken,
+      );
+      setTranslation(result);
+      setAiDowngraded(result.thinkingDowngraded);
+      setTranslationAuth(undefined);
+    } catch (caught) {
+      setTranslationError(describeError(caught));
+    } finally {
+      setTranslationAuthBusy(false);
+    }
+  }, [messageId, targetLanguage, translationAuth]);
+
+  /** 摘要按钮走同一套预览与授权流程。 */
+  const requestSummary = useCallback(async () => {
+    if (messageId === undefined || summaryBusy) return;
+    setSummaryBusy(true);
+    setSummaryError("");
+    try {
+      const preview = await api.aiAuthorizationPreview("summary", { messageId });
+      if (preview.fromCache) {
+        const result = await api.summarizeMessage(messageId, "");
+        setSummaryText(result.text);
+        setAiDowngraded(result.thinkingDowngraded);
+        return;
+      }
+      setSummaryAuth(preview);
+    } catch (caught) {
+      setSummaryError(describeError(caught));
+    } finally {
+      setSummaryBusy(false);
+    }
+  }, [messageId, summaryBusy]);
+
+  const confirmSummary = useCallback(async () => {
+    if (!summaryAuth || messageId === undefined) return;
+    setSummaryAuthBusy(true);
+    setSummaryError("");
+    try {
+      const result = await api.summarizeMessage(messageId, summaryAuth.authorizationToken);
+      setSummaryText(result.text);
+      setAiDowngraded(result.thinkingDowngraded);
+      setSummaryAuth(undefined);
+    } catch (caught) {
+      setSummaryError(describeError(caught));
+    } finally {
+      setSummaryAuthBusy(false);
+    }
+  }, [messageId, summaryAuth]);
+
   const contentHtml = useMemo(() => {
     if (!body) return "";
     if (body.html) return body.html;
@@ -258,6 +405,22 @@ export default function MessageReader({ message }: MessageReaderProps) {
 
   return (
     <div className={dark ? "reader-pane reader-dark" : "reader-pane"}>
+      {translationAuth && (
+        <AiAuthorizationDialog
+          preview={translationAuth}
+          busy={translationAuthBusy}
+          onCancel={() => setTranslationAuth(undefined)}
+          onConfirm={() => void confirmTranslation()}
+        />
+      )}
+      {summaryAuth && (
+        <AiAuthorizationDialog
+          preview={summaryAuth}
+          busy={summaryAuthBusy}
+          onCancel={() => setSummaryAuth(undefined)}
+          onConfirm={() => void confirmSummary()}
+        />
+      )}
       <header className="reader-header">
         <div className="reader-head-top">
           <h3 className="reader-subject">{message.subject || "（无主题）"}</h3>
@@ -281,6 +444,80 @@ export default function MessageReader({ message }: MessageReaderProps) {
           )}
           <span>{formatReaderTime(message.dateUtc)}</span>
         </div>
+        <div className="reader-ai-tools">
+          <button
+            type="button"
+            disabled={!aiEnabled || translationBusy}
+            onClick={() => void requestTranslation()}
+            title={aiEnabled ? "翻译这封邮件" : "需先在设置里启用 AI 站点"}
+          >
+            {translationBusy ? "翻译中……" : aiEnabled ? "翻译" : "翻译（需启用）"}
+          </button>
+          <label>
+            目标语言
+            <select
+              aria-label="目标语言"
+              value={targetLanguage}
+              onChange={(event) => {
+                setTargetLanguage(event.target.value);
+                setTranslation(undefined);
+              }}
+              disabled={!aiEnabled}
+            >
+              {TRANSLATION_LANGUAGES.map((language) => (
+                <option key={language.value} value={language.value}>
+                  {language.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {translation && (
+            <div className="reader-translation-modes" role="group" aria-label="翻译显示模式">
+              <button
+                type="button"
+                className={translationMode === "side_by_side" ? "active" : ""}
+                onClick={() => setTranslationMode("side_by_side")}
+              >
+                对照翻译
+              </button>
+              <button
+                type="button"
+                className={translationMode === "inline" ? "active" : ""}
+                onClick={() => setTranslationMode("inline")}
+              >
+                行内翻译
+              </button>
+              <button
+                type="button"
+                className={translationMode === "direct" ? "active" : ""}
+                onClick={() => setTranslationMode("direct")}
+              >
+                直接翻译
+              </button>
+              <button type="button" onClick={() => setTranslation(undefined)}>
+                切回原文
+              </button>
+            </div>
+          )}
+          <button
+            type="button"
+            disabled={!aiEnabled || summaryBusy}
+            onClick={() => void requestSummary()}
+            title={aiEnabled ? "摘要这封邮件" : "需先在设置里启用 AI 站点"}
+          >
+            {summaryBusy ? "摘要中……" : aiEnabled ? "摘要" : "摘要（需启用）"}
+          </button>
+        </div>
+        {!aiEnabled && (
+          <p className="hint reader-ai-disabled">
+            AI 和翻译默认关闭，需到「账号与代理」设置里添加并启用站点。
+          </p>
+        )}
+        {aiDowngraded && (
+          <p className="reader-ai-note">该模型不支持所选思考程度，已按默认调用。</p>
+        )}
+        {translationError && <p className="error">翻译失败：{translationError}</p>}
+        {summaryError && <p className="error">摘要失败：{summaryError}</p>}
       </header>
 
       <div className="reader-content">
@@ -308,16 +545,56 @@ export default function MessageReader({ message }: MessageReaderProps) {
               <p className="hint">本封已放行远程图片，关闭后自动恢复默认拦截。</p>
             )}
 
-            {document_ ? (
-              <iframe
-                className="reader-frame"
-                title="邮件正文"
-                sandbox=""
-                referrerPolicy="no-referrer"
-                srcDoc={document_}
-              />
+            {translation && translationMode !== "side_by_side" ? (
+              <section className="reader-translation" aria-label="段落对齐译文">
+                {translation.original.length === 0 && <p className="hint">这封邮件没有可翻译的正文。</p>}
+                {translation.original.map((original, index) => (
+                  <TranslationPair
+                    key={index}
+                    original={original}
+                    translated={translation.translated[index] ?? ""}
+                    mode={translationMode}
+                  />
+                ))}
+              </section>
             ) : (
-              <p className="hint">这封邮件没有可显示的正文。</p>
+              <>
+                {translation && translationMode === "side_by_side" && (
+                  <section className="reader-translation reader-translation-columns" aria-label="段落对齐译文">
+                    <div className="reader-translation-column">
+                      <h4>原文</h4>
+                      {translation.original.map((original, index) => (
+                        <p key={index}>{original}</p>
+                      ))}
+                    </div>
+                    <div className="reader-translation-column">
+                      <h4>译文</h4>
+                      {translation.translated.map((translated, index) => (
+                        <p key={index}>{translated}</p>
+                      ))}
+                    </div>
+                  </section>
+                )}
+                {!translation && document_ && (
+                  <iframe
+                    className="reader-frame"
+                    title="邮件正文"
+                    sandbox=""
+                    referrerPolicy="no-referrer"
+                    srcDoc={document_}
+                  />
+                )}
+                {!translation && !document_ && (
+                  <p className="hint">这封邮件没有可显示的正文。</p>
+                )}
+              </>
+            )}
+
+            {summaryText && (
+              <section className="reader-summary" aria-label="邮件摘要">
+                <h4>摘要</h4>
+                <p>{summaryText}</p>
+              </section>
             )}
 
             <section className="reader-attachments">

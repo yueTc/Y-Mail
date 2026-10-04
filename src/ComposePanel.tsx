@@ -12,6 +12,7 @@ import {
   api,
   describeError,
   type AccountInboxSummary,
+  type AiAuthorization,
   type ComposeAttachment,
   type ComposeDraft,
   type ComposeParticipant,
@@ -21,6 +22,7 @@ import {
   type OutboxKind,
   type Signature,
 } from "./api";
+import AiAuthorizationDialog from "./AiAuthorizationDialog";
 
 /** 一次发送最多调用几轮发送命令：1 次首发 + 2 次重试。 */
 export const MAX_SEND_ROUNDS = 3;
@@ -109,10 +111,12 @@ interface ComposePanelProps {
   onClose: () => void;
   /** 发送成功后的回调，用来刷新收件箱。 */
   onSent?: () => void;
+  /** 当前有没有启用的 AI 站点；没有时按钮显示「需启用」。 */
+  aiEnabled?: boolean;
 }
 
 /** 写信窗格。 */
-export default function ComposePanel({ request, accounts, onClose, onSent }: ComposePanelProps) {
+export default function ComposePanel({ request, accounts, onClose, onSent, aiEnabled = false }: ComposePanelProps) {
   const [accountId, setAccountId] = useState<number>();
   const [toText, setToText] = useState("");
   const [ccText, setCcText] = useState("");
@@ -131,6 +135,12 @@ export default function ComposePanel({ request, accounts, onClose, onSent }: Com
   const [busy, setBusy] = useState(false);
   const [statusText, setStatusText] = useState("");
   const [error, setError] = useState("");
+  const [aiAction, setAiAction] = useState<"polish" | "draft">();
+  const [aiInstruction, setAiInstruction] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [aiDowngraded, setAiDowngraded] = useState(false);
+  const [aiAuth, setAiAuth] = useState<AiAuthorization>();
 
   const sendGuard = useRef(false);
 
@@ -362,6 +372,69 @@ export default function ComposePanel({ request, accounts, onClose, onSent }: Com
     [runQueue],
   );
 
+  /** 打开一个 AI 动作：先只做预览，不发送正文。 */
+  const previewAi = useCallback(
+    async (action: "polish" | "draft") => {
+      if (aiBusy) return;
+      const source = action === "polish" ? bodyText.trim() : aiInstruction.trim();
+      if (source === "") {
+        setAiError(action === "polish" ? "请先写正文再润色" : "请先写一句起草要求");
+        return;
+      }
+      setAiBusy(true);
+      setAiError("");
+      setAiAction(action);
+      try {
+        const preview = await api.aiAuthorizationPreview(action, {
+          text: source,
+        });
+        if (preview.fromCache) {
+          const result =
+            action === "polish"
+              ? await api.polishText(source, "")
+              : await api.draftText(source, "");
+          if (action === "polish") {
+            setBodyText(result.text);
+          } else {
+            setBodyText(result.text);
+          }
+          setAiDowngraded(result.thinkingDowngraded);
+          setAiAction(undefined);
+          return;
+        }
+        setAiAuth(preview);
+      } catch (caught) {
+        setAiError(describeError(caught));
+        setAiAction(undefined);
+      } finally {
+        setAiBusy(false);
+      }
+    },
+    [aiBusy, aiInstruction, bodyText],
+  );
+
+  /** 用户确认后才真正调用模型；结果只写回纯文本正文框。 */
+  const confirmAi = useCallback(async () => {
+    if (!aiAuth || !aiAction) return;
+    const source = aiAction === "polish" ? bodyText.trim() : aiInstruction.trim();
+    setAiBusy(true);
+    setAiError("");
+    try {
+      const result =
+        aiAction === "polish"
+          ? await api.polishText(source, aiAuth.authorizationToken)
+          : await api.draftText(source, aiAuth.authorizationToken);
+      setBodyText(result.text);
+      setAiDowngraded(result.thinkingDowngraded);
+      setAiAuth(undefined);
+      setAiAction(undefined);
+    } catch (caught) {
+      setAiError(describeError(caught));
+    } finally {
+      setAiBusy(false);
+    }
+  }, [aiAction, aiAuth, aiInstruction, bodyText]);
+
   /** 保存签名。 */
   const handleSaveSignature = useCallback(async () => {
     if (!accountId) return;
@@ -400,6 +473,17 @@ export default function ComposePanel({ request, accounts, onClose, onSent }: Com
         </button>
       </header>
 
+      {aiAuth && aiAction && (
+        <AiAuthorizationDialog
+          preview={aiAuth}
+          busy={aiBusy}
+          onCancel={() => {
+            setAiAuth(undefined);
+            setAiAction(undefined);
+          }}
+          onConfirm={() => void confirmAi()}
+        />
+      )}
       {loading && <p className="hint">正在准备内容……</p>}
       {error && <p className="error">操作失败：{error}</p>}
 
@@ -456,6 +540,39 @@ export default function ComposePanel({ request, accounts, onClose, onSent }: Com
           <span>主题</span>
           <input aria-label="主题" value={subject} onChange={(event) => setSubject(event.target.value)} />
         </label>
+
+        <div className="compose-ai">
+          <div className="compose-ai-row">
+            <button
+              type="button"
+              disabled={!aiEnabled || aiBusy}
+              onClick={() => void previewAi("polish")}
+              title={aiEnabled ? "润色正文" : "需先在设置里启用 AI 站点"}
+            >
+              {aiBusy && aiAction === "polish" ? "润色中……" : aiEnabled ? "AI 润色" : "AI 润色（需启用）"}
+            </button>
+            <label>
+              起草要求
+              <input
+                aria-label="起草要求"
+                value={aiInstruction}
+                placeholder="例如：写一封礼貌的项目进度询问邮件"
+                onChange={(event) => setAiInstruction(event.target.value)}
+                disabled={!aiEnabled}
+              />
+            </label>
+            <button
+              type="button"
+              disabled={!aiEnabled || aiBusy}
+              onClick={() => void previewAi("draft")}
+              title={aiEnabled ? "按起草要求生成内容" : "需先在设置里启用 AI 站点"}
+            >
+              {aiBusy && aiAction === "draft" ? "起草中……" : aiEnabled ? "AI 起草" : "AI 起草（需启用）"}
+            </button>
+          </div>
+          {aiDowngraded && <p className="hint">该模型不支持所选思考程度，已按默认调用。</p>}
+          {aiError && <p className="error">AI 操作失败：{aiError}</p>}
+        </div>
 
         <label className="compose-field compose-body">
           <span>正文</span>

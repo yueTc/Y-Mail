@@ -4,9 +4,10 @@
 //! Wave 0 实现连接（WAL）与迁移机制；Wave 1 加入账号与代理表；
 //! Wave 2 加入文件夹、邮件与同步任务表；Wave 3 加入统一收件箱只读查询；
 //! Wave 4 加入正文缓存与附件下载记录；Wave 5 加入全文搜索、发件队列、
-//! 地址簿与签名。
+//! 地址簿与签名；Wave 7 加入 AI 站点、模型映射、缓存与审计。
 
 pub mod accounts;
+pub mod ai;
 pub mod compose;
 pub mod connection;
 pub mod error;
@@ -17,6 +18,10 @@ pub mod reading;
 pub mod search;
 pub mod sync;
 
+pub use ai::{
+    AiFunction, AiModelMapEntry, AiProviderKind, AiThinkingLevel, NewAiAudit, NewAiProvider, StoredAiAudit,
+    StoredAiCache, StoredAiProvider,
+};
 pub use compose::{
     ComposeSource, NewOutbox, OutboxKind, OutboxState, StoredContact, StoredOutbox, StoredSignature,
 };

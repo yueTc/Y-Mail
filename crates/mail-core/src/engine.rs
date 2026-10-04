@@ -113,6 +113,26 @@ pub enum EngineError {
     /// 找不到这次授权（已过期、已取消，或重启后丢失）。
     #[error("这次授权已过期或已取消，请重新发起授权")]
     AuthorizationNotFound,
+
+    /// AI 站点不存在。
+    #[error("AI 站点不存在（编号 {0}）")]
+    AiProviderNotFound(i64),
+
+    /// AI 与翻译默认关闭，没有启用的站点。
+    #[error("AI 功能还没开启：请到设置里添加并启用一个 AI 站点")]
+    AiDisabled,
+
+    /// 外发前必须用户点头。
+    #[error("按安全约定，这次外发需要你先确认目标（域名 / 模型 / 是否本地）")]
+    AiAuthorizationRequired,
+
+    /// AI 外发授权已过期、已用过，或与当前内容不匹配。
+    #[error("这次 AI 外发授权已失效，请重新确认目标后再试")]
+    AiAuthorizationInvalid,
+
+    /// AI 调用失败（已脱敏）。
+    #[error(transparent)]
+    Ai(#[from] mail_ai::AiError),
 }
 
 /// 引擎门面。
@@ -130,6 +150,8 @@ pub struct MailEngine {
     ///
     /// 回环端口要一直挂着等浏览器回调，所以先存在引擎里，等界面回来收口。
     pub(crate) oauth_pending: std::sync::Mutex<HashMap<String, crate::oauth::PendingAuthorization>>,
+    /// 已确认但还没真正外发的 AI 调用；键是一次性令牌。
+    pub(crate) ai_authorizations: std::sync::Mutex<HashMap<String, crate::ai::PendingAiAuthorization>>,
 }
 
 impl std::fmt::Debug for MailEngine {
@@ -196,6 +218,7 @@ impl MailEngine {
             secrets,
             sync,
             oauth_pending: std::sync::Mutex::new(HashMap::new()),
+            ai_authorizations: std::sync::Mutex::new(HashMap::new()),
         })
     }
 

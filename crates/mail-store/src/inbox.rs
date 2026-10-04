@@ -8,6 +8,8 @@
 //!
 //! 本模块只读，不做任何写入；写入口仍然在 `sync.rs` 等模块。
 
+use rusqlite::OptionalExtension;
+
 use crate::connection::Store;
 use crate::error::StoreError;
 
@@ -284,6 +286,20 @@ impl Store {
         Ok(count)
     }
 
+    /// 按主键取一封邮件（带上账号与文件夹展示字段）；不存在返回空值。
+    ///
+    /// 供线程摘要、翻译等 AI 编排读取主题、发件人与正文时使用；
+    /// 不在本方法里触碰正文缓存，正文由读信模块单独读取。
+    pub fn get_inbox_message(&self, message_id: i64) -> Result<Option<InboxMessage>, StoreError> {
+        let sql = format!(
+            "SELECT {INBOX_COLUMNS} FROM message m JOIN folder f ON f.id = m.folder_id JOIN account a ON a.id = m.account_id WHERE m.id = ?1"
+        );
+        self.conn()
+            .query_row(&sql, [message_id], row_to_message)
+            .optional()
+            .map_err(StoreError::from)
+    }
+
     /// 展开一条会话：取该账号该线程在收件箱范围内的全部邮件（新的在前）。
     pub fn list_thread_messages(
         &self,
@@ -508,6 +524,30 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].date_utc, "2026-10-04T12:00:00Z");
         assert_eq!(rows[1].date_utc, "2026-10-04T11:00:00Z");
+    }
+
+    #[test]
+    fn 按主键取一封邮件会带上账号展示字段() {
+        let store = migrated();
+        let a = account(&store, "a@example.com", "#123456");
+        let fa = inbox(&store, a);
+        store
+            .insert_messages(&[message(a, fa, 7, "t1", "<a7@x>", "2026-10-04T10:00:00Z", false)])
+            .expect("插入邮件");
+        let id = store
+            .list_inbox_messages(&InboxQuery::default())
+            .expect("查询")
+            .first()
+            .expect("存在")
+            .id;
+
+        let found = store.get_inbox_message(id).expect("按主键查").expect("存在");
+        assert_eq!(found.id, id);
+        assert_eq!(found.account_id, a);
+        assert_eq!(found.account_email, "a@example.com");
+        assert_eq!(found.account_color, "#123456");
+        assert_eq!(found.thread_key, "t1");
+        assert!(store.get_inbox_message(999_999).expect("查不存在").is_none());
     }
 
     #[test]

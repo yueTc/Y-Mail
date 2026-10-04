@@ -407,6 +407,87 @@ export interface Signature {
   enabled: boolean;
   updatedAt: string;
 }
+// ============================ AI 与翻译类型（Wave 7） ============================
+
+/** AI 站点类型：OpenAI 兼容、DeepL、本机 Ollama。 */
+export type AiProviderKind = "openai_compatible" | "deepl" | "ollama";
+
+/** 思考程度四档。 */
+export type AiThinkingLevel = "off" | "low" | "medium" | "high";
+
+/** 可以使用 AI 的功能。 */
+export type AiFunction = "translate" | "summary" | "polish" | "draft";
+
+/** 新建 / 修改 AI 站点时提交的配置；不包含密钥明文。 */
+export interface AiProviderDraft {
+  id?: number;
+  label: string;
+  kind: AiProviderKind;
+  baseUrl: string;
+  defaultModel: string;
+  models: string[];
+  thinkingLevel: AiThinkingLevel;
+  enabled: boolean;
+}
+
+/** 已保存的 AI 站点；只回 `hasKey`，不回密钥。 */
+export interface AiProvider extends AiProviderDraft {
+  id: number;
+  hasKey: boolean;
+}
+
+/** 功能级模型配置。 */
+export interface AiModelMap {
+  function: AiFunction;
+  providerId: number;
+  model: string;
+  thinkingLevel: AiThinkingLevel | null;
+  updatedAt: string;
+}
+
+/** 外发授权弹窗需要展示的目标信息。 */
+export interface AiAuthorization {
+  function: AiFunction;
+  providerId: number;
+  providerLabel: string;
+  host: string;
+  model: string;
+  local: boolean;
+  contentHash: string;
+  authorizationToken: string;
+  expiresInSeconds: number;
+  fromCache: boolean;
+}
+
+/** 摘要 / 润色 / 起草的纯文本结果。 */
+export interface AiTextOutcome {
+  text: string;
+  thinkingDowngraded: boolean;
+  fromCache: boolean;
+}
+
+/** 段落对齐的翻译结果；三种显示模式共用。 */
+export interface AiTranslation {
+  original: string[];
+  translated: string[];
+  thinkingDowngraded: boolean;
+  fromCache: boolean;
+}
+
+/** 一条 AI 调用审计；不含正文与密钥。 */
+export interface AiAudit {
+  id: number;
+  createdAt: string;
+  function: string;
+  providerId: number | null;
+  providerLabel: string;
+  model: string;
+  targetHost: string;
+  local: boolean;
+  outbound: boolean;
+  outcome: string;
+  detail: string;
+}
 // ============================ 错误 ============================
 
 /** 命令错误：对 Rust 侧 `CommandError` 的还原。 */
@@ -581,4 +662,76 @@ export const api = {
     call<Signature>("save_signature", { accountId, html, enabled }),
 
   sendOutbox: () => call<SendOutcome>("send_outbox"),
+
+  // ===== AI 与翻译（Wave 7） =====
+
+  listAiProviders: () => call<AiProvider[]>("list_ai_providers"),
+
+  saveAiProvider: (draft: AiProviderDraft, apiKey?: string) =>
+    call<AiProvider>(
+      "save_ai_provider",
+      apiKey === undefined ? { draft } : { draft, apiKey },
+    ),
+
+  deleteAiProvider: (id: number) => call<void>("delete_ai_provider", { id }),
+
+  testAiProvider: (kind: AiProviderKind, baseUrl: string, apiKey?: string) =>
+    call<string[]>(
+      "test_ai_provider",
+      apiKey === undefined ? { kind, baseUrl } : { kind, baseUrl, apiKey },
+    ),
+
+  refreshAiProviderModels: (id: number) =>
+    call<string[]>("refresh_ai_provider_models", { id }),
+
+  listAiModelMaps: () => call<AiModelMap[]>("list_ai_model_maps"),
+
+  setAiFeature: (
+    fn: AiFunction,
+    providerId: number,
+    model: string,
+    thinkingLevel?: AiThinkingLevel,
+  ) =>
+    call<void>(
+      "set_ai_feature",
+      thinkingLevel === undefined
+        ? { function: fn, providerId, model }
+        : { function: fn, providerId, model, thinkingLevel },
+    ),
+
+  clearAiFeature: (fn: AiFunction) => call<void>("clear_ai_feature", { function: fn }),
+
+  aiAuthorizationPreview: (
+    fn: AiFunction,
+    options: { messageId?: number; targetLanguage?: string; text?: string } = {},
+  ) =>
+    call<AiAuthorization>("ai_authorization_preview", {
+      function: fn,
+      messageId: options.messageId,
+      targetLanguage: options.targetLanguage ?? "",
+      text: options.text,
+    }),
+
+  translateMessage: (messageId: number, targetLanguage: string, authorizationToken: string) =>
+    call<AiTranslation>("translate_message", {
+      messageId,
+      targetLanguage,
+      authorizationToken,
+    }),
+
+  summarizeMessage: (messageId: number, authorizationToken: string) =>
+    call<AiTextOutcome>("summarize_message", { messageId, authorizationToken }),
+
+  polishText: (text: string, authorizationToken: string) =>
+    call<AiTextOutcome>("polish_text", { text, authorizationToken }),
+
+  draftText: (instruction: string, authorizationToken: string) =>
+    call<AiTextOutcome>("draft_text", { instruction, authorizationToken }),
+
+  listAiAudit: (limit?: number) =>
+    call<AiAudit[]>("list_ai_audit", limit === undefined ? {} : { limit }),
+
+  disableAllAi: () => call<number>("disable_all_ai"),
+
+  clearAiCache: () => call<number>("clear_ai_cache"),
 };

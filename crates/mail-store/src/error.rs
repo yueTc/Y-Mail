@@ -20,6 +20,10 @@ pub enum StoreError {
     #[error("数据库路径不合法：{0}")]
     InvalidPath(String),
 
+    /// 写入或读出的数据不符合约定（不会携带密钥本体）。
+    #[error("数据格式不合法：{0}")]
+    InvalidData(String),
+
     /// 迁移执行失败。
     #[error("迁移 v{version} 执行失败：{reason}")]
     Migration {

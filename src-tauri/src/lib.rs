@@ -65,6 +65,22 @@ pub fn run() {
             commands::get_signature,
             commands::save_signature,
             commands::send_outbox,
+            commands::list_ai_providers,
+            commands::save_ai_provider,
+            commands::delete_ai_provider,
+            commands::test_ai_provider,
+            commands::refresh_ai_provider_models,
+            commands::list_ai_model_maps,
+            commands::set_ai_feature,
+            commands::clear_ai_feature,
+            commands::ai_authorization_preview,
+            commands::translate_message,
+            commands::summarize_message,
+            commands::polish_text,
+            commands::draft_text,
+            commands::list_ai_audit,
+            commands::disable_all_ai,
+            commands::clear_ai_cache,
         ])
         .setup(|app| {
             // 1) 应用数据目录。Windows 下形如 %APPDATA%\com.emmaster.desktop。
