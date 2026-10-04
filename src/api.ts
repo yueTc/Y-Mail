@@ -274,6 +274,17 @@ export interface MessageAttachment {
 }
 
 /** 读信窗格要展示的一封邮件。 */
+export type InlineImageState = "available" | "not-downloaded" | "too-large" | "unsupported";
+
+export interface InlineImage {
+  contentId: string;
+  attachmentId: number | null;
+  mimeType: string;
+  size: number;
+  state: InlineImageState;
+  dataUrl: string | null;
+}
+
 export interface MessageBody {
   messageId: number;
   textPlain: string | null;
@@ -281,6 +292,8 @@ export interface MessageBody {
   html: string | null;
   /** 被拦下的远程图片数量。 */
   blockedRemoteImages: number;
+  /** 正文可用的内嵌图片（cid → 本地图片）；没缓存的不含图片字节。旧载荷可能缺省。 */
+  inlineImages?: InlineImage[];
   attachments: MessageAttachment[];
 }
 // ============================ 搜索与写信类型（Wave 5） ============================

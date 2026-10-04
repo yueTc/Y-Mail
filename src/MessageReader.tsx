@@ -14,10 +14,12 @@ import {
   type AiAuthorization,
   type AiTranslation,
   type InboxMessage,
+  type InlineImage,
   type MessageAttachment,
   type MessageBody,
 } from "./api";
 import AiAuthorizationDialog from "./AiAuthorizationDialog";
+import { applyInlineImages, MAX_INLINE_IMAGE_BYTES } from "./inlineImages";
 
 /** 深色模式偏好；三档存本地，只记界面偏好，不涉及任何敏感信息。 */
 export type ReaderTheme = "auto" | "light" | "dark";
@@ -132,6 +134,7 @@ export function buildReaderDocument(
     "table{max-width:100%;border-collapse:collapse;}",
     "pre{white-space:pre-wrap;}",
     "blockquote{margin:8px 0;padding-left:10px;border-left:3px solid rgba(128,128,128,0.5);}",
+    "span.em-inline-placeholder{display:inline-block;padding:2px 6px;border:1px dashed rgba(128,128,128,0.6);border-radius:4px;font-size:12px;line-height:1.5;opacity:0.85;}",
     "</style>",
     "</head>",
     `<body>${contentHtml}</body>`,
@@ -194,6 +197,8 @@ export default function MessageReader({ message, aiEnabled = false }: MessageRea
   const [systemDark, setSystemDark] = useState(false);
   const [downloading, setDownloading] = useState<ReadonlySet<number>>(new Set());
   const [downloadedPaths, setDownloadedPaths] = useState<Record<number, string>>({});
+  const [inlineBusy, setInlineBusy] = useState<ReadonlySet<number>>(new Set());
+  const [reloadKey, setReloadKey] = useState(0);
   const [targetLanguage, setTargetLanguage] = useState("zh-CN");
   const [translationMode, setTranslationMode] = useState<TranslationMode>("side_by_side");
   const [translation, setTranslation] = useState<AiTranslation>();
@@ -246,7 +251,12 @@ export default function MessageReader({ message, aiEnabled = false }: MessageRea
     return () => {
       cancelled = true;
     };
-  }, [messageId, allowRemote]);
+  }, [messageId, allowRemote, reloadKey]);
+
+  /** 切邮件时清掉上一封的内嵌图加载状态，避免串封。 */
+  useEffect(() => {
+    setInlineBusy(new Set());
+  }, [messageId]);
 
   /** 切邮件时清掉上一封的 AI 结果，避免串封。 */
   useEffect(() => {
@@ -288,12 +298,36 @@ export default function MessageReader({ message, aiEnabled = false }: MessageRea
             }
           : old,
       );
+      if (attachment.isInline) setReloadKey((value) => value + 1);
     } catch (caught) {
       setActionError(describeError(caught));
     } finally {
       setDownloading((old) => {
         const next = new Set(old);
         next.delete(attachment.id);
+        return next;
+      });
+    }
+  }, []);
+
+  /**
+   * 「点一下加载」内嵌图片：复用既有附件下载命令，下载成功后重新取一次正文。
+   *
+   * 只有用户点击才会联网；渲染正文本身绝不触发下载。
+   */
+  const loadInlineImage = useCallback(async (image: InlineImage) => {
+    if (image.attachmentId === null || image.state !== "not-downloaded") return;
+    setInlineBusy((old) => new Set(old).add(image.attachmentId as number));
+    setActionError(undefined);
+    try {
+      await api.downloadAttachment(image.attachmentId);
+      setReloadKey((value) => value + 1);
+    } catch (caught) {
+      setActionError(describeError(caught));
+    } finally {
+      setInlineBusy((old) => {
+        const next = new Set(old);
+        if (image.attachmentId !== null) next.delete(image.attachmentId);
         return next;
       });
     }
@@ -381,17 +415,23 @@ export default function MessageReader({ message, aiEnabled = false }: MessageRea
     }
   }, [messageId, summaryAuth]);
 
-  const contentHtml = useMemo(() => {
+  const rawContentHtml = useMemo(() => {
     if (!body) return "";
     if (body.html) return body.html;
     if (body.textPlain) return `<pre>${escapeHtml(body.textPlain)}</pre>`;
     return "";
   }, [body]);
 
+  /** 把正文里的 cid 引用换成受控 data URL 或静态占位；缺失的图不进 iframe。 */
+  const inlineApplication = useMemo(
+    () => applyInlineImages(rawContentHtml, body?.inlineImages ?? []),
+    [rawContentHtml, body?.inlineImages],
+  );
+
   const document_ = useMemo(() => {
-    if (!contentHtml) return "";
-    return buildReaderDocument(contentHtml, { allowRemoteImages: allowRemote, dark });
-  }, [contentHtml, allowRemote, dark]);
+    if (!inlineApplication.html) return "";
+    return buildReaderDocument(inlineApplication.html, { allowRemoteImages: allowRemote, dark });
+  }, [inlineApplication.html, allowRemote, dark]);
 
   if (!message) {
     return (
@@ -543,6 +583,47 @@ export default function MessageReader({ message, aiEnabled = false }: MessageRea
             )}
             {blocked > 0 && allowRemote && (
               <p className="hint">本封已放行远程图片，关闭后自动恢复默认拦截。</p>
+            )}
+
+            {(inlineApplication.pending.length > 0 || inlineApplication.rejected > 0) && (
+              <section className="reader-inline-images" aria-label="内嵌图片">
+                {inlineApplication.pending.length > 0 && (
+                  <>
+                    <p className="hint">
+                      有 {inlineApplication.pending.length} 张内嵌图片还没下载。渲染时不会联网，点「点一下加载」才会去邮箱服务器取。
+                    </p>
+                    <ul className="reader-inline-list">
+                      {inlineApplication.pending.map((image) => {
+                        const attachment = body?.attachments.find(
+                          (item) => item.id === image.attachmentId,
+                        );
+                        const busy = image.attachmentId !== null && inlineBusy.has(image.attachmentId);
+                        return (
+                          <li key={image.contentId}>
+                            <span className="reader-inline-name">
+                              {attachment ? attachmentLabel(attachment) : image.contentId}
+                            </span>
+                            <button
+                              type="button"
+                              className="reader-inline-load"
+                              disabled={busy}
+                              onClick={() => void loadInlineImage(image)}
+                            >
+                              {busy ? "加载中……" : "点一下加载"}
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </>
+                )}
+                {inlineApplication.rejected > 0 && (
+                  <p className="hint">
+                    还有 {inlineApplication.rejected} 张内嵌图片未显示（缺失、类型不支持或超过{" "}
+                    {formatAttachmentSize(MAX_INLINE_IMAGE_BYTES)}）。
+                  </p>
+                )}
+              </section>
             )}
 
             {translation && translationMode !== "side_by_side" ? (

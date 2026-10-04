@@ -9,6 +9,7 @@ use std::collections::HashSet;
 
 use mail_parser::{MessageParser, MimeHeaders, PartType};
 
+use crate::inline::normalize_content_id;
 use crate::sanitize::{sanitize_html, REMOTE_SRC_ATTRIBUTE};
 
 /// 解析一封邮件时接受的原文上限（32 MiB，与 IMAP 层一致）。
@@ -148,11 +149,7 @@ fn collect_attachments<'a>(message: &'a mail_parser::Message<'a>) -> Vec<ParsedA
                 None => content_type.ctype().to_string(),
             })
             .unwrap_or_default();
-        let content_id = part
-            .content_id()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
+        let content_id = part.content_id().and_then(normalize_content_id);
         out.push(ParsedAttachment {
             part_index: index,
             filename: part.attachment_name().unwrap_or_default().trim().to_string(),

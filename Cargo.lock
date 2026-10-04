@@ -2189,6 +2189,7 @@ name = "mail-mime"
 version = "0.1.0"
 dependencies = [
  "ammonia",
+ "base64 0.22.1",
  "mail-domain",
  "mail-parser",
  "thiserror 2.0.21",

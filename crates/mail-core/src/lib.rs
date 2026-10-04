@@ -34,7 +34,7 @@ pub use mcp::{
     MCP_THREAD_MAX_LIMIT, MCP_UNTRUSTED_NOTICE, MCP_WRITE_TOOLS,
 };
 pub use oauth::{OAuthAuthorization, OAuthOutcome, OAuthStatus};
-pub use reading::MessageBodyView;
+pub use reading::{InlineImageState, InlineImageView, MessageBodyView};
 pub use search::DeepSearchPage;
 
 // 存储层的收件箱类型在这里重新导出，外壳无需直接依赖 mail-store。

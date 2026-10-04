@@ -15,14 +15,59 @@ use mail_domain::auth::AuthMaterial;
 use mail_domain::AccountId;
 use mail_imap::{ClientConfig, ImapClient};
 use mail_mime::{
-    attachment_content, parse_message, restore_remote_images, ParsedAttachment, REMOTE_SRC_ATTRIBUTE,
+    attachment_content, inline_image_data_url, is_renderable_inline_image_mime, normalize_content_id,
+    parse_message, restore_remote_images, ParsedAttachment, MAX_INLINE_IMAGE_BYTES, REMOTE_SRC_ATTRIBUTE,
 };
 use mail_store::{AttachmentState, BodyState, MessageLocation, NewAttachment, Store, StoredAttachment};
 
 use crate::engine::{EngineError, MailEngine};
 use crate::proxies::resolve_route_with;
 
-/// 读信窗格要展示的一封邮件：正文、被拦图片数量与附件清单。
+/// 内嵌图片（cid:）在本地是否可用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InlineImageState {
+    /// 本地已有可用字节，视图里带 data URL。
+    Available,
+    /// 本地还没下载；前端显示占位与「点一下加载」，由用户点击后走既有附件下载。
+    NotDownloaded,
+    /// 单张超过内联上限，拒绝渲染。
+    TooLarge,
+    /// 类型不在内联白名单里（例如 SVG 或非图片），拒绝渲染。
+    Unsupported,
+}
+
+impl InlineImageState {
+    /// 存库 / 过接口用的稳定字符串。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::NotDownloaded => "not-downloaded",
+            Self::TooLarge => "too-large",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+/// 正文里一个 cid 引用对应的内嵌图片。
+///
+/// 只描述本地已有或缺失的状态，绝不在这里联网抓图。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineImageView {
+    /// 规范化后的 Content-ID。
+    pub content_id: String,
+    /// 对应的附件编号；有记录时前端可复用既有下载按钮。
+    pub attachment_id: Option<i64>,
+    /// MIME 类型。
+    pub mime_type: String,
+    /// 字节数。
+    pub size: u64,
+    /// 本地可用状态。
+    pub state: InlineImageState,
+    /// 本地可用时的受控 data URL；其余状态为 None。
+    pub data_url: Option<String>,
+}
+
+/// 读信窗格要展示的一封邮件：正文、被拦图片数量、内嵌图片与附件清单。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageBodyView {
     /// 邮件主键。
@@ -33,6 +78,8 @@ pub struct MessageBodyView {
     pub html: Option<String>,
     /// 被拦下的远程图片数量（按清洗结果里的占位属性统计）。
     pub blocked_remote_images: usize,
+    /// 正文里可能用到的内嵌图片（只含本地状态，不含远程探测）。
+    pub inline_images: Vec<InlineImageView>,
     /// 附件清单（含本地保存状态）。
     pub attachments: Vec<StoredAttachment>,
 }
@@ -173,11 +220,13 @@ impl MailEngine {
             (Some(value), true) => Some(restore_remote_images(&value)),
             (other, _) => other,
         };
+        let inline_images = attachments.iter().filter_map(inline_image_view).collect();
         MessageBodyView {
             message_id,
             text_plain,
             html,
             blocked_remote_images,
+            inline_images,
             attachments,
         }
     }
@@ -275,6 +324,53 @@ impl MailEngine {
     }
 }
 
+/// 把一条附件记录转成内嵌图片视图。
+///
+/// 只读本地已下载的文件；没下载、文件缺失或读不出来都返回 NotDownloaded，
+/// 由用户点击后走既有附件下载路径，绝不在渲染时联网。
+fn inline_image_view(attachment: &StoredAttachment) -> Option<InlineImageView> {
+    let content_id = attachment.content_id.as_deref().and_then(normalize_content_id)?;
+    let mime_type = attachment.mime_type.trim().to_string();
+    let view = |state: InlineImageState, data_url: Option<String>| InlineImageView {
+        content_id: content_id.clone(),
+        attachment_id: Some(attachment.id),
+        mime_type: mime_type.clone(),
+        size: attachment.size,
+        state,
+        data_url,
+    };
+
+    if !is_renderable_inline_image_mime(&mime_type) {
+        return Some(view(InlineImageState::Unsupported, None));
+    }
+    if attachment.size > MAX_INLINE_IMAGE_BYTES as u64 {
+        return Some(view(InlineImageState::TooLarge, None));
+    }
+    if attachment.state != AttachmentState::Downloaded {
+        return Some(view(InlineImageState::NotDownloaded, None));
+    }
+    let Some(path) = attachment.local_path.as_deref() else {
+        return Some(view(InlineImageState::NotDownloaded, None));
+    };
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Some(view(InlineImageState::NotDownloaded, None));
+    };
+    if !metadata.is_file() {
+        return Some(view(InlineImageState::NotDownloaded, None));
+    }
+    if metadata.len() > MAX_INLINE_IMAGE_BYTES as u64 {
+        return Some(view(InlineImageState::TooLarge, None));
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return Some(view(InlineImageState::NotDownloaded, None));
+    };
+    match inline_image_data_url(&mime_type, &bytes) {
+        Ok(data_url) => Some(view(InlineImageState::Available, Some(data_url))),
+        Err(mail_mime::InlineImageError::TooLarge { .. }) => Some(view(InlineImageState::TooLarge, None)),
+        Err(_) => Some(view(InlineImageState::Unsupported, None)),
+    }
+}
+
 /// 解析出的附件元数据转成准备写库的形状。
 fn new_attachment(parsed: &ParsedAttachment) -> NewAttachment {
     NewAttachment {
@@ -325,9 +421,11 @@ fn lock_store(store: &Mutex<Store>) -> MutexGuard<'_, Store> {
 mod tests {
     use std::sync::Arc;
 
+    use mail_store::{AttachmentState, StoredAttachment};
+
     use crate::secrets::MemorySecretStore;
 
-    use super::{sanitize_filename, MailEngine};
+    use super::{inline_image_view, sanitize_filename, InlineImageState, MailEngine};
 
     #[test]
     fn 文件名消毒能挡住路径穿越() {
@@ -349,5 +447,182 @@ mod tests {
 
         let err = engine.download_attachment(999).await.expect_err("应失败");
         assert!(err.to_string().contains("999"), "错误应含编号：{err}");
+    }
+
+    /// 造一条附件记录，方便测内嵌图映射。
+    fn stored(
+        id: i64,
+        mime: &str,
+        size: u64,
+        content_id: Option<&str>,
+        local_path: Option<&str>,
+        state: AttachmentState,
+    ) -> StoredAttachment {
+        StoredAttachment {
+            id,
+            message_id: 42,
+            part_index: 2,
+            filename: String::new(),
+            mime_type: mime.to_string(),
+            size,
+            content_id: content_id.map(str::to_string),
+            is_inline: true,
+            local_path: local_path.map(str::to_string),
+            state,
+        }
+    }
+
+    /// 一段最小 PNG 文件头，够嗅探识别。
+    const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
+
+    #[test]
+    fn 已下载的内嵌图会给出受控data_url() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let path = dir.path().join("图.png");
+        std::fs::write(&path, PNG).expect("写图片");
+        let attachment = stored(
+            7,
+            "image/png",
+            PNG.len() as u64,
+            Some("<Img-1@Example.com>"),
+            Some(&path.to_string_lossy()),
+            AttachmentState::Downloaded,
+        );
+
+        let view = inline_image_view(&attachment).expect("应有内嵌图视图");
+        assert_eq!(view.content_id, "img-1@example.com");
+        assert_eq!(view.attachment_id, Some(7));
+        assert_eq!(view.state, InlineImageState::Available);
+        assert!(view
+            .data_url
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn 没缓存的内嵌图只标未下载不给data_url() {
+        let attachment = stored(
+            8,
+            "image/png",
+            12,
+            Some("img-2@example.com"),
+            None,
+            AttachmentState::Pending,
+        );
+        let view = inline_image_view(&attachment).expect("应有视图");
+        assert_eq!(view.state, InlineImageState::NotDownloaded);
+        assert!(view.data_url.is_none());
+    }
+
+    #[test]
+    fn 记录说已下载但文件不在也只标未下载() {
+        let attachment = stored(
+            9,
+            "image/png",
+            12,
+            Some("img-3@example.com"),
+            Some("D:/not-there/x.png"),
+            AttachmentState::Downloaded,
+        );
+        let view = inline_image_view(&attachment).expect("应有视图");
+        assert_eq!(view.state, InlineImageState::NotDownloaded);
+        assert!(view.data_url.is_none());
+    }
+
+    #[test]
+    fn 非图片类型与svg不会被内联渲染() {
+        for mime in ["application/pdf", "image/svg+xml", "text/html"] {
+            let attachment = stored(
+                10,
+                mime,
+                100,
+                Some("part@example.com"),
+                None,
+                AttachmentState::Pending,
+            );
+            let view = inline_image_view(&attachment).expect("应有视图");
+            assert_eq!(view.state, InlineImageState::Unsupported, "{mime} 不应内联");
+            assert!(view.data_url.is_none());
+        }
+    }
+
+    #[test]
+    fn 超上限的内嵌图被拒() {
+        let attachment = stored(
+            11,
+            "image/png",
+            super::MAX_INLINE_IMAGE_BYTES as u64 + 1,
+            Some("big@example.com"),
+            None,
+            AttachmentState::Pending,
+        );
+        let view = inline_image_view(&attachment).expect("应有视图");
+        assert_eq!(view.state, InlineImageState::TooLarge);
+        assert!(view.data_url.is_none());
+    }
+
+    #[test]
+    fn 不安全的cid不会进入内嵌图映射() {
+        for cid in ["../../etc/passwd", "a/../b@x", "bad\"id"] {
+            let attachment = stored(12, "image/png", 12, Some(cid), None, AttachmentState::Pending);
+            assert!(inline_image_view(&attachment).is_none(), "{cid} 不应有映射");
+        }
+    }
+
+    #[test]
+    fn 解析结果里的cid能与正文引用对应上() {
+        let raw = concat!(
+            "From: a@example.com\r\n",
+            "Subject: 内嵌图\r\n",
+            "MIME-Version: 1.0\r\n",
+            "Content-Type: multipart/related; boundary=\"B\"\r\n",
+            "\r\n",
+            "--B\r\n",
+            "Content-Type: text/html; charset=utf-8\r\n",
+            "\r\n",
+            "<p>看图</p><img src=\"cid:Inline-1@Example.com\">",
+            "<img src=\"https://tracker.example/1.gif\">\r\n",
+            "--B\r\n",
+            "Content-Type: image/png\r\n",
+            "Content-Disposition: inline\r\n",
+            "Content-ID: <Inline-1@Example.com>\r\n",
+            "Content-Transfer-Encoding: base64\r\n",
+            "\r\n",
+            "iVBORw0KGgo=\r\n",
+            "--B--\r\n",
+        );
+        let parsed = mail_mime::parse_message(raw.as_bytes()).expect("应解析成功");
+        assert_eq!(parsed.blocked_remote_images, 1, "远程图仍要被拦");
+        let html = parsed.html_sanitized.as_deref().expect("应有 HTML");
+        let lower = html.to_ascii_lowercase();
+        assert!(
+            lower.contains("cid:inline-1@example.com"),
+            "cid 引用应保留：{html}"
+        );
+        assert!(
+            !html.contains("<img src=\"http"),
+            "远程图片不该还原成 src：{html}"
+        );
+
+        let image = parsed
+            .attachments
+            .iter()
+            .find(|item| item.content_id.is_some())
+            .expect("应有带 cid 的图片");
+        assert_eq!(image.content_id.as_deref(), Some("inline-1@example.com"));
+        assert_eq!(image.mime_type, "image/png");
+
+        let stored = stored(
+            13,
+            &image.mime_type,
+            image.size,
+            image.content_id.as_deref(),
+            None,
+            AttachmentState::Pending,
+        );
+        let view = inline_image_view(&stored).expect("应有视图");
+        assert_eq!(view.content_id, "inline-1@example.com");
+        assert_eq!(view.state, InlineImageState::NotDownloaded);
     }
 }

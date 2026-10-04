@@ -1319,6 +1319,24 @@ impl AttachmentDto {
     }
 }
 
+/// 正文里一个 cid 引用对应的内嵌图片（只反映本地状态，不联网）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InlineImageDto {
+    /// 规范化后的 Content-ID。
+    pub content_id: String,
+    /// 对应附件编号；有记录时前端复用既有下载按钮。
+    pub attachment_id: Option<i64>,
+    /// MIME 类型。
+    pub mime_type: String,
+    /// 字节数。
+    pub size: u64,
+    /// available / not-downloaded / too-large / unsupported。
+    pub state: String,
+    /// 本地可用时的受控 data URL；其余状态为 None。
+    pub data_url: Option<String>,
+}
+
 /// 读信窗格要展示的一封邮件。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1331,6 +1349,8 @@ pub struct MessageBodyDto {
     pub html: Option<String>,
     /// 被拦下的远程图片数量。
     pub blocked_remote_images: usize,
+    /// 正文可用的内嵌图片（cid → 本地图片）；没缓存的不含图片字节。
+    pub inline_images: Vec<InlineImageDto>,
     /// 附件清单。
     pub attachments: Vec<AttachmentDto>,
 }
@@ -1357,6 +1377,18 @@ pub async fn get_message_body(
         text_plain: view.text_plain,
         html: view.html,
         blocked_remote_images: view.blocked_remote_images,
+        inline_images: view
+            .inline_images
+            .iter()
+            .map(|image| InlineImageDto {
+                content_id: image.content_id.clone(),
+                attachment_id: image.attachment_id,
+                mime_type: image.mime_type.clone(),
+                size: image.size,
+                state: image.state.as_str().to_string(),
+                data_url: image.data_url.clone(),
+            })
+            .collect(),
         attachments: view
             .attachments
             .iter()
