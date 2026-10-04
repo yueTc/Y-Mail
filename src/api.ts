@@ -734,7 +734,6 @@ export const api = {
   disableAllAi: () => call<number>("disable_all_ai"),
 
   clearAiCache: () => call<number>("clear_ai_cache"),
-};
   // ===== MCP 外部接入（Wave 8）=====
 
   mcpStatus: () => call<McpStatus>("mcp_status"),
