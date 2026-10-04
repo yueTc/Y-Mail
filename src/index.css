@@ -752,3 +752,248 @@ select:focus {
   flex: none;
   font-size: 0.8rem;
 }
+/* ===== 搜索与写信（Wave 5） ===== */
+
+.inbox-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.inbox-search input {
+  flex: 1 1 260px;
+  min-width: 180px;
+}
+
+.inbox-search .hint {
+  margin: 0;
+  flex-basis: 100%;
+  font-size: 0.82rem;
+  opacity: 0.75;
+}
+
+.inbox-search-note {
+  margin: 8px 14px 0;
+}
+
+.inbox-row-snippet {
+  margin-top: 2px;
+  font-size: 0.85rem;
+  opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-row-snippet mark {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.inbox-account-chip {
+  font-size: 0.75rem;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
+.compose-pane {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+  gap: 10px;
+}
+
+.compose-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.compose-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.compose-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.compose-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.compose-field > span {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.compose-field input,
+.compose-field select,
+.compose-field textarea {
+  width: 100%;
+}
+
+.compose-body textarea {
+  resize: vertical;
+  font-family: inherit;
+}
+
+.compose-suggestions {
+  list-style: none;
+  margin: -4px 0 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field-bg);
+}
+
+.compose-suggestions button {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+}
+
+.compose-suggestion-addr {
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.compose-signature {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+
+.compose-signature textarea {
+  width: 100%;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.compose-signature button {
+  align-self: flex-start;
+}
+
+.compose-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.compose-attachment-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.compose-attachment-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.compose-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.compose-status {
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.compose-outbox {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.compose-outbox h4 {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+}
+
+.compose-outbox ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.compose-outbox-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.88rem;
+}
+
+.compose-outbox-item.state-failed {
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+}
+
+.compose-outbox-subject {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compose-outbox-state {
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
+.compose-outbox-error {
+  flex-basis: 100%;
+  color: var(--danger);
+  font-size: 0.82rem;
+}
+
+@media (max-width: 900px) {
+  .inbox-reader {
+    display: block;
+    grid-column: 1 / -1;
+  }
+}

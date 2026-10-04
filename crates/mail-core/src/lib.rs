@@ -7,23 +7,28 @@
 
 pub mod accounts;
 pub mod checks;
+pub mod compose;
 pub mod engine;
 pub mod inbox;
 pub mod paths;
 pub mod proxies;
 pub mod reading;
+pub mod search;
 pub mod secrets;
 pub mod sync;
 
 pub use checks::ConnectionReport;
+pub use compose::{ComposeAttachment, ComposeParticipant, DraftSeed, OutboxItem, SendOutcome};
 pub use engine::{EngineError, EngineInit, MailEngine, KEYRING_SERVICE};
 pub use inbox::{InboxMessagePage, InboxThreadPage};
 pub use reading::MessageBodyView;
+pub use search::DeepSearchPage;
 
 // 存储层的收件箱类型在这里重新导出，外壳无需直接依赖 mail-store。
 pub use mail_store::{
     AccountInboxSummary, AttachmentState, BodyState, InboxFolder, InboxMessage, InboxQuery, InboxThread,
-    MessageLocation, StoredAttachment,
+    MessageLocation, NewOutbox, OutboxKind, OutboxState, SearchHit, SearchPage, SearchQuery, SnippetSegment,
+    StoredAttachment, StoredContact, StoredOutbox, StoredSignature,
 };
 pub use paths::SqlitePaths;
 pub use secrets::{KeyringSecretStore, MemorySecretStore, SecretStore, SecretStoreError};

@@ -1,7 +1,8 @@
-//! 统一收件箱面板（Wave 3）。
+//! 统一收件箱面板（Wave 3 起，Wave 5 加搜索与写信入口）。
 //!
-//! 三栏骨架：左栏账号 / 文件夹，中栏虚拟滚动列表，右栏读信窗格。
-//! 数据全部来自外壳的只读命令；这里不接触凭据，正文交给独立的读信组件渲染。
+//! 三栏骨架：左栏账号 / 文件夹，中栏列表（含搜索结果），右栏读信或写信窗格。
+//! 数据都来自外壳的只读命令；这里不接触凭据，正文交给独立的读信组件渲染。
+//! 正文与搜索片段一律当普通文本处理，绝不注入 HTML。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -15,17 +16,25 @@ import {
   type InboxQuery,
   type InboxSummary,
   type InboxThread,
+  type SearchHit,
+  type SnippetSegment,
 } from "./api";
+import ComposePanel, { type ComposeRequest } from "./ComposePanel";
 import MessageReader from "./MessageReader";
 
 /** 每页条数；外壳上限是 500。 */
 const PAGE_SIZE = 200;
 
-/** 列表里的一行：线程、平铺邮件或展开出来的子邮件。 */
+/** 搜索框下方的语法提示。 */
+export const SEARCH_SYNTAX_HINT =
+  "支持 from: 发件人、has:attachment、is:unread、before:2026-01-01";
+
+/** 列表里的一行：线程、平铺邮件、展开出来的子邮件，或一条搜索命中。 */
 export type InboxRow =
   | { kind: "thread"; key: string; thread: InboxThread }
   | { kind: "message"; key: string; message: InboxMessage }
-  | { kind: "thread-message"; key: string; message: InboxMessage };
+  | { kind: "thread-message"; key: string; message: InboxMessage }
+  | { kind: "search"; key: string; hit: SearchHit };
 
 /** 文件夹归类的中文名。 */
 const FOLDER_KIND_LABEL: Record<string, string> = {
@@ -94,9 +103,29 @@ export function flattenInboxRows(
   return rows;
 }
 
+/** 把一批搜索命中铺平成虚拟滚动的行。 */
+export function searchRows(hits: SearchHit[]): InboxRow[] {
+  return hits.map((hit) => ({ kind: "search" as const, key: `s-${hit.message.id}`, hit }));
+}
+
 /** 列表行的发件人文本。 */
 function senderText(message: InboxMessage): string {
   return message.fromName.trim() !== "" ? message.fromName : message.fromAddr;
+}
+
+/** 把搜索片段渲染成纯文本；命中处用 mark 标出来，其余原样，绝不注入 HTML。 */
+export function SnippetText({ segments }: { segments: SnippetSegment[] }) {
+  return (
+    <span className="inbox-snippet">
+      {segments.map((segment, index) =>
+        segment.highlighted ? (
+          <mark key={index}>{segment.text}</mark>
+        ) : (
+          <span key={index}>{segment.text}</span>
+        ),
+      )}
+    </span>
+  );
 }
 
 /** 一行邮件（平铺行、子邮件行共用）。 */
@@ -137,6 +166,48 @@ function MessageRow({
         {child && (
           <div className="inbox-row-sub">
             来自 {message.accountName || message.accountEmail}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 一条搜索结果行：邮件摘要加高亮片段。 */
+function SearchResultRow({
+  hit,
+  selected,
+  onOpen,
+}: {
+  hit: SearchHit;
+  selected?: boolean;
+  onOpen: () => void;
+}) {
+  const message = hit.message;
+  const className = ["inbox-row", selected ? "inbox-row-selected" : ""].filter(Boolean).join(" ");
+  return (
+    <div
+      className={className}
+      data-read={message.isRead ? "true" : "false"}
+      onClick={onOpen}
+      role="button"
+    >
+      <span className="dot" style={{ background: message.accountColor || "#888" }} />
+      <div className="inbox-row-main">
+        <div className="inbox-row-top">
+          <span className="inbox-row-sender">{senderText(message)}</span>
+          <span className="inbox-row-time">{formatListTime(message.dateUtc)}</span>
+        </div>
+        <div className="inbox-row-bottom">
+          <span className="inbox-row-subject">{message.subject || "（无主题）"}</span>
+          <span className="inbox-row-marks">
+            {message.hasAttachments && <span title="有附件">📎</span>}
+            <span className="inbox-account-chip">{message.accountName || message.accountEmail}</span>
+          </span>
+        </div>
+        {hit.snippet.length > 0 && (
+          <div className="inbox-row-snippet">
+            <SnippetText segments={hit.snippet} />
           </div>
         )}
       </div>
@@ -206,6 +277,18 @@ export default function InboxPanel() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [children, setChildren] = useState<Map<string, InboxMessage[]>>(new Map());
   const [selectedMessage, setSelectedMessage] = useState<InboxMessage>();
+
+  // 搜索相关状态：输入值、已提交的查询、命中结果与深拉提示。
+  const [searchInput, setSearchInput] = useState("");
+  const [searchRaw, setSearchRaw] = useState("");
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string>();
+  const [searchNote, setSearchNote] = useState("");
+
+  // 写信窗格的打开请求；为空表示当前在收件箱。
+  const [composeRequest, setComposeRequest] = useState<ComposeRequest>();
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -299,22 +382,77 @@ export default function InboxPanel() {
     void refreshSidebar();
   }, [refreshSidebar]);
 
+  /** 搜索：走本地全文检索；deep 让外壳先联网补一批未同步的历史。 */
+  const runSearch = useCallback(async () => {
+    const raw = searchInput.trim();
+    if (raw === "") {
+      setSearchRaw("");
+      setHits([]);
+      setSearchTotal(0);
+      setSearchNote("");
+      setSearchError(undefined);
+      return;
+    }
+    setSearching(true);
+    setSearchError(undefined);
+    try {
+      const page = await api.searchMessages({
+        raw,
+        ...(selectedAccount === undefined ? {} : { accountId: selectedAccount }),
+        limit: PAGE_SIZE,
+        deep: true,
+      });
+      setSearchRaw(raw);
+      setHits(page.items);
+      setSearchTotal(page.total);
+      setSearchNote(
+        page.deepSynced
+          ? "已联网补拉一批历史"
+          : page.deepError
+            ? `补拉历史失败：${page.deepError}`
+            : "",
+      );
+    } catch (caught) {
+      setSearchError(describeError(caught));
+    } finally {
+      setSearching(false);
+    }
+  }, [searchInput, selectedAccount]);
+
+  /** 退出搜索，回到普通收件箱列表。 */
+  const clearSearch = useCallback(() => {
+    setSearchInput("");
+    setSearchRaw("");
+    setHits([]);
+    setSearchTotal(0);
+    setSearchNote("");
+    setSearchError(undefined);
+  }, []);
+
+  const searchMode = searchRaw !== "";
+
   const rows = useMemo(
-    () => flattenInboxRows(threads, messages, threadMode, expanded, children),
-    [threads, messages, threadMode, expanded, children],
+    () => (searchMode ? searchRows(hits) : flattenInboxRows(threads, messages, threadMode, expanded, children)),
+    [searchMode, hits, threads, messages, threadMode, expanded, children],
   );
 
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: (index) => (rows[index]?.kind === "thread-message" ? 56 : 68),
+    estimateSize: (index) => {
+      const row = rows[index];
+      if (row?.kind === "thread-message") return 56;
+      if (row?.kind === "search") return 84;
+      return 68;
+    },
     overscan: 8,
   });
 
   const virtualItems = virtualizer.getVirtualItems();
 
-  /** 滚到接近底部就补下一页。 */
+  /** 滚到接近底部就补下一页；搜索模式下结果已经取全，不再补。 */
   useEffect(() => {
+    if (searchMode) return;
     const last = virtualItems[virtualItems.length - 1];
     if (!last) return;
     if (loading) return;
@@ -322,7 +460,7 @@ export default function InboxPanel() {
     if (last.index < rows.length - 5) return;
     void load(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [virtualItems, loading, currentCount, total, rows.length]);
+  }, [virtualItems, loading, currentCount, total, rows.length, searchMode]);
 
   /** 展开 / 收起一条会话；第一次展开时拉子邮件。 */
   const toggleThread = useCallback(
@@ -427,6 +565,33 @@ export default function InboxPanel() {
 
       <section className="inbox-main">
         <div className="inbox-toolbar">
+          <button
+            type="button"
+            className="primary"
+            onClick={() => setComposeRequest({ kind: "new" })}
+          >
+            写邮件
+          </button>
+          <button
+            type="button"
+            disabled={selectedMessage === undefined}
+            onClick={() =>
+              selectedMessage &&
+              setComposeRequest({ kind: "reply", sourceMessageId: selectedMessage.id })
+            }
+          >
+            回复
+          </button>
+          <button
+            type="button"
+            disabled={selectedMessage === undefined}
+            onClick={() =>
+              selectedMessage &&
+              setComposeRequest({ kind: "forward", sourceMessageId: selectedMessage.id })
+            }
+          >
+            转发
+          </button>
           <label className="checkbox">
             <input
               type="checkbox"
@@ -447,16 +612,45 @@ export default function InboxPanel() {
             刷新
           </button>
           <span className="hint">
-            共 {total} {threadMode ? "个会话" : "封邮件"}
-            {loading ? "，正在加载……" : ""}
+            {searchMode
+              ? `找到 ${searchTotal} 封`
+              : `共 ${total} ${threadMode ? "个会话" : "封邮件"}`}
+            {loading || searching ? "，正在加载……" : ""}
           </span>
         </div>
 
+        <div className="inbox-search">
+          <input
+            aria-label="搜索邮件"
+            value={searchInput}
+            placeholder="搜索邮件，例如：发票 from:alice has:attachment"
+            onChange={(event) => setSearchInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void runSearch();
+            }}
+          />
+          <button type="button" onClick={() => void runSearch()} disabled={searching}>
+            {searching ? "搜索中……" : "搜索"}
+          </button>
+          {searchMode && (
+            <button type="button" onClick={clearSearch}>
+              退出搜索
+            </button>
+          )}
+          <span className="hint">{SEARCH_SYNTAX_HINT}</span>
+        </div>
+
         {error && <p className="error">加载失败：{error}</p>}
+        {searchError && <p className="error">搜索失败：{searchError}</p>}
+        {searchNote && <p className="hint inbox-search-note">{searchNote}</p>}
 
         <div className="inbox-scroll" ref={scrollRef}>
-          {rows.length === 0 && !loading && (
-            <p className="hint inbox-empty">这里还没有邮件。先在「账号与代理」里配置账号并同步。</p>
+          {rows.length === 0 && !loading && !searching && (
+            <p className="hint inbox-empty">
+              {searchMode
+                ? "没有找到匹配的邮件。"
+                : "这里还没有邮件。先在「账号与代理」里配置账号并同步。"}
+            </p>
           )}
           <div
             className="inbox-virtual"
@@ -484,6 +678,12 @@ export default function InboxPanel() {
                       expanded={expanded.has(row.key)}
                       onToggle={() => void toggleThread(row.thread)}
                     />
+                  ) : row.kind === "search" ? (
+                    <SearchResultRow
+                      hit={row.hit}
+                      selected={selectedMessage?.id === row.hit.message.id}
+                      onOpen={() => setSelectedMessage(row.hit.message)}
+                    />
                   ) : (
                     <MessageRow
                       message={row.message}
@@ -500,7 +700,16 @@ export default function InboxPanel() {
       </section>
 
       <aside className="inbox-reader">
-        <MessageReader message={selectedMessage} />
+        {composeRequest ? (
+          <ComposePanel
+            request={composeRequest}
+            accounts={accounts}
+            onClose={() => setComposeRequest(undefined)}
+            onSent={() => void refreshAll()}
+          />
+        ) : (
+          <MessageReader message={selectedMessage} />
+        )}
       </aside>
     </div>
   );

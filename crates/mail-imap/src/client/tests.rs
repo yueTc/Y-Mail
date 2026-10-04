@@ -372,3 +372,77 @@ async fn idle超时也能正常收尾() {
         .expect("IDLE 应成功");
     assert_eq!(outcome, IdleOutcome::Timeout);
 }
+
+#[tokio::test]
+async fn 追加邮件用字面量先等继续提示再发正文() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+    let addr = listener.local_addr().expect("地址");
+    let raw = b"Subject: hi\r\n\r\nhello\r\n".to_vec();
+    let expected = raw.clone();
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("接受");
+        let mut reader = greeting(socket).await;
+        let _ = read_line(&mut reader).await;
+        reader.get_mut().write_all(b"a001 OK\r\n").await.expect("写");
+        let _ = read_line(&mut reader).await;
+        reader
+            .get_mut()
+            .write_all(b"* CAPABILITY IMAP4rev1\r\na002 OK\r\n")
+            .await
+            .expect("写");
+        assert_eq!(
+            read_line(&mut reader).await,
+            format!("a003 APPEND \"Sent\" (\\Seen) {{{}}}", expected.len())
+        );
+        reader.get_mut().write_all(b"+ go ahead\r\n").await.expect("写");
+        let mut body = vec![0u8; expected.len() + 2];
+        tokio::io::AsyncReadExt::read_exact(reader.get_mut(), &mut body)
+            .await
+            .expect("读正文");
+        assert_eq!(&body[..expected.len()], expected.as_slice());
+        assert_eq!(&body[expected.len()..], b"\r\n");
+        reader
+            .get_mut()
+            .write_all(b"a003 OK APPEND completed\r\n")
+            .await
+            .expect("写");
+    });
+
+    let mut client = ImapClient::connect(&config(addr.port()), None)
+        .await
+        .expect("连接");
+    client.append("Sent", &raw, true).await.expect("追加");
+}
+
+#[tokio::test]
+async fn 追加邮件被服务器拒绝时报错() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+    let addr = listener.local_addr().expect("地址");
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("接受");
+        let mut reader = greeting(socket).await;
+        let _ = read_line(&mut reader).await;
+        reader.get_mut().write_all(b"a001 OK\r\n").await.expect("写");
+        let _ = read_line(&mut reader).await;
+        reader
+            .get_mut()
+            .write_all(b"* CAPABILITY IMAP4rev1\r\na002 OK\r\n")
+            .await
+            .expect("写");
+        let _ = read_line(&mut reader).await;
+        reader
+            .get_mut()
+            .write_all(b"a003 NO quota exceeded\r\n")
+            .await
+            .expect("写");
+    });
+
+    let mut client = ImapClient::connect(&config(addr.port()), None)
+        .await
+        .expect("连接");
+    let err = client
+        .append("Sent", b"Subject: hi\r\n\r\nbody\r\n", true)
+        .await
+        .expect_err("应失败");
+    assert_eq!(err.kind, ConnectionErrorKind::Protocol);
+}

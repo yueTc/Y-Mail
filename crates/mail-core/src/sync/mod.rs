@@ -92,6 +92,34 @@ impl SyncService {
         }
     }
 
+    /// 一次性深拉：连一次服务器，把所有文件夹同步一遍（含有界历史补齐）后立即退出。
+    ///
+    /// 搜索的「按需深拉」用它：不挂 IDLE、不进常驻循环，跑完就释放连接。
+    /// 返回 `Ok(true)` 表示确实联网跑了一轮；账号不存在时返回 `AccountNotFound`。
+    pub async fn backfill_once(&self, account_id: i64) -> Result<bool, EngineError> {
+        // 先确认账号存在，避免为不存在的账号白连一次服务器。
+        let exists = {
+            let store = self.lock_store();
+            store.get_account(mail_domain::AccountId(account_id))?.is_some()
+        };
+        if !exists {
+            return Err(EngineError::AccountNotFound(account_id));
+        }
+        let status = self.status_slot(account_id)?;
+        let cancel = Arc::new(CancelFlag::new());
+        let ctx = Arc::new(WorkerContext {
+            account_id,
+            store: self.store.clone(),
+            secrets: self.secrets.clone(),
+            config: self.config.clone(),
+            status,
+            cancel,
+        });
+        worker::sync_once(&ctx)
+            .await
+            .map_err(|failure| EngineError::Sync(failure.message))?;
+        Ok(true)
+    }
     /// 面向界面的全部账号状态（按编号排序）。
     pub fn statuses(&self) -> Vec<AccountSyncStatus> {
         let mut list: Vec<AccountSyncStatus> = {

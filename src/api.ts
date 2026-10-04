@@ -244,6 +244,130 @@ export interface MessageBody {
   blockedRemoteImages: number;
   attachments: MessageAttachment[];
 }
+// ============================ 搜索与写信类型（Wave 5） ============================
+
+/** 写信类型：新写、回复、转发。 */
+export type OutboxKind = "new" | "reply" | "forward";
+
+/** 发件队列里一条记录的状态。 */
+export type OutboxState = "draft" | "queued" | "sending" | "sent" | "failed";
+
+/** 搜索条件；`deep` 为真时先联网补一批未同步的历史。 */
+export interface SearchQuery {
+  raw: string;
+  accountId?: number;
+  offset?: number;
+  limit?: number;
+  deep?: boolean;
+}
+
+/** 一段高亮片段；`highlighted` 为真表示命中关键词。 */
+export interface SnippetSegment {
+  text: string;
+  highlighted: boolean;
+}
+
+/** 一条搜索结果。 */
+export interface SearchHit {
+  message: InboxMessage;
+  snippet: SnippetSegment[];
+}
+
+/** 一页搜索结果，附带深拉情况。 */
+export interface SearchPage {
+  items: SearchHit[];
+  total: number;
+  offset: number;
+  limit: number;
+  deepSynced: boolean;
+  deepError: string | null;
+}
+
+/** 一位收件人。 */
+export interface ComposeParticipant {
+  name: string;
+  address: string;
+}
+
+/** 一个待发附件：本地路径 + 展示文件名。 */
+export interface ComposeAttachment {
+  path: string;
+  filename: string;
+}
+
+/** 写信窗格的预填内容（新建走空模板，回复 / 转发由外壳组装）。 */
+export interface ComposeDraft {
+  kind: OutboxKind;
+  accountId: number;
+  to: ComposeParticipant[];
+  cc: ComposeParticipant[];
+  bcc: ComposeParticipant[];
+  subject: string;
+  bodyHtml: string;
+  bodyText: string;
+  inReplyTo: string | null;
+  references: string[];
+  attachments: ComposeAttachment[];
+}
+
+/** 提交保存的草稿；`id` 省略表示新建。 */
+export interface OutboxDraft {
+  id?: number;
+  accountId: number;
+  kind: OutboxKind;
+  to: ComposeParticipant[];
+  cc: ComposeParticipant[];
+  bcc: ComposeParticipant[];
+  subject: string;
+  bodyHtml: string;
+  bodyText: string;
+  inReplyTo: string | null;
+  references: string[];
+  attachments: ComposeAttachment[];
+}
+
+/** 发件队列里的一条记录（含账号展示信息）。 */
+export interface OutboxItem extends OutboxDraft {
+  id: number;
+  state: OutboxState;
+  attempts: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+  sentAt: string | null;
+  accountEmail: string;
+  accountDisplayName: string;
+}
+
+/** 一封成功投递的报告。 */
+export interface SendReport {
+  acceptedRecipients: number;
+}
+
+/** 跑一轮发送队列的结果。 */
+export interface SendOutcome {
+  attempted: number;
+  sent: number;
+  errors: string[];
+  reports: SendReport[];
+}
+
+/** 一位联系人。 */
+export interface Contact {
+  id: number;
+  accountId: number | null;
+  name: string;
+  email: string;
+  lastUsedAt: string | null;
+}
+
+/** 一个账号的签名。 */
+export interface Signature {
+  accountId: number;
+  html: string;
+  enabled: boolean;
+  updatedAt: string;
+}
 // ============================ 错误 ============================
 
 /** 命令错误：对 Rust 侧 `CommandError` 的还原。 */
@@ -366,4 +490,41 @@ export const api = {
 
   downloadAttachment: (attachmentId: number) =>
     call<string>("download_attachment", { attachmentId }),
+
+  // ===== 搜索与写信（Wave 5） =====
+
+  searchMessages: (query: SearchQuery) => call<SearchPage>("search_messages", { query }),
+
+  composeDraft: (kind: OutboxKind, sourceMessageId: number) =>
+    call<ComposeDraft>("compose_draft", { kind, sourceMessageId }),
+
+  saveDraft: (draft: OutboxDraft) => call<number>("save_draft", { draft }),
+
+  enqueueOutbox: (id: number) => call<boolean>("enqueue_outbox", { id }),
+
+  retryOutbox: (id: number) => call<boolean>("retry_outbox", { id }),
+
+  listOutbox: (accountId?: number, limit?: number) => {
+    const args: Record<string, unknown> = {};
+    if (accountId !== undefined) args.accountId = accountId;
+    if (limit !== undefined) args.limit = limit;
+    return call<OutboxItem[]>("list_outbox", args);
+  },
+
+  getOutbox: (id: number) => call<OutboxItem | null>("get_outbox", { id }),
+
+  deleteOutbox: (id: number) => call<boolean>("delete_outbox", { id }),
+
+  searchContacts: (accountId: number, keyword: string, limit?: number) =>
+    call<Contact[]>(
+      "search_contacts",
+      limit === undefined ? { accountId, keyword } : { accountId, keyword, limit },
+    ),
+
+  getSignature: (accountId: number) => call<Signature>("get_signature", { accountId }),
+
+  saveSignature: (accountId: number, html: string, enabled: boolean) =>
+    call<Signature>("save_signature", { accountId, html, enabled }),
+
+  sendOutbox: () => call<SendOutcome>("send_outbox"),
 };

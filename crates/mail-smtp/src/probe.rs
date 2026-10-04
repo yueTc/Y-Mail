@@ -4,13 +4,11 @@
 
 use std::time::Duration;
 
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
 use mail_domain::account::Security;
 use mail_domain::error::ConnectionError;
 use mail_domain::proxy::{ProxyRoute, Secret};
-use mail_net::io::{read_crlf_line, write_crlf_line};
-use mail_net::{connect_tcp, tls_wrap, Stream};
+
+use crate::protocol::{authenticate, connect_greeted, send_command, start_session};
 
 /// 自检需要的全部信息。
 #[derive(Clone, PartialEq, Eq)]
@@ -34,12 +32,6 @@ pub struct ProbeRequest {
 pub struct ProbeReport {
     /// 实际使用的认证方式（PLAIN 或 LOGIN）。
     pub mechanism: String,
-}
-
-/// 一条服务器应答。
-struct Reply {
-    code: u16,
-    lines: Vec<String>,
 }
 
 /// 执行一次发件服务器连接自检。
@@ -70,50 +62,17 @@ fn validate(request: &ProbeRequest) -> Result<(), ConnectionError> {
 }
 
 async fn run(request: &ProbeRequest, route: Option<&ProxyRoute>) -> Result<ProbeReport, ConnectionError> {
-    let tcp = connect_tcp(&request.host, request.port, route, request.timeout).await?;
-    let mut stream = match request.security {
-        Security::Tls => tls_wrap(tcp, &request.host).await?,
-        Security::StartTls | Security::Plain => Stream::plain(tcp),
-    };
+    let stream = connect_greeted(
+        &request.host,
+        request.port,
+        request.security,
+        route,
+        request.timeout,
+    )
+    .await?;
+    let (mut stream, ehlo) = start_session(stream, request.security, &request.host).await?;
 
-    let greeting = read_reply(&mut stream).await?;
-    if greeting.code != 220 {
-        return Err(ConnectionError::rejected(format!(
-            "服务器没有正常欢迎连接（返回码 {}）",
-            greeting.code
-        )));
-    }
-
-    let mut ehlo = send_ehlo(&mut stream).await?;
-
-    if request.security == Security::StartTls {
-        let reply = send_command(&mut stream, "STARTTLS").await?;
-        if reply.code != 220 {
-            return Err(ConnectionError::tls(
-                "服务器没有接受 STARTTLS 升级请求，请改用 SSL/TLS 或检查端口",
-            ));
-        }
-        stream = stream.wrap_tls(&request.host).await?;
-        ehlo = send_ehlo(&mut stream).await?;
-    }
-
-    let mut mechanisms = parse_auth_mechanisms(&ehlo);
-    if mechanisms.is_empty() {
-        // 少数服务器不主动广告认证方式，仍按最常见的 PLAIN 试一次。
-        mechanisms.push("PLAIN".to_string());
-    }
-
-    let mechanism = if mechanisms.iter().any(|item| item == "PLAIN") {
-        auth_plain(&mut stream, request).await?;
-        "PLAIN"
-    } else if mechanisms.iter().any(|item| item == "LOGIN") {
-        auth_login(&mut stream, request).await?;
-        "LOGIN"
-    } else {
-        return Err(ConnectionError::auth(
-            "服务器没有提供受支持的认证方式（仅支持 PLAIN 或 LOGIN）",
-        ));
-    };
+    let mechanism = authenticate(&mut stream, &request.username, request.password.expose(), &ehlo).await?;
 
     let reply = send_command(&mut stream, "QUIT").await?;
     if reply.code != 221 {
@@ -124,120 +83,9 @@ async fn run(request: &ProbeRequest, route: Option<&ProxyRoute>) -> Result<Probe
         mechanism: mechanism.to_string(),
     })
 }
-
-async fn send_ehlo(stream: &mut Stream) -> Result<Reply, ConnectionError> {
-    let reply = send_command(stream, "EHLO em-master.local").await?;
-    if reply.code != 250 {
-        return Err(ConnectionError::protocol(format!(
-            "服务器不接受 EHLO 问候（返回码 {}）",
-            reply.code
-        )));
-    }
-    Ok(reply)
-}
-
-/// 从 EHLO 应答里挑出认证方式，例如 `250-AUTH PLAIN LOGIN`。
-fn parse_auth_mechanisms(reply: &Reply) -> Vec<String> {
-    let mut mechanisms = Vec::new();
-    for line in &reply.lines {
-        let upper = line.to_ascii_uppercase();
-        let Some(index) = upper.find("AUTH") else {
-            continue;
-        };
-        let rest = &upper[index + 4..];
-        // 形如「AUTH=PLAIN LOGIN」时先去掉等号。
-        let rest = rest.trim_start().trim_start_matches('=');
-        for item in rest.split_whitespace() {
-            if item == "PLAIN" || item == "LOGIN" {
-                mechanisms.push(item.to_string());
-            }
-        }
-    }
-    if mechanisms.iter().any(|item| item == "PLAIN") {
-        return vec!["PLAIN".to_string()];
-    }
-    if mechanisms.iter().any(|item| item == "LOGIN") {
-        return vec!["LOGIN".to_string()];
-    }
-    mechanisms
-}
-
-fn plain_token(username: &str, password: &str) -> String {
-    let mut raw = Vec::with_capacity(username.len() + password.len() + 2);
-    raw.push(0);
-    raw.extend_from_slice(username.as_bytes());
-    raw.push(0);
-    raw.extend_from_slice(password.as_bytes());
-    STANDARD.encode(raw)
-}
-
-async fn auth_plain(stream: &mut Stream, request: &ProbeRequest) -> Result<(), ConnectionError> {
-    let token = plain_token(&request.username, request.password.expose());
-    let reply = send_command(stream, &format!("AUTH PLAIN {token}")).await?;
-    check_auth_reply(&reply, "PLAIN")
-}
-
-async fn auth_login(stream: &mut Stream, request: &ProbeRequest) -> Result<(), ConnectionError> {
-    let reply = send_command(stream, "AUTH LOGIN").await?;
-    if reply.code != 334 {
-        return Err(auth_error(&reply));
-    }
-    let reply = send_command(stream, &STANDARD.encode(&request.username)).await?;
-    if reply.code != 334 {
-        return Err(auth_error(&reply));
-    }
-    let reply = send_command(stream, &STANDARD.encode(request.password.expose())).await?;
-    check_auth_reply(&reply, "LOGIN")
-}
-
-fn check_auth_reply(reply: &Reply, mechanism: &str) -> Result<(), ConnectionError> {
-    if reply.code == 235 {
-        return Ok(());
-    }
-    // 服务器应答正文可能回显 base64 后的账号与授权码，认证失败时整段不写日志。
-    tracing::debug!(code = reply.code, mechanism, "SMTP 认证未通过，响应正文不记录");
-    Err(auth_error(reply))
-}
-
-fn auth_error(reply: &Reply) -> ConnectionError {
-    ConnectionError::auth(format!(
-        "登录被服务器拒绝（返回码 {}）：请检查登录名与授权码",
-        reply.code
-    ))
-}
-
-async fn send_command(stream: &mut Stream, command: &str) -> Result<Reply, ConnectionError> {
-    write_crlf_line(stream, command).await?;
-    read_reply(stream).await
-}
-
-/// 读一条（可能是多行的）SMTP 应答，例如 `250-XXX` 连续多行后以 `250 YYY` 结束。
-async fn read_reply(stream: &mut Stream) -> Result<Reply, ConnectionError> {
-    let mut lines = Vec::new();
-    let mut code = 0u16;
-    loop {
-        let line = read_crlf_line(stream, 8192).await?;
-        if line.len() < 3 {
-            return Err(ConnectionError::protocol("服务器应答格式无法识别"));
-        }
-        let parsed: u16 = line[..3]
-            .parse()
-            .map_err(|_| ConnectionError::protocol("服务器应答格式无法识别"))?;
-        if code == 0 {
-            code = parsed;
-        }
-        let separator = line.as_bytes().get(3).copied().unwrap_or(b' ');
-        lines.push(line);
-        if separator != b'-' {
-            break;
-        }
-    }
-    Ok(Reply { code, lines })
-}
-
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, OnceLock};
     use std::time::Duration;
 
     use base64::engine::general_purpose::STANDARD;
@@ -270,6 +118,28 @@ mod tests {
     /// 把 tracing 输出收进内存，用来断言日志里没有敏感内容。
     #[derive(Clone, Default)]
     struct LogCapture(Arc<Mutex<Vec<u8>>>);
+
+    /// 全局订阅器只装一次，之后每条测试都把日志写进同一份缓冲区。
+    ///
+    /// 不能改用线程级订阅器：tracing 的调用点兴趣缓存是进程级的，一个
+    /// 没有订阅器的线程先跑到某个调用点，就会把它缓存成「永不记录」，
+    /// 别的线程再也收不到那条日志。
+    fn log_buffer() -> &'static Arc<Mutex<Vec<u8>>> {
+        static BUFFER: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();
+        BUFFER.get_or_init(|| {
+            let logs = Arc::new(Mutex::new(Vec::new()));
+            let subscriber = tracing_subscriber::fmt()
+                .with_writer({
+                    let logs = logs.clone();
+                    move || LogCapture(logs.clone())
+                })
+                .with_max_level(tracing::Level::DEBUG)
+                .finish();
+            // 同进程里只可能装成功一次，失败说明已经有别的订阅器在兜底。
+            let _ = tracing::subscriber::set_global_default(subscriber);
+            logs
+        })
+    }
 
     impl std::io::Write for LogCapture {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -363,20 +233,11 @@ mod tests {
                 .expect("写入失败");
         });
 
-        let logs = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer({
-                let logs = logs.clone();
-                move || LogCapture(logs.clone())
-            })
-            .with_max_level(tracing::Level::DEBUG)
-            .finish();
-        let guard = tracing::subscriber::set_default(subscriber);
+        let logs = log_buffer();
 
         let err = probe(&request(addr.port(), Security::Plain), None)
             .await
             .expect_err("应认证失败");
-        drop(guard);
 
         assert_eq!(err.kind, ConnectionErrorKind::AuthFailed);
         assert!(!err.message.contains("pw-secret"));

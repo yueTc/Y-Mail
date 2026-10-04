@@ -7,7 +7,7 @@ use mail_domain::error::ConnectionError;
 use mail_domain::proxy::ProxyRoute;
 use mail_net::io::write_crlf_line;
 use mail_net::{connect_tcp, tls_wrap, Stream};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::parse::{
     format_uid_set, parse_fetch_line, parse_list_line, parse_search_line, parse_select_line,
@@ -233,6 +233,80 @@ impl ImapClient {
             }
         }
     }
+    /// 把一封完整邮件原文追加到指定文件夹（发送成功后存一份到「已发送」）。
+    ///
+    /// 用带字面量的 APPEND：先发命令头，等服务器回 `+` 继续提示，再按长度发原始字节，
+    /// 最后读 tagged 应答。`\Seen` 表示追加进去就按已读处理，不需要用户再点一次。
+    pub async fn append(&mut self, folder: &str, raw: &[u8], seen: bool) -> Result<(), ConnectionError> {
+        if raw.is_empty() {
+            return Err(ConnectionError::protocol("要追加的邮件内容为空"));
+        }
+        if raw.len() > MAX_BODY_BYTES {
+            return Err(ConnectionError::protocol("要追加的邮件超过 32 MiB 上限"));
+        }
+        let name = quote_imap_string(folder)?;
+        let flags = if seen { "(\\Seen)" } else { "()" };
+        let tag = self.next_tag();
+        let head = format!("{tag} APPEND {name} {flags} {{{}}}", raw.len());
+        let command_timeout = self.timeout;
+        match tokio::time::timeout(command_timeout, async {
+            write_crlf_line(&mut self.stream, &head).await?;
+            // 服务器会先回 `+` 表示可以开始发内容。不是 `+` 就说明被拒了，直接读 tagged 应答给错误。
+            let line = read_line_bytes(&mut self.stream, MAX_LINE).await?;
+            if !line.starts_with(b"+") {
+                return self.finish_append(&tag, Some(line)).await;
+            }
+            self.stream.write_all(raw).await.map_err(|err| {
+                ConnectionError::network(format!(
+                    "发送邮件内容失败：{}",
+                    mail_net::error::describe_io(&err)
+                ))
+            })?;
+            self.stream.write_all(b"\r\n").await.map_err(|err| {
+                ConnectionError::network(format!(
+                    "发送邮件内容失败：{}",
+                    mail_net::error::describe_io(&err)
+                ))
+            })?;
+            self.finish_append(&tag, None).await
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(ConnectionError::timeout(TIMEOUT_TEXT)),
+        }
+    }
+
+    /// 收尾 APPEND：读 tagged 应答，确认服务器真正收下。
+    async fn finish_append(&mut self, tag: &str, first_line: Option<Vec<u8>>) -> Result<(), ConnectionError> {
+        let prefix = format!("{tag} ");
+        let mut pending = first_line;
+        loop {
+            let line = match pending.take() {
+                Some(line) => line,
+                None => read_line_bytes(&mut self.stream, MAX_LINE).await?,
+            };
+            if line.starts_with(prefix.as_bytes()) {
+                let rest = String::from_utf8_lossy(&line[prefix.len()..]).to_string();
+                let status = rest
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_ascii_uppercase();
+                if status != "OK" {
+                    return Err(ConnectionError::protocol(format!(
+                        "把邮件存入已发送失败：{}",
+                        self.sanitize(&rest)
+                    )));
+                }
+                return Ok(());
+            }
+            if line.starts_with(b"* BYE") {
+                return Err(ConnectionError::rejected("服务器中断了连接"));
+            }
+        }
+    }
+
     /// 在收件箱挂一次 IDLE，最多等 `wait`。
     pub async fn idle_wait(&mut self, wait: Duration) -> Result<IdleOutcome, ConnectionError> {
         let tag = self.next_tag();

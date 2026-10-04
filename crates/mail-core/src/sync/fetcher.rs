@@ -238,6 +238,21 @@ fn insert_metas(ctx: &Arc<WorkerContext>, folder_id: i64, metas: Vec<MessageMeta
     if metas.is_empty() {
         return Ok(0);
     }
+    // 先把本次邮件的收发件人收集出来，写入正文前顺手登记地址簿。
+    let mut contacts: Vec<(String, String)> = Vec::new();
+    for meta in &metas {
+        for addr in meta
+            .envelope
+            .from
+            .iter()
+            .chain(meta.envelope.to.iter())
+            .chain(meta.envelope.cc.iter())
+        {
+            if !addr.address.trim().is_empty() {
+                contacts.push((addr.name.clone(), addr.address.clone()));
+            }
+        }
+    }
     let messages: Vec<NewMessage> = metas
         .into_iter()
         .map(|meta| to_new_message(ctx.account_id, folder_id, meta))
@@ -254,6 +269,11 @@ fn insert_metas(ctx: &Arc<WorkerContext>, folder_id: i64, metas: Vec<MessageMeta
         return Ok(0);
     }
     let inserted = store.insert_messages(&messages).map_err(Failure::store)?;
+    if inserted > 0 {
+        store
+            .upsert_contacts(ctx.account_id, &contacts)
+            .map_err(Failure::store)?;
+    }
     Ok(inserted as i64)
 }
 

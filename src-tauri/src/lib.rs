@@ -45,6 +45,18 @@ pub fn run() {
             commands::list_thread_messages,
             commands::get_message_body,
             commands::download_attachment,
+            commands::search_messages,
+            commands::compose_draft,
+            commands::save_draft,
+            commands::enqueue_outbox,
+            commands::retry_outbox,
+            commands::list_outbox,
+            commands::get_outbox,
+            commands::delete_outbox,
+            commands::search_contacts,
+            commands::get_signature,
+            commands::save_signature,
+            commands::send_outbox,
         ])
         .setup(|app| {
             // 1) 应用数据目录。Windows 下形如 %APPDATA%\com.emmaster.desktop。

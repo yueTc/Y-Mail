@@ -114,7 +114,7 @@ impl Default for InboxQuery {
 }
 
 /// 邮件列表用到的列（顺序与 `row_to_message` 的下标一一对应）。
-const INBOX_COLUMNS: &str = "m.id, m.account_id, m.folder_id, m.uid, m.thread_key, \
+pub(crate) const INBOX_COLUMNS: &str = "m.id, m.account_id, m.folder_id, m.uid, m.thread_key, \
     m.subject, m.from_name, m.from_addr, m.date_utc, m.size, \
     m.has_attachments, m.is_read, m.is_flagged, m.snippet, m.message_id_header, \
     a.email, a.display_name, a.color, f.full_path";
@@ -163,7 +163,7 @@ pub(crate) fn effective_thread_key(
 }
 
 /// 把查询结果里的一行读成 [`InboxMessage`]。
-fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxMessage> {
+pub(crate) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxMessage> {
     let id: i64 = row.get(0)?;
     let raw_thread_key: Option<String> = row.get(4)?;
     let message_id_header: Option<String> = row.get(14)?;

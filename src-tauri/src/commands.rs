@@ -8,7 +8,8 @@
 
 use mail_core::{
     AccountInboxSummary, ConnectionReport, EngineError, InboxFolder, InboxMessage, InboxQuery, InboxThread,
-    StoredAttachment,
+    NewOutbox, OutboxKind, SearchHit, SearchQuery, SnippetSegment, StoredAttachment, StoredContact,
+    StoredOutbox, StoredSignature,
 };
 use mail_domain::account::{Account, AccountDraft, AccountProxyMode, AuthType, Security, ServerConfig};
 use mail_domain::proxy::{GlobalProxyMode, ProxyConfig, ProxyId, ProxyKind, Secret};
@@ -1204,4 +1205,656 @@ pub async fn download_attachment(
     let engine = state.engine().await;
     let path = engine.download_attachment(attachment_id).await?;
     Ok(path)
+}
+
+// ============================ 搜索与写信命令（Wave 5） ============================
+
+/// 搜索默认每页条数。
+const SEARCH_DEFAULT_LIMIT: i64 = 50;
+/// 搜索每页条数上限。
+const SEARCH_MAX_LIMIT: i64 = 200;
+
+/// 搜索条件（前端传入）。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SearchQueryDto {
+    /// 原始查询串，例如 `发票 from:alice has:attachment`。
+    pub raw: String,
+    /// 只看某个账号；省略表示全部账号。
+    pub account_id: Option<i64>,
+    /// 跳过条数。
+    pub offset: i64,
+    /// 最多返回条数；省略用默认值。
+    pub limit: Option<i64>,
+    /// 是否联网补历史；false 只查本地库。
+    pub deep: bool,
+}
+
+impl SearchQueryDto {
+    /// 转成引擎查询；顺带把条数与偏移量夹在合法范围。
+    fn to_query(&self) -> Result<SearchQuery, CommandError> {
+        if self.raw.trim().is_empty() {
+            return Err(CommandError::input("搜索关键词不能为空"));
+        }
+        if self.offset < 0 {
+            return Err(CommandError::input("分页偏移量不能是负数"));
+        }
+        let limit = self.limit.unwrap_or(SEARCH_DEFAULT_LIMIT);
+        if limit <= 0 {
+            return Err(CommandError::input("每页条数要大于 0"));
+        }
+        if limit > SEARCH_MAX_LIMIT {
+            return Err(CommandError::input(format!("每页最多 {SEARCH_MAX_LIMIT} 条")));
+        }
+        Ok(SearchQuery::new(
+            self.raw.trim(),
+            self.account_id,
+            self.offset,
+            limit,
+        ))
+    }
+}
+
+/// 高亮片段：命中处 `highlighted` 为 true，界面按普通文本渲染。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnippetSegmentDto {
+    /// 片段文本。
+    pub text: String,
+    /// 是否是命中的关键词。
+    pub highlighted: bool,
+}
+
+impl SnippetSegmentDto {
+    fn from_segment(segment: &SnippetSegment) -> Self {
+        Self {
+            text: segment.text.clone(),
+            highlighted: segment.highlighted,
+        }
+    }
+}
+
+/// 一条搜索结果：邮件 + 高亮片段。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHitDto {
+    /// 命中的邮件。
+    pub message: InboxMessageDto,
+    /// 高亮片段。
+    pub snippet: Vec<SnippetSegmentDto>,
+}
+
+impl SearchHitDto {
+    fn from_hit(hit: &SearchHit) -> Self {
+        Self {
+            message: InboxMessageDto::from_message(&hit.message),
+            snippet: hit.snippet.iter().map(SnippetSegmentDto::from_segment).collect(),
+        }
+    }
+}
+
+/// 一页搜索结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchPageDto {
+    /// 本页结果。
+    pub items: Vec<SearchHitDto>,
+    /// 符合条件的总条数。
+    pub total: i64,
+    /// 本页跳过的条数。
+    pub offset: i64,
+    /// 本页最大条数。
+    pub limit: i64,
+    /// 本次是否真的联网补过历史。
+    pub deep_synced: bool,
+    /// 补历史失败时的可读原因；成功或无需要时为 None。
+    pub deep_error: Option<String>,
+}
+
+/// 搜索邮件：`deep` 为 true 时先联网补一批未同步的历史再搜。
+#[tauri::command]
+pub async fn search_messages(
+    state: tauri::State<'_, AppState>,
+    query: SearchQueryDto,
+) -> Result<SearchPageDto, CommandError> {
+    let deep = query.deep;
+    let query = query.to_query()?;
+    let engine = state.engine().await;
+    if deep {
+        let result = engine.search_messages_deep(&query).await?;
+        Ok(SearchPageDto {
+            items: result.page.items.iter().map(SearchHitDto::from_hit).collect(),
+            total: result.page.total,
+            offset: result.page.offset,
+            limit: result.page.limit,
+            deep_synced: result.deep_synced,
+            deep_error: result.deep_error,
+        })
+    } else {
+        let page = engine.search_messages(&query)?;
+        Ok(SearchPageDto {
+            items: page.items.iter().map(SearchHitDto::from_hit).collect(),
+            total: page.total,
+            offset: page.offset,
+            limit: page.limit,
+            deep_synced: false,
+            deep_error: None,
+        })
+    }
+}
+
+// ============================ 写信与发件队列命令（Wave 5） ============================
+
+/// 写信类型标识：new / reply / forward。
+fn parse_outbox_kind(value: &str) -> Result<OutboxKind, CommandError> {
+    OutboxKind::parse(value.trim()).ok_or_else(|| CommandError::input("写信类型只能是 new、reply 或 forward"))
+}
+
+/// 一位收件人（显示名可空）。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticipantDto {
+    /// 显示名。
+    pub name: String,
+    /// 邮箱地址。
+    pub address: String,
+}
+
+/// 一个待发附件：本地路径 + 展示文件名。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposeAttachmentDto {
+    /// 本地文件路径。
+    pub path: String,
+    /// 展示文件名。
+    pub filename: String,
+}
+
+/// 把收件人列表转成库里存的 JSON 数组。
+fn participants_to_json(people: &[ParticipantDto]) -> String {
+    let value: Vec<serde_json::Value> = people
+        .iter()
+        .map(|person| {
+            serde_json::json!({
+                "name": person.name,
+                "address": person.address,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(value).to_string()
+}
+
+/// 把库里存的 JSON 数组读回收件人列表；内容坏了就当空列表，不让界面崩。
+fn participants_from_json(raw: &str) -> Vec<ParticipantDto> {
+    serde_json::from_str::<Vec<mail_core::ComposeParticipant>>(raw)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|person| ParticipantDto {
+            name: person.name,
+            address: person.address,
+        })
+        .collect()
+}
+
+/// 附件清单转 JSON。
+fn attachments_to_json(items: &[ComposeAttachmentDto]) -> String {
+    let value: Vec<serde_json::Value> = items
+        .iter()
+        .map(|item| {
+            serde_json::json!({
+                "path": item.path,
+                "filename": item.filename,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(value).to_string()
+}
+
+/// 附件清单读回；内容坏了就当空列表。
+fn attachments_from_json(raw: &str) -> Vec<ComposeAttachmentDto> {
+    serde_json::from_str::<Vec<mail_core::ComposeAttachment>>(raw)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| ComposeAttachmentDto {
+            path: item.path,
+            filename: item.filename,
+        })
+        .collect()
+}
+
+/// References 读回；内容坏了就当空列表。
+fn references_from_json(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
+}
+
+/// References 转 JSON。
+fn references_to_json(items: &[String]) -> String {
+    serde_json::Value::Array(
+        items
+            .iter()
+            .map(|item| serde_json::Value::String(item.clone()))
+            .collect(),
+    )
+    .to_string()
+}
+
+/// 写信窗格的预填内容（新建 / 回复 / 转发都走同一个结构）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftSeedDto {
+    /// 写信类型。
+    pub kind: String,
+    /// 所属账号。
+    pub account_id: i64,
+    /// 收件人。
+    pub to: Vec<ParticipantDto>,
+    /// 抄送。
+    pub cc: Vec<ParticipantDto>,
+    /// 密送。
+    pub bcc: Vec<ParticipantDto>,
+    /// 主题。
+    pub subject: String,
+    /// HTML 正文。
+    pub body_html: String,
+    /// 纯文本正文。
+    pub body_text: String,
+    /// 回复的原始 Message-ID。
+    pub in_reply_to: Option<String>,
+    /// References 里的 Message-ID 列表。
+    pub references: Vec<String>,
+    /// 附件清单。
+    pub attachments: Vec<ComposeAttachmentDto>,
+}
+
+impl DraftSeedDto {
+    fn from_seed(seed: &mail_core::DraftSeed) -> Self {
+        Self {
+            kind: seed.kind.as_str().to_string(),
+            account_id: seed.account_id,
+            to: participants_from_json(&seed.to_json),
+            cc: participants_from_json(&seed.cc_json),
+            bcc: participants_from_json(&seed.bcc_json),
+            subject: seed.subject.clone(),
+            body_html: seed.body_html.clone(),
+            body_text: seed.body_text.clone(),
+            in_reply_to: seed.in_reply_to.clone(),
+            references: references_from_json(&seed.references_json),
+            attachments: attachments_from_json(&seed.attachments_json),
+        }
+    }
+}
+
+/// 组装一封回信 / 转发的预填内容；新建邮件由界面自己给空模板。
+#[tauri::command]
+pub async fn compose_draft(
+    state: tauri::State<'_, AppState>,
+    kind: String,
+    source_message_id: i64,
+) -> Result<DraftSeedDto, CommandError> {
+    if source_message_id <= 0 {
+        return Err(CommandError::input("原邮件编号不合法"));
+    }
+    let kind = parse_outbox_kind(&kind)?;
+    let engine = state.engine().await;
+    let seed = engine.compose_draft(kind, source_message_id)?;
+    Ok(DraftSeedDto::from_seed(&seed))
+}
+
+/// 写信窗格提交的一封草稿；`id` 省略表示新建。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutboxDraftDto {
+    /// 已有草稿编号；新建时省略。
+    pub id: Option<i64>,
+    /// 所属账号。
+    pub account_id: i64,
+    /// 写信类型。
+    pub kind: String,
+    /// 收件人。
+    #[serde(default)]
+    pub to: Vec<ParticipantDto>,
+    /// 抄送。
+    #[serde(default)]
+    pub cc: Vec<ParticipantDto>,
+    /// 密送。
+    #[serde(default)]
+    pub bcc: Vec<ParticipantDto>,
+    /// 主题。
+    #[serde(default)]
+    pub subject: String,
+    /// HTML 正文。
+    #[serde(default)]
+    pub body_html: String,
+    /// 纯文本正文。
+    #[serde(default)]
+    pub body_text: String,
+    /// 回复的原始 Message-ID。
+    #[serde(default)]
+    pub in_reply_to: Option<String>,
+    /// References 里的 Message-ID 列表。
+    #[serde(default)]
+    pub references: Vec<String>,
+    /// 附件清单。
+    #[serde(default)]
+    pub attachments: Vec<ComposeAttachmentDto>,
+}
+
+impl OutboxDraftDto {
+    fn to_new_outbox(&self) -> Result<NewOutbox, CommandError> {
+        if self.account_id <= 0 {
+            return Err(CommandError::input("请先选择发信账号"));
+        }
+        let kind = parse_outbox_kind(&self.kind)?;
+        Ok(NewOutbox {
+            account_id: self.account_id,
+            kind,
+            to_json: participants_to_json(&self.to),
+            cc_json: participants_to_json(&self.cc),
+            bcc_json: participants_to_json(&self.bcc),
+            subject: self.subject.clone(),
+            body_html: self.body_html.clone(),
+            body_text: self.body_text.clone(),
+            in_reply_to: self.in_reply_to.clone(),
+            references_json: references_to_json(&self.references),
+            attachments_json: attachments_to_json(&self.attachments),
+        })
+    }
+}
+
+/// 发件队列里的一条记录（含账号展示信息）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutboxItemDto {
+    /// 记录编号。
+    pub id: i64,
+    /// 所属账号。
+    pub account_id: i64,
+    /// 写信类型。
+    pub kind: String,
+    /// 收件人。
+    pub to: Vec<ParticipantDto>,
+    /// 抄送。
+    pub cc: Vec<ParticipantDto>,
+    /// 密送。
+    pub bcc: Vec<ParticipantDto>,
+    /// 主题。
+    pub subject: String,
+    /// HTML 正文。
+    pub body_html: String,
+    /// 纯文本正文。
+    pub body_text: String,
+    /// 回复的原始 Message-ID。
+    pub in_reply_to: Option<String>,
+    /// References 列表。
+    pub references: Vec<String>,
+    /// 附件清单。
+    pub attachments: Vec<ComposeAttachmentDto>,
+    /// 状态：draft / queued / sending / sent / failed。
+    pub state: String,
+    /// 已尝试发送次数。
+    pub attempts: i64,
+    /// 最近一次失败原因。
+    pub last_error: Option<String>,
+    /// 创建时间。
+    pub created_at: String,
+    /// 更新时间。
+    pub updated_at: String,
+    /// 发送成功时间。
+    pub sent_at: Option<String>,
+    /// 账号邮箱。
+    pub account_email: String,
+    /// 账号显示名。
+    pub account_display_name: String,
+}
+
+impl OutboxItemDto {
+    fn from_item(item: &mail_core::OutboxItem) -> Self {
+        Self::from_parts(&item.outbox, &item.account_email, &item.account_display_name)
+    }
+
+    fn from_parts(outbox: &StoredOutbox, account_email: &str, account_display_name: &str) -> Self {
+        Self {
+            id: outbox.id,
+            account_id: outbox.account_id,
+            kind: outbox.kind.as_str().to_string(),
+            to: participants_from_json(&outbox.to_json),
+            cc: participants_from_json(&outbox.cc_json),
+            bcc: participants_from_json(&outbox.bcc_json),
+            subject: outbox.subject.clone(),
+            body_html: outbox.body_html.clone(),
+            body_text: outbox.body_text.clone(),
+            in_reply_to: outbox.in_reply_to.clone(),
+            references: references_from_json(&outbox.references_json),
+            attachments: attachments_from_json(&outbox.attachments_json),
+            state: outbox.state.as_str().to_string(),
+            attempts: outbox.attempts,
+            last_error: outbox.last_error.clone(),
+            created_at: outbox.created_at.clone(),
+            updated_at: outbox.updated_at.clone(),
+            sent_at: outbox.sent_at.clone(),
+            account_email: account_email.to_string(),
+            account_display_name: account_display_name.to_string(),
+        }
+    }
+}
+
+/// 保存草稿：`id` 省略时新建，返回记录编号。
+#[tauri::command]
+pub async fn save_draft(
+    state: tauri::State<'_, AppState>,
+    draft: OutboxDraftDto,
+) -> Result<i64, CommandError> {
+    let id = draft.id;
+    let payload = draft.to_new_outbox()?;
+    let engine = state.engine().await;
+    Ok(engine.save_draft(id, &payload)?)
+}
+
+/// 把草稿 / 失败件放进待发队列。
+#[tauri::command]
+pub async fn enqueue_outbox(state: tauri::State<'_, AppState>, id: i64) -> Result<bool, CommandError> {
+    if id <= 0 {
+        return Err(CommandError::input("记录编号不合法"));
+    }
+    let engine = state.engine().await;
+    Ok(engine.enqueue_outbox(id)?)
+}
+
+/// 把失败件退回队列，尝试次数清零。
+#[tauri::command]
+pub async fn retry_outbox(state: tauri::State<'_, AppState>, id: i64) -> Result<bool, CommandError> {
+    if id <= 0 {
+        return Err(CommandError::input("记录编号不合法"));
+    }
+    let engine = state.engine().await;
+    Ok(engine.retry_outbox(id)?)
+}
+
+/// 读发件队列；不传账号就列全部。
+#[tauri::command]
+pub async fn list_outbox(
+    state: tauri::State<'_, AppState>,
+    account_id: Option<i64>,
+    limit: Option<usize>,
+) -> Result<Vec<OutboxItemDto>, CommandError> {
+    let limit = limit.unwrap_or(100);
+    let engine = state.engine().await;
+    let items = engine.list_outbox(account_id, limit)?;
+    Ok(items.iter().map(OutboxItemDto::from_item).collect())
+}
+
+/// 读一条发件记录；不存在返回 None。
+#[tauri::command]
+pub async fn get_outbox(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+) -> Result<Option<OutboxItemDto>, CommandError> {
+    if id <= 0 {
+        return Err(CommandError::input("记录编号不合法"));
+    }
+    let engine = state.engine().await;
+    let Some(outbox) = engine.get_outbox(id)? else {
+        return Ok(None);
+    };
+    let accounts = engine.list_accounts()?;
+    let account = accounts.iter().find(|item| item.id.0 == outbox.account_id);
+    Ok(Some(OutboxItemDto::from_parts(
+        &outbox,
+        account.map_or("", |item| item.email.as_str()),
+        account.map_or("", |item| item.display_name.as_str()),
+    )))
+}
+
+/// 删除草稿 / 失败件；已发送的记录不删。
+#[tauri::command]
+pub async fn delete_outbox(state: tauri::State<'_, AppState>, id: i64) -> Result<bool, CommandError> {
+    if id <= 0 {
+        return Err(CommandError::input("记录编号不合法"));
+    }
+    let engine = state.engine().await;
+    Ok(engine.delete_outbox(id)?)
+}
+
+/// 联系人自动补全：按名字或邮箱片段搜。
+#[tauri::command]
+pub async fn search_contacts(
+    state: tauri::State<'_, AppState>,
+    account_id: i64,
+    keyword: String,
+    limit: Option<usize>,
+) -> Result<Vec<ContactDto>, CommandError> {
+    if account_id <= 0 {
+        return Err(CommandError::input("请先选择发信账号"));
+    }
+    let keyword = keyword.trim();
+    if keyword.is_empty() {
+        return Ok(Vec::new());
+    }
+    let limit = limit.unwrap_or(10);
+    let engine = state.engine().await;
+    let contacts = engine.search_contacts(account_id, keyword, limit)?;
+    Ok(contacts.iter().map(ContactDto::from_contact).collect())
+}
+
+/// 联系人展示信息。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactDto {
+    /// 联系人编号。
+    pub id: i64,
+    /// 所属账号；None 表示全局联系人。
+    pub account_id: Option<i64>,
+    /// 显示名。
+    pub name: String,
+    /// 邮箱地址。
+    pub email: String,
+    /// 最近一次使用时间。
+    pub last_used_at: Option<String>,
+}
+
+impl ContactDto {
+    fn from_contact(contact: &StoredContact) -> Self {
+        Self {
+            id: contact.id,
+            account_id: contact.account_id,
+            name: contact.name.clone(),
+            email: contact.email.clone(),
+            last_used_at: contact.last_used_at.clone(),
+        }
+    }
+}
+
+/// 一个账号的签名。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignatureDto {
+    /// 所属账号。
+    pub account_id: i64,
+    /// 签名 HTML。
+    pub html: String,
+    /// 是否启用。
+    pub enabled: bool,
+    /// 更新时间。
+    pub updated_at: String,
+}
+
+impl SignatureDto {
+    fn from_signature(signature: &StoredSignature) -> Self {
+        Self {
+            account_id: signature.account_id,
+            html: signature.html.clone(),
+            enabled: signature.enabled,
+            updated_at: signature.updated_at.clone(),
+        }
+    }
+}
+
+/// 读一个账号的签名；没设置过返回空签名。
+#[tauri::command]
+pub async fn get_signature(
+    state: tauri::State<'_, AppState>,
+    account_id: i64,
+) -> Result<SignatureDto, CommandError> {
+    if account_id <= 0 {
+        return Err(CommandError::input("账号编号不合法"));
+    }
+    let engine = state.engine().await;
+    Ok(SignatureDto::from_signature(&engine.get_signature(account_id)?))
+}
+
+/// 保存一个账号的签名。
+#[tauri::command]
+pub async fn save_signature(
+    state: tauri::State<'_, AppState>,
+    account_id: i64,
+    html: String,
+    enabled: bool,
+) -> Result<SignatureDto, CommandError> {
+    if account_id <= 0 {
+        return Err(CommandError::input("账号编号不合法"));
+    }
+    let engine = state.engine().await;
+    let signature = engine.save_signature(account_id, &html, enabled)?;
+    Ok(SignatureDto::from_signature(&signature))
+}
+
+/// 一封成功投递的报告。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendReportDto {
+    /// 服务器接收的收件人数量。
+    pub accepted_recipients: usize,
+}
+
+/// 跑一轮发送队列的结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendOutcomeDto {
+    /// 本次尝试投递的封数（含失败）。
+    pub attempted: usize,
+    /// 投递成功的封数。
+    pub sent: usize,
+    /// 给用户看的失败说明。
+    pub errors: Vec<String>,
+    /// 成功投递的报告。
+    pub reports: Vec<SendReportDto>,
+}
+
+/// 跑一轮发送队列；用户点了发送按钮才会调到这里。
+#[tauri::command]
+pub async fn send_outbox(state: tauri::State<'_, AppState>) -> Result<SendOutcomeDto, CommandError> {
+    let engine = state.engine().await;
+    let outcome = engine.send_outbox().await?;
+    Ok(SendOutcomeDto {
+        attempted: outcome.attempted,
+        sent: outcome.sent,
+        errors: outcome.errors.clone(),
+        reports: outcome
+            .reports
+            .iter()
+            .map(|report| SendReportDto {
+                accepted_recipients: report.accepted_recipients,
+            })
+            .collect(),
+    })
 }

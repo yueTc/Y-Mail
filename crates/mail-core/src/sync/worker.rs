@@ -178,6 +178,37 @@ async fn session(ctx: &Arc<WorkerContext>) -> Result<(), Failure> {
     outcome
 }
 
+/// 一次性会话：连上 → 逐文件夹同步（含一次有界历史补齐）→ 退出。
+///
+/// 搜索的「按需深拉」用它：不挂 IDLE、不进常驻循环，跑完就把连接放掉。
+pub(super) async fn sync_once(ctx: &Arc<WorkerContext>) -> Result<(), Failure> {
+    let account = load_account(ctx)?;
+    let secret = load_secret(ctx, &account)?;
+    let route = resolve_route_with(&ctx.store, ctx.secrets.as_ref(), account.proxy)
+        .map_err(|error| Failure::internal(&format!("选择代理失败：{error}")))?;
+
+    let client_config = ClientConfig {
+        host: account.imap.host.clone(),
+        port: account.imap.port,
+        security: account.imap.security,
+        username: account.username.clone(),
+        password: secret,
+        timeout: mail_net::DEFAULT_TIMEOUT,
+    };
+
+    let mut client = ImapClient::connect(&client_config, route.as_ref())
+        .await
+        .map_err(Failure::connection)?;
+    let folders = client.list_folders().await.map_err(Failure::connection)?;
+    for info in &folders {
+        if ctx.cancel.is_cancelled() {
+            break;
+        }
+        sync_folder(ctx, &mut client, info).await?;
+    }
+    client.logout().await;
+    Ok(())
+}
 /// 先逐文件夹落一遍数据，再进入守着收件箱的循环。
 async fn run_folders(
     ctx: &Arc<WorkerContext>,
