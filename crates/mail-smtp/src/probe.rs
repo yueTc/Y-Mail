@@ -5,8 +5,9 @@
 use std::time::Duration;
 
 use mail_domain::account::Security;
+use mail_domain::auth::AuthMaterial;
 use mail_domain::error::ConnectionError;
-use mail_domain::proxy::{ProxyRoute, Secret};
+use mail_domain::proxy::ProxyRoute;
 
 use crate::protocol::{authenticate, connect_greeted, send_command, start_session};
 
@@ -21,8 +22,8 @@ pub struct ProbeRequest {
     pub security: Security,
     /// 登录名（多数邮箱就是邮箱地址）。
     pub username: String,
-    /// 授权码或密码；只用于认证命令，绝不出现在日志与错误里。
-    pub password: Secret,
+    /// 认证材料：授权码或 OAuth2 访问令牌；只用于认证命令，绝不出现在日志与错误里。
+    pub auth: AuthMaterial,
     /// 整个自检的超时时间。
     pub timeout: Duration,
 }
@@ -30,7 +31,7 @@ pub struct ProbeRequest {
 /// 自检通过后的观察结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProbeReport {
-    /// 实际使用的认证方式（PLAIN 或 LOGIN）。
+    /// 实际使用的认证方式（PLAIN、LOGIN 或 XOAUTH2）。
     pub mechanism: String,
 }
 
@@ -55,8 +56,8 @@ fn validate(request: &ProbeRequest) -> Result<(), ConnectionError> {
     if request.username.trim().is_empty() {
         return Err(ConnectionError::protocol("登录名为空"));
     }
-    if request.password.is_empty() {
-        return Err(ConnectionError::auth("请先填写授权码"));
+    if request.auth.is_empty() {
+        return Err(ConnectionError::auth("请先填写授权码或完成授权"));
     }
     Ok(())
 }
@@ -72,7 +73,7 @@ async fn run(request: &ProbeRequest, route: Option<&ProxyRoute>) -> Result<Probe
     .await?;
     let (mut stream, ehlo) = start_session(stream, request.security, &request.host).await?;
 
-    let mechanism = authenticate(&mut stream, &request.username, request.password.expose(), &ehlo).await?;
+    let mechanism = authenticate(&mut stream, &request.username, &request.auth, &ehlo).await?;
 
     let reply = send_command(&mut stream, "QUIT").await?;
     if reply.code != 221 {
@@ -91,8 +92,8 @@ mod tests {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine as _;
     use mail_domain::account::Security;
+    use mail_domain::auth::AuthMaterial;
     use mail_domain::error::ConnectionErrorKind;
-    use mail_domain::proxy::Secret;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::{TcpListener, TcpStream};
 
@@ -104,7 +105,18 @@ mod tests {
             port,
             security,
             username: "user@example.com".to_string(),
-            password: Secret::new("pw-secret"),
+            auth: AuthMaterial::password("pw-secret"),
+            timeout: Duration::from_secs(5),
+        }
+    }
+
+    fn bearer_request(port: u16, security: Security) -> ProbeRequest {
+        ProbeRequest {
+            host: "127.0.0.1".to_string(),
+            port,
+            security,
+            username: "user@example.com".to_string(),
+            auth: AuthMaterial::bearer("tok-secret-123"),
             timeout: Duration::from_secs(5),
         }
     }
@@ -374,5 +386,129 @@ mod tests {
             .await
             .expect_err("应连不上");
         assert_eq!(err.kind, ConnectionErrorKind::NetworkUnreachable);
+    }
+
+    #[tokio::test]
+    async fn 令牌账号走xoauth2认证() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定失败");
+        let addr = listener.local_addr().expect("取地址失败");
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("接受连接失败");
+            let mut reader = BufReader::new(socket);
+            reader
+                .get_mut()
+                .write_all(b"220 ready\r\n")
+                .await
+                .expect("写入失败");
+            let _ = read_line(&mut reader).await;
+            reader
+                .get_mut()
+                .write_all(b"250-AUTH XOAUTH2 PLAIN LOGIN\r\n250 OK\r\n")
+                .await
+                .expect("写入失败");
+            let auth = read_line(&mut reader).await;
+            let token = auth.strip_prefix("AUTH XOAUTH2 ").expect("应走 XOAUTH2");
+            let decoded = STANDARD.decode(token).expect("应是 base64");
+            assert_eq!(
+                decoded,
+                mail_domain::auth::xoauth2_sasl("user@example.com", "tok-secret-123")
+            );
+            reader.get_mut().write_all(b"235 ok\r\n").await.expect("写入失败");
+            let _ = read_line(&mut reader).await;
+            reader
+                .get_mut()
+                .write_all(b"221 bye\r\n")
+                .await
+                .expect("写入失败");
+        });
+
+        let report = probe(&bearer_request(addr.port(), Security::Plain), None)
+            .await
+            .expect("自检应通过");
+        assert_eq!(report.mechanism, "XOAUTH2");
+    }
+
+    #[tokio::test]
+    async fn 令牌账号在服务器不支持xoauth2时不退回密码认证() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定失败");
+        let addr = listener.local_addr().expect("取地址失败");
+        let handle = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("接受连接失败");
+            let mut reader = BufReader::new(socket);
+            reader
+                .get_mut()
+                .write_all(b"220 ready\r\n")
+                .await
+                .expect("写入失败");
+            let _ = read_line(&mut reader).await;
+            reader
+                .get_mut()
+                .write_all(b"250-AUTH PLAIN LOGIN\r\n250 OK\r\n")
+                .await
+                .expect("写入失败");
+            // 只广告 PLAIN / LOGIN，客户端不该再发任何认证命令。
+            read_line(&mut reader).await
+        });
+
+        let err = probe(&bearer_request(addr.port(), Security::Plain), None)
+            .await
+            .expect_err("应直接失败");
+        assert_eq!(err.kind, ConnectionErrorKind::AuthFailed);
+        assert!(!err.message.contains("tok-secret-123"));
+        let received = handle.await.expect("服务端任务应正常结束");
+        assert!(received.is_empty(), "不得退回明文或登录式认证：{received}");
+    }
+
+    #[tokio::test]
+    async fn 令牌认证被拒时日志不泄露令牌与回显内容() {
+        let encoded = STANDARD.encode(mail_domain::auth::xoauth2_sasl(
+            "user@example.com",
+            "tok-secret-123",
+        ));
+        let echo = encoded.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定失败");
+        let addr = listener.local_addr().expect("取地址失败");
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("接受连接失败");
+            let mut reader = BufReader::new(socket);
+            reader
+                .get_mut()
+                .write_all(b"220 ready\r\n")
+                .await
+                .expect("写入失败");
+            let _ = read_line(&mut reader).await;
+            reader
+                .get_mut()
+                .write_all(b"250-AUTH XOAUTH2\r\n250 OK\r\n")
+                .await
+                .expect("写入失败");
+            let _ = read_line(&mut reader).await;
+            // 失败时先回 334 挑战，并把 base64 令牌回显在里面。
+            reader
+                .get_mut()
+                .write_all(format!("334 {echo}\r\n").as_bytes())
+                .await
+                .expect("写入失败");
+            let blank = read_line(&mut reader).await;
+            assert!(blank.is_empty(), "应回空行：{blank}");
+            reader
+                .get_mut()
+                .write_all(format!("535 5.7.8 bad token ({echo})\r\n").as_bytes())
+                .await
+                .expect("写入失败");
+        });
+
+        let logs = log_buffer();
+
+        let err = probe(&bearer_request(addr.port(), Security::Plain), None)
+            .await
+            .expect_err("应认证失败");
+
+        assert_eq!(err.kind, ConnectionErrorKind::AuthFailed);
+        assert!(!err.message.contains("tok-secret-123"));
+        let text = String::from_utf8(logs.lock().expect("日志锁").clone()).expect("日志应是文本");
+        assert!(text.contains("SMTP 认证未通过"), "应记录失败日志：{text}");
+        assert!(!text.contains(&encoded), "日志不得包含 base64 令牌");
+        assert!(!text.contains("tok-secret-123"), "日志不得包含明文令牌");
     }
 }

@@ -1921,6 +1921,7 @@ version = "0.1.0"
 name = "mail-imap"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "mail-domain",
  "mail-net",
  "thiserror 2.0.21",

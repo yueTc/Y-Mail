@@ -2,7 +2,10 @@
 
 use std::time::Duration;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use mail_domain::account::Security;
+use mail_domain::auth::{xoauth2_sasl, AuthMaterial};
 use mail_domain::error::ConnectionError;
 use mail_domain::proxy::ProxyRoute;
 use mail_net::io::write_crlf_line;
@@ -385,6 +388,61 @@ impl ImapClient {
         Ok(())
     }
 
+    /// 用 OAuth2 访问令牌登录（SASL XOAUTH2）。
+    ///
+    /// 初始响应直接跟在命令后面，兼容 Gmail / Outlook；令牌只用于拼这一条命令，
+    /// 已被登记进脱敏表，错误文案不会回显它。
+    async fn login_xoauth2(&mut self, username: &str, token: &str) -> Result<(), ConnectionError> {
+        if username.contains(['\r', '\n']) {
+            return Err(ConnectionError::protocol("登录名包含不支持的换行符"));
+        }
+        let payload = STANDARD.encode(xoauth2_sasl(username, token));
+        let tag = self.next_tag();
+        let line = format!("{tag} AUTHENTICATE XOAUTH2 {payload}");
+        write_crlf_line(&mut self.stream, &line).await?;
+        let reply = self.read_auth_reply(&tag).await?;
+        if reply.status != "OK" {
+            tracing::debug!(reply = %reply.detail, "IMAP XOAUTH2 登录未通过");
+            return Err(ConnectionError::auth(
+                "OAuth2 授权被服务器拒绝：授权可能已过期，请重新授权",
+            ));
+        }
+        Ok(())
+    }
+
+    /// 读取一次 SASL 交换的应答。
+    ///
+    /// 令牌被拒时服务器会先回一行 `+` 挑战，要求客户端再发一次响应才给最终错误码；
+    /// 这里遇到 `+` 就回一个空行，然后继续等 tagged 应答。
+    async fn read_auth_reply(&mut self, tag: &str) -> Result<CommandReply, ConnectionError> {
+        let prefix = format!("{tag} ");
+        let mut lines = Vec::new();
+        loop {
+            let line = read_response(&mut self.stream, MAX_LINE, MAX_TOTAL).await?;
+            if line.starts_with(prefix.as_bytes()) {
+                let rest = String::from_utf8_lossy(&line[prefix.len()..]).to_string();
+                let status = rest
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_ascii_uppercase();
+                return Ok(CommandReply {
+                    status,
+                    detail: self.sanitize(&rest),
+                    lines,
+                });
+            }
+            if line.first() == Some(&b'+') {
+                write_crlf_line(&mut self.stream, "").await?;
+                continue;
+            }
+            if line.starts_with(b"* BYE") {
+                return Err(ConnectionError::rejected("服务器中断了连接"));
+            }
+            lines.push(line);
+        }
+    }
+
     async fn load_capabilities(&mut self) -> Result<(), ConnectionError> {
         let reply = self.command("CAPABILITY").await?;
         if reply.status != "OK" {
@@ -478,8 +536,13 @@ fn validate(config: &ClientConfig) -> Result<(), ConnectionError> {
     if config.username.trim().is_empty() {
         return Err(ConnectionError::protocol("登录名为空"));
     }
-    if config.password.is_empty() {
-        return Err(ConnectionError::auth("请先填写授权码"));
+    if config.auth.is_empty() {
+        let hint = if config.auth.is_bearer() {
+            "该账号还没有可用的登录令牌，请重新授权"
+        } else {
+            "请先填写授权码"
+        };
+        return Err(ConnectionError::auth(hint));
     }
     Ok(())
 }
@@ -525,12 +588,21 @@ async fn connect_inner(
         stream,
         tag,
         capabilities: Vec::new(),
-        redactor: vec![config.password.expose().to_string()],
+        redactor: vec![config.auth.expose().to_string()],
         timeout: config.timeout,
     };
 
     if !authenticated {
-        client.login(&config.username, config.password.expose()).await?;
+        match &config.auth {
+            AuthMaterial::Password(_) => {
+                client.login(&config.username, config.auth.expose()).await?;
+            }
+            AuthMaterial::Bearer(_) => {
+                client
+                    .login_xoauth2(&config.username, config.auth.expose())
+                    .await?;
+            }
+        }
     }
     client.load_capabilities().await?;
     client.send_id_if_supported().await?;

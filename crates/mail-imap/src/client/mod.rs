@@ -11,7 +11,7 @@ mod tests;
 use std::time::Duration;
 
 use mail_domain::account::Security;
-use mail_domain::proxy::Secret;
+use mail_domain::auth::AuthMaterial;
 use mail_net::Stream;
 
 /// 连一条 IMAP 连接所需的全部信息。
@@ -25,8 +25,8 @@ pub struct ClientConfig {
     pub security: Security,
     /// 登录名（多数邮箱就是邮箱地址）。
     pub username: String,
-    /// 授权码或密码；只用于拼 LOGIN，绝不出现在日志与错误里。
-    pub password: Secret,
+    /// 认证材料：授权码或 OAuth2 访问令牌；绝不出现在日志与错误里。
+    pub auth: AuthMaterial,
     /// 单条命令的超时时间。
     pub timeout: Duration,
 }

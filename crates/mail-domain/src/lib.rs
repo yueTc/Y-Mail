@@ -8,6 +8,7 @@
 //! Wave 2 起补上同步相关的纯逻辑：文件夹归类、历史范围、退避计算与线程键。
 
 pub mod account;
+pub mod auth;
 pub mod dates;
 pub mod error;
 pub mod proxy;
@@ -16,6 +17,7 @@ pub mod sync;
 pub use account::{
     Account, AccountDraft, AccountId, AccountProxyMode, AuthType, OAuthProvider, Security, ServerConfig,
 };
+pub use auth::{xoauth2_sasl, AuthMaterial};
 pub use dates::{civil_from_days, days_from_civil, format_imap_date, format_iso8601_utc, parse_mail_date};
 pub use error::{ConnectionError, ConnectionErrorKind, ValidationError};
 pub use proxy::{

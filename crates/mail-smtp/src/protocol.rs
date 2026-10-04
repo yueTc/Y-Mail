@@ -9,6 +9,7 @@ use std::time::Duration;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use mail_domain::account::Security;
+use mail_domain::auth::{xoauth2_sasl, AuthMaterial};
 use mail_domain::error::ConnectionError;
 use mail_domain::proxy::ProxyRoute;
 use mail_net::io::{read_crlf_line, write_crlf_line};
@@ -79,27 +80,39 @@ pub(crate) async fn start_session(
     Ok((stream, ehlo))
 }
 
-/// 按服务器广告的方式认证：PLAIN 优先，退 LOGIN；返回实际使用的方式名。
+/// 按服务器广告的方式认证；返回实际使用的方式名。
+///
+/// 普通密码走 PLAIN 优先、退 LOGIN；OAuth2 令牌只走 XOAUTH2，
+/// 绝不会把令牌当成密码塞进 PLAIN / LOGIN。
 pub(crate) async fn authenticate(
     stream: &mut Stream,
     username: &str,
-    password: &str,
+    auth: &AuthMaterial,
     ehlo: &Reply,
 ) -> Result<&'static str, ConnectionError> {
-    let mut mechanisms = parse_auth_mechanisms(ehlo);
-    if mechanisms.is_empty() {
-        // 少数服务器不主动广告认证方式，仍按最常见的 PLAIN 试一次。
-        mechanisms.push("PLAIN".to_string());
-    }
-    if mechanisms.iter().any(|item| item == "PLAIN") {
-        auth_plain(stream, username, password).await?;
+    let mechanisms = parse_auth_mechanisms(ehlo);
+    if auth.is_bearer() {
+        if mechanisms.iter().any(|item| item == "XOAUTH2") {
+            auth_xoauth2(stream, username, auth.expose()).await?;
+            Ok("XOAUTH2")
+        } else {
+            Err(ConnectionError::auth(
+                "服务器没有广告 XOAUTH2，无法用 OAuth2 令牌登录",
+            ))
+        }
+    } else if mechanisms.iter().any(|item| item == "PLAIN") {
+        auth_plain(stream, username, auth.expose()).await?;
         Ok("PLAIN")
     } else if mechanisms.iter().any(|item| item == "LOGIN") {
-        auth_login(stream, username, password).await?;
+        auth_login(stream, username, auth.expose()).await?;
         Ok("LOGIN")
+    } else if mechanisms.is_empty() {
+        // 少数服务器不主动广告认证方式，仍按最常见的 PLAIN 试一次。
+        auth_plain(stream, username, auth.expose()).await?;
+        Ok("PLAIN")
     } else {
         Err(ConnectionError::auth(
-            "服务器没有提供受支持的认证方式（仅支持 PLAIN 或 LOGIN）",
+            "服务器没有提供受支持的认证方式（仅支持 PLAIN、LOGIN 或 XOAUTH2）",
         ))
     }
 }
@@ -116,8 +129,10 @@ pub(crate) async fn send_ehlo(stream: &mut Stream) -> Result<Reply, ConnectionEr
 }
 
 /// 从 EHLO 应答里挑出认证方式，例如 `250-AUTH PLAIN LOGIN`。
+///
+/// 只保留我们支持的三种，重复广告只记一次；顺序按服务器广告的先后。
 fn parse_auth_mechanisms(reply: &Reply) -> Vec<String> {
-    let mut mechanisms = Vec::new();
+    let mut mechanisms: Vec<String> = Vec::new();
     for line in &reply.lines {
         let upper = line.to_ascii_uppercase();
         let Some(index) = upper.find("AUTH") else {
@@ -127,15 +142,11 @@ fn parse_auth_mechanisms(reply: &Reply) -> Vec<String> {
         // 形如「AUTH=PLAIN LOGIN」时先去掉等号。
         let rest = rest.trim_start().trim_start_matches('=');
         for item in rest.split_whitespace() {
-            if item == "PLAIN" || item == "LOGIN" {
+            if matches!(item, "PLAIN" | "LOGIN" | "XOAUTH2") && !mechanisms.iter().any(|seen| seen == item) {
                 mechanisms.push(item.to_string());
             }
         }
     }
-    if mechanisms.iter().any(|item| item == "PLAIN") {
-        return vec!["PLAIN".to_string()];
-    }
-    mechanisms.truncate(1);
     mechanisms
 }
 
@@ -157,14 +168,26 @@ async fn auth_plain(stream: &mut Stream, username: &str, password: &str) -> Resu
 async fn auth_login(stream: &mut Stream, username: &str, password: &str) -> Result<(), ConnectionError> {
     let reply = send_command(stream, "AUTH LOGIN").await?;
     if reply.code != 334 {
-        return Err(auth_error(&reply));
+        return Err(auth_error(&reply, "LOGIN"));
     }
     let reply = send_command(stream, &STANDARD.encode(username)).await?;
     if reply.code != 334 {
-        return Err(auth_error(&reply));
+        return Err(auth_error(&reply, "LOGIN"));
     }
     let reply = send_command(stream, &STANDARD.encode(password)).await?;
     check_auth_reply(&reply, "LOGIN")
+}
+
+/// XOAUTH2：一条命令带上 SASL 串。部分服务器失败时先回 334 挑战，
+/// 客户端需要回一个空行，服务器才给最终应答。
+async fn auth_xoauth2(stream: &mut Stream, username: &str, token: &str) -> Result<(), ConnectionError> {
+    let sasl = STANDARD.encode(xoauth2_sasl(username, token));
+    let reply = send_command(stream, &format!("AUTH XOAUTH2 {sasl}")).await?;
+    if reply.code == 334 {
+        let reply = send_command(stream, "").await?;
+        return check_auth_reply(&reply, "XOAUTH2");
+    }
+    check_auth_reply(&reply, "XOAUTH2")
 }
 
 fn check_auth_reply(reply: &Reply, mechanism: &str) -> Result<(), ConnectionError> {
@@ -173,14 +196,16 @@ fn check_auth_reply(reply: &Reply, mechanism: &str) -> Result<(), ConnectionErro
     }
     // 服务器应答正文可能回显 base64 后的账号与授权码，认证失败时整段不写日志。
     tracing::debug!(code = reply.code, mechanism, "SMTP 认证未通过，响应正文不记录");
-    Err(auth_error(reply))
+    Err(auth_error(reply, mechanism))
 }
 
-fn auth_error(reply: &Reply) -> ConnectionError {
-    ConnectionError::auth(format!(
-        "登录被服务器拒绝（返回码 {}）：请检查登录名与授权码",
-        reply.code
-    ))
+fn auth_error(reply: &Reply, mechanism: &str) -> ConnectionError {
+    let hint = if mechanism == "XOAUTH2" {
+        "请到账号设置里重新授权"
+    } else {
+        "请检查登录名与授权码"
+    };
+    ConnectionError::auth(format!("登录被服务器拒绝（返回码 {}）：{hint}", reply.code))
 }
 
 pub(crate) async fn send_command(stream: &mut Stream, command: &str) -> Result<Reply, ConnectionError> {

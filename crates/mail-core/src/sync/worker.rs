@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use mail_domain::auth::AuthMaterial;
 use mail_domain::dates::{format_iso8601_utc, unix_now};
 use mail_domain::proxy::Secret;
 use mail_domain::{
@@ -155,7 +156,7 @@ async fn session(ctx: &Arc<WorkerContext>) -> Result<(), Failure> {
         port: account.imap.port,
         security: account.imap.security,
         username: account.username.clone(),
-        password: secret,
+        auth: AuthMaterial::for_account(account.auth_type, secret),
         timeout: mail_net::DEFAULT_TIMEOUT,
     };
 
@@ -192,7 +193,7 @@ pub(super) async fn sync_once(ctx: &Arc<WorkerContext>) -> Result<(), Failure> {
         port: account.imap.port,
         security: account.imap.security,
         username: account.username.clone(),
-        password: secret,
+        auth: AuthMaterial::for_account(account.auth_type, secret),
         timeout: mail_net::DEFAULT_TIMEOUT,
     };
 

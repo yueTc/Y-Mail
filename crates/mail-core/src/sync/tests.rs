@@ -74,7 +74,7 @@ fn client_config(port: u16) -> ClientConfig {
         port,
         security: Security::Plain,
         username: "tester@example.com".to_string(),
-        password: Secret::new("pw"),
+        auth: mail_domain::auth::AuthMaterial::password("pw"),
         timeout: Duration::from_secs(5),
     }
 }

@@ -11,6 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
+use mail_domain::auth::AuthMaterial;
 use mail_domain::AccountId;
 use mail_imap::{ClientConfig, ImapClient};
 use mail_mime::{
@@ -274,7 +275,7 @@ impl MailEngine {
             port: account.imap.port,
             security: account.imap.security,
             username: account.username.clone(),
-            password: secret,
+            auth: AuthMaterial::for_account(account.auth_type, secret),
             timeout: mail_net::DEFAULT_TIMEOUT,
         };
         ImapClient::connect(&config, route.as_ref())

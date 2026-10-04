@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use mail_domain::account::Security;
+use mail_domain::auth::AuthMaterial;
 use mail_domain::error::ConnectionErrorKind;
-use mail_domain::proxy::Secret;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -17,7 +17,7 @@ fn config(port: u16) -> ClientConfig {
         port,
         security: Security::Plain,
         username: "user@example.com".to_string(),
-        password: Secret::new("pw"),
+        auth: AuthMaterial::password("pw"),
         timeout: Duration::from_secs(5),
     }
 }

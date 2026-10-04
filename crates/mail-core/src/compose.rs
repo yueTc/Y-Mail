@@ -14,6 +14,7 @@
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
+use mail_domain::auth::AuthMaterial;
 use mail_domain::dates::unix_now;
 use mail_domain::{Account, AccountId, FolderKind};
 use mail_imap::{ClientConfig, ImapClient};
@@ -333,7 +334,7 @@ impl MailEngine {
             port: account.smtp.port,
             security: account.smtp.security,
             username: account.username.clone(),
-            password: secret,
+            auth: AuthMaterial::for_account(account.auth_type, secret),
             timeout: mail_net::DEFAULT_TIMEOUT,
             mail_from: account.email.clone(),
             recipients: built.recipients.clone(),
@@ -391,7 +392,7 @@ impl MailEngine {
             port: account.imap.port,
             security: account.imap.security,
             username: account.username.clone(),
-            password: secret,
+            auth: AuthMaterial::for_account(account.auth_type, secret),
             timeout: mail_net::DEFAULT_TIMEOUT,
         };
         let mut client = ImapClient::connect(&config, route.as_ref())

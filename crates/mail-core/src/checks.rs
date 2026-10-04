@@ -3,6 +3,7 @@
 //! 安全约定：授权码只在内存里传递；错误文案由协议层脱敏后返回，本模块只加环节前缀。
 
 use mail_domain::account::AccountDraft;
+use mail_domain::auth::AuthMaterial;
 use mail_domain::error::ConnectionError;
 use mail_domain::proxy::{ProxyRoute, Secret};
 
@@ -11,7 +12,7 @@ use mail_domain::proxy::{ProxyRoute, Secret};
 pub struct ConnectionReport {
     /// 收件服务器上能看到的文件夹数量。
     pub imap_folder_count: usize,
-    /// 发件服务器实际使用的登录方式（`PLAIN` / `LOGIN`）。
+    /// 发件服务器实际使用的登录方式（`PLAIN` / `LOGIN` / `XOAUTH2`）。
     pub smtp_mechanism: String,
 }
 
@@ -26,16 +27,19 @@ pub(crate) struct ProbePlan {
 }
 
 impl ProbePlan {
-    /// 由账号草稿、授权码与代理路线组装探测计划。
+    /// 由账号草稿、凭据与代理路线组装探测计划。
+    ///
+    /// 凭据按账号的认证方式包成材料：普通账号是授权码，OAuth2 账号是访问令牌。
     pub fn new(draft: &AccountDraft, secret: &Secret, route: Option<ProxyRoute>) -> Self {
         let timeout = mail_net::DEFAULT_TIMEOUT;
+        let auth = AuthMaterial::for_account(draft.auth_type, secret.clone());
         Self {
             imap: mail_imap::ProbeRequest {
                 host: draft.imap.host.clone(),
                 port: draft.imap.port,
                 security: draft.imap.security,
                 username: draft.username.clone(),
-                password: secret.clone(),
+                auth: auth.clone(),
                 timeout,
             },
             smtp: mail_smtp::ProbeRequest {
@@ -43,7 +47,7 @@ impl ProbePlan {
                 port: draft.smtp.port,
                 security: draft.smtp.security,
                 username: draft.username.clone(),
-                password: secret.clone(),
+                auth,
                 timeout,
             },
             route,
@@ -109,7 +113,7 @@ mod tests {
         let plan = ProbePlan::new(&draft(), &secret, None);
         assert_eq!(plan.imap.port, 993);
         assert_eq!(plan.smtp.port, 465);
-        assert_eq!(plan.imap.password.expose(), "pw");
+        assert_eq!(plan.imap.auth.expose(), "pw");
         assert!(plan.route.is_none());
     }
 

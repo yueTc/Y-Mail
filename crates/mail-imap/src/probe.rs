@@ -6,9 +6,12 @@
 
 use std::time::Duration;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use mail_domain::account::Security;
+use mail_domain::auth::{xoauth2_sasl, AuthMaterial};
 use mail_domain::error::ConnectionError;
-use mail_domain::proxy::{ProxyRoute, Secret};
+use mail_domain::proxy::ProxyRoute;
 use mail_net::io::{read_crlf_line, write_crlf_line};
 use mail_net::{connect_tcp, tls_wrap, Stream};
 
@@ -23,8 +26,8 @@ pub struct ProbeRequest {
     pub security: Security,
     /// 登录名（多数邮箱就是邮箱地址）。
     pub username: String,
-    /// 授权码或密码；只用于登录命令，绝不出现在日志与错误里。
-    pub password: Secret,
+    /// 认证材料：授权码或 OAuth2 访问令牌；绝不进日志与错误信息。
+    pub auth: AuthMaterial,
     /// 整个自检的超时时间。
     pub timeout: Duration,
 }
@@ -67,8 +70,13 @@ fn validate(request: &ProbeRequest) -> Result<(), ConnectionError> {
     if request.username.trim().is_empty() {
         return Err(ConnectionError::protocol("登录名为空"));
     }
-    if request.password.is_empty() {
-        return Err(ConnectionError::auth("请先填写授权码"));
+    if request.auth.is_empty() {
+        let hint = if request.auth.is_bearer() {
+            "该账号还没有可用的登录令牌，请重新授权"
+        } else {
+            "请先填写授权码"
+        };
+        return Err(ConnectionError::auth(hint));
     }
     Ok(())
 }
@@ -106,15 +114,30 @@ async fn run(request: &ProbeRequest, route: Option<&ProxyRoute>) -> Result<Probe
     }
 
     if !already_authenticated {
-        let user = quote_imap_string(&request.username)?;
-        let password = quote_imap_string(request.password.expose())?;
-        let reply = send_command(&mut stream, "a002", &format!("LOGIN {user} {password}")).await?;
-        if reply.status != "OK" {
-            let cleaned = mail_net::error::redact(&reply.detail, &[request.password.expose()]);
-            tracing::debug!(reply = %cleaned, "IMAP 登录未通过");
-            return Err(ConnectionError::auth(
-                "登录被服务器拒绝：请检查登录名与授权码（多数邮箱需要单独申请授权码）",
-            ));
+        match &request.auth {
+            AuthMaterial::Password(_) => {
+                let user = quote_imap_string(&request.username)?;
+                let password = quote_imap_string(request.auth.expose())?;
+                let reply = send_command(&mut stream, "a002", &format!("LOGIN {user} {password}")).await?;
+                if reply.status != "OK" {
+                    let cleaned = mail_net::error::redact(&reply.detail, &[request.auth.expose()]);
+                    tracing::debug!(reply = %cleaned, "IMAP 登录未通过");
+                    return Err(ConnectionError::auth(
+                        "登录被服务器拒绝：请检查登录名与授权码（多数邮箱需要单独申请授权码）",
+                    ));
+                }
+            }
+            AuthMaterial::Bearer(_) => {
+                let reply =
+                    xoauth2_login(&mut stream, "a002", &request.username, request.auth.expose()).await?;
+                if reply.status != "OK" {
+                    let cleaned = mail_net::error::redact(&reply.detail, &[request.auth.expose()]);
+                    tracing::debug!(reply = %cleaned, "IMAP XOAUTH2 登录未通过");
+                    return Err(ConnectionError::auth(
+                        "OAuth2 授权被服务器拒绝：授权可能已过期，请重新授权",
+                    ));
+                }
+            }
         }
     }
 
@@ -150,7 +173,7 @@ async fn run(request: &ProbeRequest, route: Option<&ProxyRoute>) -> Result<Probe
     let reply = send_command(&mut stream, &format!("a{next_tag:03}"), "LIST \"\" \"*\"").await?;
     next_tag += 1;
     if reply.status != "OK" {
-        let detail = sanitize_detail(&reply.detail, request.password.expose());
+        let detail = sanitize_detail(&reply.detail, request.auth.expose());
         return Err(ConnectionError::protocol(format!("读取文件夹列表失败：{detail}")));
     }
     let folder_count = reply
@@ -163,7 +186,7 @@ async fn run(request: &ProbeRequest, route: Option<&ProxyRoute>) -> Result<Probe
     let reply = send_command(&mut stream, &format!("a{next_tag:03}"), "SELECT \"INBOX\"").await?;
     next_tag += 1;
     if reply.status != "OK" {
-        let detail = sanitize_detail(&reply.detail, request.password.expose());
+        let detail = sanitize_detail(&reply.detail, request.auth.expose());
         return Err(ConnectionError::rejected(format!("打开收件箱失败：{detail}")));
     }
 
@@ -198,6 +221,39 @@ async fn send_command(
     }
 }
 
+/// 用 XOAUTH2 发一条登录命令；服务器回 `+` 挑战时补一个空行再等最终应答。
+async fn xoauth2_login(
+    stream: &mut Stream,
+    tag: &str,
+    username: &str,
+    token: &str,
+) -> Result<CommandReply, ConnectionError> {
+    let payload = STANDARD.encode(xoauth2_sasl(username, token));
+    write_crlf_line(stream, &format!("{tag} AUTHENTICATE XOAUTH2 {payload}")).await?;
+    let prefix = format!("{tag} ");
+    let mut lines = Vec::new();
+    loop {
+        let line = read_crlf_line(stream, 65536).await?;
+        if let Some(rest) = line.strip_prefix(&prefix) {
+            let status = rest
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_ascii_uppercase();
+            return Ok(CommandReply {
+                status,
+                detail: rest.to_string(),
+                lines,
+            });
+        }
+        if line.starts_with('+') {
+            write_crlf_line(stream, "").await?;
+            continue;
+        }
+        lines.push(line);
+    }
+}
+
 /// 服务器原文先脱敏再展示，避免任何角落回显授权码。
 fn sanitize_detail(detail: &str, secret: &str) -> String {
     let cleaned = mail_net::error::redact(detail, &[secret]);
@@ -217,9 +273,11 @@ fn quote_imap_string(value: &str) -> Result<String, ConnectionError> {
 mod tests {
     use std::time::Duration;
 
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
     use mail_domain::account::Security;
+    use mail_domain::auth::AuthMaterial;
     use mail_domain::error::ConnectionErrorKind;
-    use mail_domain::proxy::Secret;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::{TcpListener, TcpStream};
 
@@ -231,7 +289,7 @@ mod tests {
             port,
             security,
             username: "user@example.com".to_string(),
-            password: Secret::new("pw-secret"),
+            auth: AuthMaterial::password("pw-secret"),
             timeout: Duration::from_secs(5),
         }
     }
@@ -440,6 +498,70 @@ mod tests {
             .await
             .expect_err("应连不上");
         assert_eq!(err.kind, ConnectionErrorKind::NetworkUnreachable);
+    }
+
+    #[tokio::test]
+    async fn 授权账号走xoauth2登录() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定失败");
+        let addr = listener.local_addr().expect("取地址失败");
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("接受连接失败");
+            let mut reader = BufReader::new(socket);
+            reader
+                .get_mut()
+                .write_all(b"* OK ready\r\n")
+                .await
+                .expect("写入失败");
+            let auth = read_line(&mut reader).await;
+            let prefix = "a002 AUTHENTICATE XOAUTH2 ";
+            assert!(auth.starts_with(prefix), "应发出 XOAUTH2 命令：{auth}");
+            let payload = STANDARD.decode(&auth[prefix.len()..]).expect("base64 应能解码");
+            let mut expected = Vec::new();
+            expected.extend_from_slice(b"user=user@example.com");
+            expected.push(0x01);
+            expected.extend_from_slice(b"auth=Bearer tok-abc");
+            expected.push(0x01);
+            expected.push(0x01);
+            assert_eq!(payload, expected, "SASL 初始响应应拼装正确");
+            reader
+                .get_mut()
+                .write_all(b"a002 OK AUTHENTICATE completed\r\n")
+                .await
+                .expect("写入失败");
+            let capability = read_line(&mut reader).await;
+            assert_eq!(capability, "a003 CAPABILITY");
+            reader
+                .get_mut()
+                .write_all(b"* CAPABILITY IMAP4rev1\r\na003 OK CAPABILITY completed\r\n")
+                .await
+                .expect("写入失败");
+            let list = read_line(&mut reader).await;
+            assert_eq!(list, "a004 LIST \"\" \"*\"");
+            reader
+                .get_mut()
+                .write_all(b"* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\na004 OK LIST completed\r\n")
+                .await
+                .expect("写入失败");
+            let select = read_line(&mut reader).await;
+            assert_eq!(select, "a005 SELECT \"INBOX\"");
+            reader
+                .get_mut()
+                .write_all(b"a005 OK SELECT completed\r\n")
+                .await
+                .expect("写入失败");
+            let logout = read_line(&mut reader).await;
+            assert_eq!(logout, "a006 LOGOUT");
+            reader
+                .get_mut()
+                .write_all(b"a006 OK\r\n")
+                .await
+                .expect("写入失败");
+        });
+
+        let mut req = request(addr.port(), Security::Plain);
+        req.auth = AuthMaterial::bearer("tok-abc");
+        let report = probe(&req, None).await.expect("自检应通过");
+        assert_eq!(report.folder_count, 1);
     }
 
     #[tokio::test]
