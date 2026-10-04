@@ -300,7 +300,7 @@ impl MailEngine {
 
     /// 投递一封已经认领的邮件；返回投递报告或（可读原因, 是否可重试）。
     async fn deliver_claimed(&self, outbox: &StoredOutbox) -> Result<SendReport, (String, bool)> {
-        let (account, secret) = self.sending_credentials(outbox.account_id)?;
+        let (account, secret) = self.sending_credentials(outbox.account_id).await?;
         let recipients = parse_participants(&outbox.to_json)?;
         let cc = parse_participants(&outbox.cc_json)?;
         let bcc = parse_participants(&outbox.bcc_json)?;
@@ -369,7 +369,7 @@ impl MailEngine {
 
     /// 追加一份原文到已发送文件夹；找不到文件夹返回 Ok(None)。
     async fn try_append_to_sent(&self, outbox: &StoredOutbox) -> Result<Option<String>, EngineError> {
-        let (account, secret, sent_path) = {
+        let (account, sent_path) = {
             let store = lock_store(&self.store);
             let account = store
                 .get_account(AccountId(outbox.account_id))?
@@ -379,12 +379,12 @@ impl MailEngine {
                 .iter()
                 .find(|folder| folder.kind == FolderKind::Sent)
                 .map(|folder| folder.full_path.clone());
-            let secret = load_sending_secret(&store, self.secrets(), &account)?;
-            (account, secret, sent)
+            (account, sent)
         };
         let Some(sent_path) = sent_path else {
             return Ok(None);
         };
+        let secret = self.resolved_secret(&account).await?;
 
         let route = resolve_route_with(&self.store, self.secrets(), account.proxy)?;
         let config = ClientConfig {
@@ -398,7 +398,7 @@ impl MailEngine {
         let mut client = ImapClient::connect(&config, route.as_ref())
             .await
             .map_err(EngineError::from)?;
-        let raw = self.raw_for_append(outbox)?;
+        let raw = self.raw_for_append(outbox).await?;
         client
             .append(&sent_path, &raw, true)
             .await
@@ -416,45 +416,31 @@ impl MailEngine {
 }
 
 /// 用账号信息 + 保险箱里的授权码组装发送凭据。
-fn load_sending_secret(
-    _store: &Store,
-    secrets: &dyn crate::secrets::SecretStore,
-    account: &Account,
-) -> Result<mail_domain::proxy::Secret, EngineError> {
-    let key = account.credential_key.as_deref().ok_or_else(|| {
-        EngineError::BadRequest("该账号还没有保存授权码，请到账号设置里重新填写".to_string())
-    })?;
-    secrets
-        .get(key)
-        .map_err(|_| EngineError::BadRequest("读取系统凭据失败，请稍后重试".to_string()))?
-        .ok_or_else(|| {
-            EngineError::BadRequest("系统凭据管理器里找不到该账号的授权码，请重新填写".to_string())
-        })
-}
-
 impl MailEngine {
-    /// 取出一个账号与它的授权码，供投递使用。
-    fn sending_credentials(
+    /// 取出一个账号与它当前可用的凭据，供投递使用。
+    async fn sending_credentials(
         &self,
         account_id: i64,
     ) -> Result<(Account, mail_domain::proxy::Secret), (String, bool)> {
-        let (account, secret) = {
+        let account = {
             let store = lock_store(&self.store);
-            let account = store
+            store
                 .get_account(AccountId(account_id))
                 .map_err(|error| (format!("读取账号失败：{error}"), false))?
-                .ok_or_else(|| (format!("账号 {account_id} 不存在或已被删除"), false))?;
-            let secret = load_sending_secret(&store, self.secrets(), &account)
-                .map_err(|error| (error.to_string(), false))?;
-            (account, secret)
+                .ok_or_else(|| (format!("账号 {account_id} 不存在或已被删除"), false))?
         };
+        let secret = self
+            .resolved_secret(&account)
+            .await
+            .map_err(|error| (error.to_string(), false))?;
         Ok((account, secret))
     }
 
     /// 重新组装一次原文，用于追加到已发送文件夹。
-    fn raw_for_append(&self, outbox: &StoredOutbox) -> Result<Vec<u8>, EngineError> {
+    async fn raw_for_append(&self, outbox: &StoredOutbox) -> Result<Vec<u8>, EngineError> {
         let (account, _) = self
             .sending_credentials(outbox.account_id)
+            .await
             .map_err(|(message, _)| EngineError::BadRequest(message))?;
         let recipients =
             parse_participants(&outbox.to_json).map_err(|(message, _)| EngineError::BadRequest(message))?;

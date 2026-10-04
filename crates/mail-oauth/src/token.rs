@@ -79,7 +79,7 @@ pub async fn exchange_code(
     timeout: Duration,
 ) -> Result<TokenSet, OAuthError> {
     let meta = provider_meta(kind);
-    exchange_code_with_endpoint(
+    exchange_code_at(
         meta.token_endpoint,
         route,
         client_id,
@@ -91,8 +91,8 @@ pub async fn exchange_code(
     .await
 }
 
-/// 与上同，但允许指定令牌地址（测试用本地假服务器）。
-pub(crate) async fn exchange_code_with_endpoint(
+/// 与 [`exchange_code`] 相同，但允许指定令牌地址（自建授权服务或测试用）。
+pub async fn exchange_code_at(
     endpoint: &str,
     route: Option<&ProxyRoute>,
     client_id: &str,
@@ -120,11 +120,11 @@ pub async fn refresh(
     timeout: Duration,
 ) -> Result<TokenSet, OAuthError> {
     let meta = provider_meta(kind);
-    refresh_with_endpoint(meta.token_endpoint, route, client_id, refresh_token, timeout).await
+    refresh_at(meta.token_endpoint, route, client_id, refresh_token, timeout).await
 }
 
-/// 与上同，但允许指定令牌地址（测试用本地假服务器）。
-pub(crate) async fn refresh_with_endpoint(
+/// 与 [`refresh`] 相同，但允许指定令牌地址（自建授权服务或测试用）。
+pub async fn refresh_at(
     endpoint: &str,
     route: Option<&ProxyRoute>,
     client_id: &str,
@@ -199,7 +199,7 @@ mod tests {
         )
         .await;
         let endpoint = format!("http://127.0.0.1:{port}/token");
-        let tokens = exchange_code_with_endpoint(
+        let tokens = exchange_code_at(
             &endpoint,
             None,
             "client-1",
@@ -220,7 +220,7 @@ mod tests {
     async fn 刷新时不返回新刷新令牌会沿用旧的() {
         let port = fake_server("200 OK", r#"{"access_token":"at-2","expires_in":600}"#).await;
         let endpoint = format!("http://127.0.0.1:{port}/token");
-        let tokens = refresh_with_endpoint(&endpoint, None, "client-1", "rt-old", Duration::from_secs(5))
+        let tokens = refresh_at(&endpoint, None, "client-1", "rt-old", Duration::from_secs(5))
             .await
             .expect("刷新成功");
         assert_eq!(tokens.bearer(), "at-2");
@@ -235,7 +235,7 @@ mod tests {
         )
         .await;
         let endpoint = format!("http://127.0.0.1:{port}/token");
-        let error = refresh_with_endpoint(&endpoint, None, "client-1", "rt", Duration::from_secs(5))
+        let error = refresh_at(&endpoint, None, "client-1", "rt", Duration::from_secs(5))
             .await
             .expect_err("应报失效");
         assert!(error.needs_reauth(), "invalid_grant 应触发重新授权");
@@ -249,7 +249,7 @@ mod tests {
         )
         .await;
         let endpoint = format!("http://127.0.0.1:{port}/token");
-        let error = exchange_code_with_endpoint(
+        let error = exchange_code_at(
             &endpoint,
             None,
             "client-1",

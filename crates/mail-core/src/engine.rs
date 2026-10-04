@@ -6,6 +6,7 @@
 //! Wave 1 起，引擎还持有凭据保险箱句柄；账号与代理的编排接口见
 //! [`crate::accounts`] 与 [`crate::proxies`]。
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -104,6 +105,14 @@ pub enum EngineError {
         "系统代理使用的是自动配置脚本（{0}），当前版本还不支持；请在代理设置里改用「自定义代理」或「直连」"
     )]
     SystemProxyAutoConfig(String),
+
+    /// OAuth2 授权已失效，必须用户重新授权。
+    #[error("授权已失效，请到账号设置里重新授权")]
+    OAuthReauthRequired,
+
+    /// 找不到这次授权（已过期、已取消，或重启后丢失）。
+    #[error("这次授权已过期或已取消，请重新发起授权")]
+    AuthorizationNotFound,
 }
 
 /// 引擎门面。
@@ -117,6 +126,10 @@ pub struct MailEngine {
     init: EngineInit,
     secrets: Arc<dyn SecretStore>,
     pub(crate) sync: Arc<SyncService>,
+    /// 还没收口的 OAuth2 授权：键是本次授权的校验串。
+    ///
+    /// 回环端口要一直挂着等浏览器回调，所以先存在引擎里，等界面回来收口。
+    pub(crate) oauth_pending: std::sync::Mutex<HashMap<String, crate::oauth::PendingAuthorization>>,
 }
 
 impl std::fmt::Debug for MailEngine {
@@ -182,6 +195,7 @@ impl MailEngine {
             init,
             secrets,
             sync,
+            oauth_pending: std::sync::Mutex::new(HashMap::new()),
         })
     }
 

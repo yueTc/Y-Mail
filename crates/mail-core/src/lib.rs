@@ -10,6 +10,7 @@ pub mod checks;
 pub mod compose;
 pub mod engine;
 pub mod inbox;
+pub mod oauth;
 pub mod paths;
 pub mod proxies;
 pub mod reading;
@@ -21,6 +22,7 @@ pub use checks::ConnectionReport;
 pub use compose::{ComposeAttachment, ComposeParticipant, DraftSeed, OutboxItem, SendOutcome};
 pub use engine::{EngineError, EngineInit, MailEngine, KEYRING_SERVICE};
 pub use inbox::{InboxMessagePage, InboxThreadPage};
+pub use oauth::{OAuthAuthorization, OAuthOutcome, OAuthStatus};
 pub use reading::MessageBodyView;
 pub use search::DeepSearchPage;
 

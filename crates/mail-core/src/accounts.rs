@@ -43,7 +43,7 @@ impl MailEngine {
     /// 对已经保存的账号再做一次自检，密码从保险箱取。
     pub async fn test_saved_account(&self, id: AccountId) -> Result<ConnectionReport, EngineError> {
         let account = self.get_account(id)?;
-        let secret = self.saved_secret(&account)?;
+        let secret = self.saved_secret(&account).await?;
         let route = self.resolve_route(account.proxy)?;
         let plan = crate::checks::ProbePlan::new(&account.draft(), &secret, route);
         Ok(crate::checks::run(&plan).await?)
@@ -106,7 +106,7 @@ impl MailEngine {
         let new_secret = secret.filter(|value| !value.is_empty());
         let probe_secret = match new_secret {
             Some(value) => value.clone(),
-            None => self.saved_secret(&existing)?,
+            None => self.saved_secret(&existing).await?,
         };
 
         // 自检：不通过就直接结束，凭据与库都不动。
@@ -183,14 +183,14 @@ impl MailEngine {
     }
 
     /// 从保险箱读取账号的授权码。
-    fn saved_secret(&self, account: &Account) -> Result<Secret, EngineError> {
-        let key = account
-            .credential_key
-            .as_deref()
-            .ok_or_else(|| EngineError::BadRequest("该账号还没有保存授权码，请重新填写".to_string()))?;
-        self.secrets().get(key)?.ok_or_else(|| {
-            EngineError::BadRequest("系统凭据管理器里找不到该账号的授权码，请重新填写".to_string())
-        })
+    /// 取账号当前可用的凭据；OAuth2 账号会先确保访问令牌没过期。
+    async fn saved_secret(&self, account: &Account) -> Result<Secret, EngineError> {
+        if account.credential_key.is_none() {
+            return Err(EngineError::BadRequest(
+                "该账号还没有保存凭据，请重新填写授权码或发起授权".to_string(),
+            ));
+        }
+        self.resolved_secret(account).await
     }
 }
 

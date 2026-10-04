@@ -147,7 +147,7 @@ pub(super) async fn run(ctx: Arc<WorkerContext>) {
 /// 一次完整连接：登录、列文件夹、跑同步，最后守着收件箱。
 async fn session(ctx: &Arc<WorkerContext>) -> Result<(), Failure> {
     let account = load_account(ctx)?;
-    let secret = load_secret(ctx, &account)?;
+    let secret = load_secret(ctx, &account).await?;
     let route = resolve_route_with(&ctx.store, ctx.secrets.as_ref(), account.proxy)
         .map_err(|error| Failure::internal(&format!("选择代理失败：{error}")))?;
 
@@ -184,7 +184,7 @@ async fn session(ctx: &Arc<WorkerContext>) -> Result<(), Failure> {
 /// 搜索的「按需深拉」用它：不挂 IDLE、不进常驻循环，跑完就把连接放掉。
 pub(super) async fn sync_once(ctx: &Arc<WorkerContext>) -> Result<(), Failure> {
     let account = load_account(ctx)?;
-    let secret = load_secret(ctx, &account)?;
+    let secret = load_secret(ctx, &account).await?;
     let route = resolve_route_with(&ctx.store, ctx.secrets.as_ref(), account.proxy)
         .map_err(|error| Failure::internal(&format!("选择代理失败：{error}")))?;
 
@@ -271,15 +271,19 @@ fn load_account(ctx: &WorkerContext) -> Result<Account, Failure> {
         .ok_or_else(|| Failure::internal("账号不存在或已被删除"))
 }
 
-fn load_secret(ctx: &WorkerContext, account: &Account) -> Result<Secret, Failure> {
-    let key = account
-        .credential_key
-        .as_deref()
-        .ok_or_else(|| Failure::reauth("该账号还没有保存授权码，请到账号设置里重新填写"))?;
-    ctx.secrets
-        .get(key)
-        .map_err(|_| Failure::internal("读取系统凭据失败，请稍后重试"))?
-        .ok_or_else(|| Failure::reauth("系统凭据管理器里找不到该账号的授权码，请重新填写"))
+async fn load_secret(ctx: &WorkerContext, account: &Account) -> Result<Secret, Failure> {
+    crate::oauth::active_secret(&ctx.store, ctx.secrets.as_ref(), account)
+        .await
+        .map_err(|error| match error {
+            crate::oauth::ResolveError::Missing => {
+                Failure::reauth("该账号还没有可用的凭据，请到账号设置里填写授权码或重新授权")
+            }
+            crate::oauth::ResolveError::Backend => Failure::internal("读取系统凭据失败，请稍后重试"),
+            crate::oauth::ResolveError::ReauthRequired => {
+                Failure::reauth("授权已失效，请到账号设置里重新授权")
+            }
+            crate::oauth::ResolveError::Failed(message) => Failure::internal(&message),
+        })
 }
 
 fn start_job(ctx: &WorkerContext) -> Option<i64> {

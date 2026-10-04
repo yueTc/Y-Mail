@@ -259,16 +259,7 @@ impl MailEngine {
                 .get_account(AccountId(account_id))?
                 .ok_or(EngineError::AccountNotFound(account_id))?
         };
-        let key = account.credential_key.as_deref().ok_or_else(|| {
-            EngineError::BadRequest("该账号还没有保存授权码，请到账号设置里重新填写".to_string())
-        })?;
-        let secret = self
-            .secrets()
-            .get(key)
-            .map_err(|_| EngineError::BadRequest("读取系统凭据失败，请稍后重试".to_string()))?
-            .ok_or_else(|| {
-                EngineError::BadRequest("系统凭据管理器里找不到该账号的授权码，请重新填写".to_string())
-            })?;
+        let secret = self.resolved_secret(&account).await?;
         let route = resolve_route_with(&self.store, self.secrets(), account.proxy)?;
         let config = ClientConfig {
             host: account.imap.host.clone(),
