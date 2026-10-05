@@ -17,7 +17,7 @@ use mail_domain::account::{Account, AccountDraft, AccountId, AuthType, OAuthProv
 use mail_domain::proxy::Secret;
 use mail_oauth::{
     bind_loopback, build_authorize_request, exchange_code, exchange_code_at, now_unix, refresh, refresh_at,
-    Loopback, OAuthError, Pkce, ProviderKind, TokenSet,
+    resolve_client_id, Loopback, OAuthError, Pkce, ProviderKind, TokenSet,
 };
 use mail_store::Store;
 use serde::{Deserialize, Serialize};
@@ -297,10 +297,14 @@ impl MailEngine {
             return Err(EngineError::BadRequest("该账号不是 OAuth2 登录方式".to_string()));
         }
         let kind = provider_kind(draft.oauth_provider)?;
+        // 用户没填编号就用软件内置的；内置也没有才报错，提示里指明去哪儿填。
+        let client_id = resolve_client_id(kind, &draft.oauth_client_id).map_err(from_oauth)?;
+        let mut draft = draft;
+        // 把解析结果写回草稿：授权成功后落库，令牌到期刷新时才有编号可用。
+        draft.oauth_client_id = client_id.clone();
         let loopback = bind_loopback().await.map_err(from_oauth)?;
-        let request =
-            build_authorize_request(kind, &draft.oauth_client_id, loopback.port, Some(&draft.email))
-                .map_err(from_oauth)?;
+        let request = build_authorize_request(kind, &client_id, loopback.port, Some(&draft.email))
+            .map_err(from_oauth)?;
 
         let authorization = OAuthAuthorization {
             authorize_url: request.url.clone(),
@@ -309,7 +313,7 @@ impl MailEngine {
         };
         let pending = PendingAuthorization {
             kind,
-            client_id: draft.oauth_client_id.clone(),
+            client_id: client_id.clone(),
             redirect_uri: request.redirect_uri.clone(),
             pkce: request.pkce,
             draft,
@@ -403,29 +407,24 @@ pub(crate) async fn active_secret_with(
     let refresh_token = bundle.refresh_token.clone().ok_or(ResolveError::ReauthRequired)?;
     let route = crate::proxies::resolve_route_with(store, secrets, account.proxy)
         .map_err(|error| ResolveError::Failed(error.to_string()))?;
+    let kind =
+        provider_kind(account.oauth_provider).map_err(|error| ResolveError::Failed(error.to_string()))?;
+    // 老账号可能没存编号（用软件内置编号授权时），这里同样按内置编号兜底；
+    // 不然令牌一到期就再也刷新不了，只能重新授权。
+    let client_id = resolve_client_id(kind, &account.oauth_client_id)
+        .map_err(|error| ResolveError::Failed(error.to_string()))?;
     let refreshed = match token_endpoint {
         Some(endpoint) => {
             refresh_at(
                 endpoint,
                 route.as_ref(),
-                &account.oauth_client_id,
+                &client_id,
                 &refresh_token,
                 TOKEN_TIMEOUT,
             )
             .await
         }
-        None => {
-            let kind = provider_kind(account.oauth_provider)
-                .map_err(|error| ResolveError::Failed(error.to_string()))?;
-            refresh(
-                route.as_ref(),
-                kind,
-                &account.oauth_client_id,
-                &refresh_token,
-                TOKEN_TIMEOUT,
-            )
-            .await
-        }
+        None => refresh(route.as_ref(), kind, &client_id, &refresh_token, TOKEN_TIMEOUT).await,
     };
     let tokens = refreshed.map_err(|error| {
         if error.needs_reauth() {
@@ -655,6 +654,30 @@ mod tests {
             .await
             .expect_err("取消后不该还能收口");
         assert!(matches!(error, EngineError::BadRequest(_)), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn 不填编号时用内置编号或给可读错误() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let secrets = Arc::new(MemorySecretStore::new());
+        let engine = engine(dir.path(), secrets);
+        let mut draft = oauth_draft(1, 1);
+        draft.oauth_provider = Some(OAuthProvider::Microsoft);
+        draft.oauth_client_id = String::new();
+
+        match engine.begin_oauth_authorize(&draft, None).await {
+            // 本机配了内置编号：应该照常发起，且授权地址里带上这个编号。
+            Ok(auth) => {
+                assert!(auth.authorize_url.contains("client_id="), "授权地址该带编号");
+                assert!(auth.redirect_uri.starts_with("http://127.0.0.1:"));
+            }
+            // 本机没配内置编号：应该给一句能看懂的提示，并指明去哪儿填。
+            Err(error) => {
+                let text = error.to_string();
+                assert!(text.contains("登录编号"), "应提示登录编号：{text}");
+                assert!(text.contains("高级设置"), "应指明去哪儿填：{text}");
+            }
+        }
     }
 
     #[tokio::test]

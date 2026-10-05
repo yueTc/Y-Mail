@@ -15,7 +15,7 @@ mod token;
 pub use error::OAuthError;
 pub use flow::{bind_loopback, build_authorize_request, AuthorizeRequest, Loopback, CALLBACK_PATH};
 pub use pkce::{challenge_for, generate_pkce, random_urlsafe, Pkce};
-pub use provider::{provider_meta, ProviderKind, ProviderMeta};
+pub use provider::{default_client_id, provider_meta, resolve_client_id, ProviderKind, ProviderMeta};
 pub use token::{exchange_code, exchange_code_at, now_unix, refresh, refresh_at, TokenSet};
 
 /// 本 crate 的用途标识，供工作区自检与日志使用。

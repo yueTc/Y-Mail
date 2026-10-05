@@ -33,9 +33,9 @@ pub enum OAuthError {
     /// 请求超时。
     #[error("OAuth 请求超时，请稍后重试")]
     Timeout,
-    /// 本地配置不完整。
+    /// 本地配置不完整（用户没填、程序里也没内置编号等）。
     #[error("OAuth 配置不完整：{0}")]
-    Config(&'static str),
+    Config(String),
     /// 本机回调端口无法绑定。
     #[error("无法在本机开启授权回调端口")]
     Bind,

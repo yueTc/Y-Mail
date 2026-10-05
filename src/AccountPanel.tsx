@@ -168,11 +168,8 @@ function toDraft(form: FormState): AccountDraft {
 /** 提交前的本地检查；只拦明显问题，真正的校验与自检在引擎里做。 */
 function validate(form: FormState): string | null {
   if (!form.email.includes("@")) return "请填写完整的邮箱地址";
-  if (form.authType === "oauth2") {
-    if (form.oauthProvider === "") return "OAuth2 登录要先选服务商（Gmail 或 Outlook）";
-    if (form.oauthClientId.trim() === "") {
-      return "OAuth2 登录要填客户端编号：先在服务商后台注册一个桌面应用才能拿到";
-    }
+  if (form.authType === "oauth2" && form.oauthProvider === "") {
+    return "OAuth2 登录要先选服务商（Gmail 或 Outlook）";
   }
   if (form.username.trim() === "") return "请填写登录名（多数邮箱就是完整地址）";
   if (form.imap.host.trim() === "") return "请填写收件服务器地址";
@@ -415,7 +412,7 @@ export default function AccountPanel({ proxiesVersion }: Props) {
       const authorization = await api.beginOAuthAuthorize(toDraft(form), form.id ?? undefined);
       pendingState = authorization.state;
       setPendingAuth(authorization);
-      setNotice("已尝试打开系统浏览器，请在授权页点同意；本窗口正在等待回调……");
+      setNotice("已用系统默认浏览器打开授权页；登录并同意后，本窗口会自动收口……");
       const outcome = await api.completeOAuthAuthorize(authorization.state);
       setPendingAuth(null);
       setNotice(
@@ -733,17 +730,23 @@ export default function AccountPanel({ proxiesVersion }: Props) {
                     <option value="microsoft">微软 Outlook</option>
                   </select>
                 </label>
+              </div>
+              <details className="advanced-settings">
+                <summary>高级设置：自备客户端编号（普通用户不用管）</summary>
                 <label>
                   客户端编号（client_id）
                   <input
                     value={form.oauthClientId}
                     onChange={(event) => patch({ oauthClientId: event.target.value })}
-                    placeholder="在服务商后台注册桌面应用后拿到"
+                    placeholder="留空就用软件内置的编号"
                   />
                 </label>
-              </div>
+                <p className="hint">
+                  只有你自己注册了应用、想用自己的编号时才填。留空时软件会用它内置的编号。
+                </p>
+              </details>
               <p className="hint">
-                OAuth2 不走授权码：点「浏览器授权」会用系统浏览器打开服务商的授权页，同意后本窗口自动收口；
+                点「浏览器授权」会用系统默认浏览器打开服务商的登录页，登录并同意后自动回到本窗口；
                 访问令牌与刷新令牌只存进 Windows 凭据管理器，数据库里只留一个引用键。
               </p>
               {oauthStatus && (

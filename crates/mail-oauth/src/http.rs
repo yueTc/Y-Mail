@@ -19,19 +19,19 @@ pub async fn post_form(
     form: &[(&str, &str)],
     timeout: Duration,
 ) -> Result<String, OAuthError> {
-    let url = Url::parse(endpoint).map_err(|_| OAuthError::Config("令牌地址无效"))?;
+    let url = Url::parse(endpoint).map_err(|_| OAuthError::Config("令牌地址无效".to_string()))?;
     let host = url
         .host_str()
-        .ok_or(OAuthError::Config("令牌地址缺少主机名"))?
+        .ok_or(OAuthError::Config("令牌地址缺少主机名".to_string()))?
         .to_string();
     let secure = match url.scheme() {
         "https" => true,
         "http" => false,
-        _ => return Err(OAuthError::Config("令牌地址协议不受支持")),
+        _ => return Err(OAuthError::Config("令牌地址协议不受支持".to_string())),
     };
     let port = url
         .port_or_known_default()
-        .ok_or(OAuthError::Config("令牌地址缺少端口"))?;
+        .ok_or(OAuthError::Config("令牌地址缺少端口".to_string()))?;
     let path = if url.path().is_empty() { "/" } else { url.path() };
     let body = form_urlencoded::Serializer::new(String::new())
         .extend_pairs(form.iter().copied())

@@ -128,4 +128,6 @@ pub struct ImapClient {
     redactor: Vec<String>,
     /// 单条命令超时。
     timeout: Duration,
+    /// 最近一次成功打开的文件夹；服务器意外取消选中时用它自动重开。
+    selected_folder: Option<String>,
 }

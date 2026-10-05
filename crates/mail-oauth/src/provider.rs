@@ -1,4 +1,9 @@
 //! 内置授权服务商元数据：Gmail 与 Microsoft。
+//!
+//! 桌面端走 PKCE 公共客户端流程，客户端编号不是秘密，可以随程序一起发给用户。
+//! 编号来源有两处：编译时写死的值（发布打包用）、运行时环境变量（本机调试用）。
+
+use crate::error::OAuthError;
 
 /// 支持的授权服务商。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +76,49 @@ pub fn provider_meta(kind: ProviderKind) -> ProviderMeta {
     }
 }
 
+/// 软件内置的开发者应用编号（客户端编号）。
+///
+/// 优先取编译时写死的值，其次取运行时环境变量：
+/// - 谷歌：`EM_MASTER_GMAIL_CLIENT_ID`
+/// - 微软：`EM_MASTER_MICROSOFT_CLIENT_ID`
+///
+/// 两处都没配就返回 `None`，界面会提示用户去「高级设置」里自己填。
+pub fn default_client_id(kind: ProviderKind) -> Option<String> {
+    let (built_in, runtime_key) = match kind {
+        ProviderKind::Gmail => (
+            option_env!("EM_MASTER_GMAIL_CLIENT_ID"),
+            "EM_MASTER_GMAIL_CLIENT_ID",
+        ),
+        ProviderKind::Microsoft => (
+            option_env!("EM_MASTER_MICROSOFT_CLIENT_ID"),
+            "EM_MASTER_MICROSOFT_CLIENT_ID",
+        ),
+    };
+    if let Some(value) = built_in.map(str::trim).filter(|value| !value.is_empty()) {
+        return Some(value.to_string());
+    }
+    std::env::var(runtime_key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// 决定这次授权用哪个客户端编号：用户填了就用用户的，没填就用内置的。
+///
+/// 内置编号也没有时给一句能看懂的中文提示，指明去哪儿填。
+pub fn resolve_client_id(kind: ProviderKind, provided: &str) -> Result<String, OAuthError> {
+    let provided = provided.trim();
+    if !provided.is_empty() {
+        return Ok(provided.to_string());
+    }
+    default_client_id(kind).ok_or_else(|| {
+        OAuthError::Config(format!(
+            "还没有内置{}的登录编号；请在账号表单的「高级设置」里填一个客户端编号，或让软件提供者补上内置编号",
+            kind.display_name()
+        ))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,6 +139,27 @@ mod tests {
         assert_eq!(meta.scopes, &["https://mail.google.com/"]);
         assert!(meta.auth_endpoint.starts_with("https://"));
         assert!(meta.token_endpoint.starts_with("https://"));
+    }
+
+    #[test]
+    fn 用户填了编号就优先用用户的() {
+        let resolved = resolve_client_id(ProviderKind::Microsoft, " my-client ").expect("应能解析");
+        assert_eq!(resolved, "my-client");
+    }
+
+    #[test]
+    fn 没填编号时要么用内置要么给可读提示() {
+        match resolve_client_id(ProviderKind::Microsoft, "") {
+            Ok(value) => assert!(!value.trim().is_empty(), "内置编号不能是空串"),
+            Err(error) => {
+                let text = error.to_string();
+                assert!(text.contains("登录编号"), "应提示登录编号：{text}");
+                assert!(
+                    !text.to_lowercase().contains("token"),
+                    "提示里不能带令牌字样：{text}"
+                );
+            }
+        }
     }
 
     #[test]

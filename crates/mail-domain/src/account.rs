@@ -214,7 +214,8 @@ pub struct AccountDraft {
     pub enabled: bool,
     /// OAuth2 服务商；密码登录时为 `None`。
     pub oauth_provider: Option<OAuthProvider>,
-    /// OAuth2 客户端编号（在谷歌云 / 微软 Entra 注册桌面应用后拿到）；密码登录时留空。
+    /// OAuth2 客户端编号；留空表示用软件内置的开发者编号，只有自备应用时才需要填。
+    /// 密码登录时留空。
     pub oauth_client_id: String,
 }
 
@@ -236,13 +237,9 @@ impl AccountDraft {
         self.imap.validate("收件服务器", &mut problems);
         self.smtp.validate("发件服务器", &mut problems);
 
-        if self.auth_type == AuthType::OAuth2 {
-            if self.oauth_provider.is_none() {
-                problems.push("OAuth2 账号需要选择服务商".to_string());
-            }
-            if self.oauth_client_id.trim().is_empty() {
-                problems.push("OAuth2 账号需要填写客户端编号".to_string());
-            }
+        // 客户端编号可以留空：留空表示用软件内置的开发者编号，授权时再解析。
+        if self.auth_type == AuthType::OAuth2 && self.oauth_provider.is_none() {
+            problems.push("OAuth2 账号需要选择服务商".to_string());
         }
 
         if problems.is_empty() {
@@ -287,7 +284,7 @@ pub struct Account {
     pub enabled: bool,
     /// OAuth2 服务商；密码登录时为 `None`。
     pub oauth_provider: Option<OAuthProvider>,
-    /// OAuth2 客户端编号；密码登录时为空串。
+    /// OAuth2 客户端编号；密码登录或使用软件内置编号时为空串。
     pub oauth_client_id: String,
     /// 系统凭据管理器里的引用键；未保存凭据时为 `None`。
     pub credential_key: Option<String>,
@@ -420,16 +417,14 @@ mod tests {
     }
 
     #[test]
-    fn 授权账号必须填服务商与客户端编号() {
+    fn 授权账号必须选服务商但编号可以留空() {
         let mut oauth = draft();
         oauth.auth_type = AuthType::OAuth2;
-        let err = oauth.validate().expect_err("缺少服务商与客户端编号应被拦住");
-        let text = err.to_string();
-        assert!(text.contains("服务商"), "应提示选服务商：{text}");
-        assert!(text.contains("客户端编号"), "应提示填客户端编号：{text}");
+        let err = oauth.validate().expect_err("缺少服务商应被拦住");
+        assert!(err.to_string().contains("服务商"), "应提示选服务商");
 
         oauth.oauth_provider = Some(OAuthProvider::Gmail);
-        oauth.oauth_client_id = "client-123".to_string();
-        oauth.validate().expect("补齐后应通过校验");
+        oauth.oauth_client_id = String::new();
+        oauth.validate().expect("编号留空时应用软件内置的编号，不该拦");
     }
 }

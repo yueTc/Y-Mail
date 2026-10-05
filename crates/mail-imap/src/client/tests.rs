@@ -446,3 +446,75 @@ async fn 追加邮件被服务器拒绝时报错() {
         .expect_err("应失败");
     assert_eq!(err.kind, ConnectionErrorKind::Protocol);
 }
+
+#[tokio::test]
+async fn 服务器丢失选中状态时会自动重选再搜索() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+    let addr = listener.local_addr().expect("地址");
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("接受");
+        let mut reader = greeting(socket).await;
+
+        let login = read_line(&mut reader).await;
+        let tag = login.split_whitespace().next().expect("tag").to_string();
+        assert!(
+            login.ends_with("LOGIN \"user@example.com\" \"pw\""),
+            "登录命令：{login}"
+        );
+        let reply = format!("{tag} OK LOGIN completed\r\n");
+        reader.get_mut().write_all(reply.as_bytes()).await.expect("写");
+
+        let cap = read_line(&mut reader).await;
+        let tag = cap.split_whitespace().next().expect("tag").to_string();
+        assert_eq!(cap, format!("{tag} CAPABILITY"));
+        let reply = format!("* CAPABILITY IMAP4rev1\r\n{tag} OK completed\r\n");
+        reader.get_mut().write_all(reply.as_bytes()).await.expect("写");
+
+        let list = read_line(&mut reader).await;
+        let tag = list.split_whitespace().next().expect("tag").to_string();
+        assert!(list.ends_with("LIST \"\" \"*\""), "列文件夹命令：{list}");
+        let reply = format!("* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n{tag} OK completed\r\n");
+        reader.get_mut().write_all(reply.as_bytes()).await.expect("写");
+
+        let select = read_line(&mut reader).await;
+        let tag = select.split_whitespace().next().expect("tag").to_string();
+        assert!(select.ends_with("SELECT \"INBOX\""), "第一次选中命令：{select}");
+        let reply = format!("* 2 EXISTS\r\n* OK [UIDVALIDITY 42] ok\r\n{tag} OK completed\r\n");
+        reader.get_mut().write_all(reply.as_bytes()).await.expect("写");
+
+        let search = read_line(&mut reader).await;
+        let tag = search.split_whitespace().next().expect("tag").to_string();
+        assert!(
+            search.ends_with("UID SEARCH SINCE 01-Jan-2026"),
+            "第一次搜索：{search}"
+        );
+        let reply = format!("{tag} NO Need to SELECT first!\r\n");
+        reader.get_mut().write_all(reply.as_bytes()).await.expect("写");
+
+        let reselect = read_line(&mut reader).await;
+        let tag = reselect.split_whitespace().next().expect("tag").to_string();
+        assert!(reselect.ends_with("SELECT \"INBOX\""), "自动重选命令：{reselect}");
+        let reply = format!("* 2 EXISTS\r\n* OK [UIDVALIDITY 42] ok\r\n{tag} OK completed\r\n");
+        reader.get_mut().write_all(reply.as_bytes()).await.expect("写");
+
+        let search = read_line(&mut reader).await;
+        let tag = search.split_whitespace().next().expect("tag").to_string();
+        assert!(
+            search.ends_with("UID SEARCH SINCE 01-Jan-2026"),
+            "第二次搜索：{search}"
+        );
+        let reply = format!("* SEARCH 7 9\r\n{tag} OK completed\r\n");
+        reader.get_mut().write_all(reply.as_bytes()).await.expect("写");
+    });
+
+    let mut client = ImapClient::connect(&config(addr.port()), None)
+        .await
+        .expect("连接");
+    client.list_folders().await.expect("列文件夹");
+    client.select("INBOX").await.expect("选择");
+    let uids = client
+        .uid_search_since("01-Jan-2026")
+        .await
+        .expect("服务器丢失选中后应自动重选并重试");
+    assert_eq!(uids, vec![7, 9]);
+}

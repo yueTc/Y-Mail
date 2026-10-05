@@ -48,16 +48,17 @@ pub fn build_authorize_request(
 ) -> Result<AuthorizeRequest, OAuthError> {
     let client_id = client_id.trim();
     if client_id.is_empty() {
-        return Err(OAuthError::Config("缺少 client_id"));
+        return Err(OAuthError::Config("缺少 client_id".to_string()));
     }
     if port == 0 {
-        return Err(OAuthError::Config("回调端口无效"));
+        return Err(OAuthError::Config("回调端口无效".to_string()));
     }
     let pkce = generate_pkce()?;
     let state = random_urlsafe(32)?;
     let redirect_uri = format!("http://127.0.0.1:{port}{CALLBACK_PATH}");
     let meta = provider_meta(kind);
-    let mut url = Url::parse(meta.auth_endpoint).map_err(|_| OAuthError::Config("授权地址无效"))?;
+    let mut url =
+        Url::parse(meta.auth_endpoint).map_err(|_| OAuthError::Config("授权地址无效".to_string()))?;
     {
         let mut query = url.query_pairs_mut();
         query.append_pair("client_id", client_id);

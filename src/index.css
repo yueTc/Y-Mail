@@ -1078,3 +1078,22 @@ select:focus {
     grid-column: 1 / -1;
   }
 }
+
+/* OAuth2 高级设置：默认折叠，普通用户不用管客户端编号。 */
+.advanced-settings {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+}
+
+.advanced-settings > summary {
+  cursor: pointer;
+  font-size: 0.88rem;
+  opacity: 0.85;
+}
+
+.advanced-settings label {
+  display: block;
+  margin-top: 10px;
+}

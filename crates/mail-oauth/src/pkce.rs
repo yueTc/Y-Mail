@@ -43,7 +43,7 @@ pub fn challenge_for(verifier: &str) -> String {
 /// 生成 `bytes` 字节系统随机数的 base64url 文本。
 pub fn random_urlsafe(bytes: usize) -> Result<String, OAuthError> {
     let mut buf = vec![0u8; bytes];
-    getrandom::fill(&mut buf).map_err(|_| OAuthError::Config("系统随机数不可用"))?;
+    getrandom::fill(&mut buf).map_err(|_| OAuthError::Config("系统随机数不可用".to_string()))?;
     Ok(URL_SAFE_NO_PAD.encode(buf))
 }
 

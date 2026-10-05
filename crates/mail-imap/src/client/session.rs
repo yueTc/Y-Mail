@@ -101,12 +101,28 @@ impl ImapClient {
                 None => {}
             }
         }
+        // 记下这次成功打开的文件夹；服务器后续若意外取消选中，搜索/抓取可以自动重开。
+        self.selected_folder = Some(folder.to_string());
         Ok(status)
+    }
+
+    /// 上一次打开的文件夹仍然有效时，重新打开它；失败返回 false。
+    async fn recover_selection(&mut self) -> bool {
+        let folder = match self.selected_folder.clone() {
+            Some(folder) => folder,
+            None => return false,
+        };
+        self.select(&folder).await.is_ok()
     }
 
     /// 执行一次 UID 搜索，返回升序去重的 UID 列表。
     pub async fn uid_search(&mut self, criteria: &str) -> Result<Vec<u32>, ConnectionError> {
-        let reply = self.command(&format!("UID SEARCH {criteria}")).await?;
+        let command = format!("UID SEARCH {criteria}");
+        let mut reply = self.command(&command).await?;
+        // 少数服务器会在长连接中途丢掉当前打开的文件夹，先自动重开再补一次。
+        if reply.status != "OK" && needs_reselect(&reply.detail) && self.recover_selection().await {
+            reply = self.command(&command).await?;
+        }
         if reply.status != "OK" {
             return Err(ConnectionError::protocol(format!(
                 "搜索邮件失败：{}",
@@ -151,7 +167,11 @@ impl ImapClient {
         }
         let set = format_uid_set(uids);
         let command = format!("UID FETCH {set} (UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE)");
-        let reply = self.command(&command).await?;
+        let mut reply = self.command(&command).await?;
+        // 和搜索同样的防御：服务器若丢失选中状态，就重开文件夹再抓一次。
+        if reply.status != "OK" && needs_reselect(&reply.detail) && self.recover_selection().await {
+            reply = self.command(&command).await?;
+        }
         if reply.status != "OK" {
             return Err(ConnectionError::protocol(format!(
                 "抓取邮件失败：{}",
@@ -180,6 +200,17 @@ impl ImapClient {
     /// 用 `BODY.PEEK[]` 而不是 `BODY[]`，避免顺手把邮件标成已读；应答里的字面量按 `{n}`
     /// 长度原样读字节，不走会把字面量转义成引号串的通用读取，保证拿到的是原始 MIME 字节。
     pub async fn fetch_body_raw(&mut self, uid: u32) -> Result<Vec<u8>, ConnectionError> {
+        let first = self.fetch_body_raw_once(uid).await;
+        match first {
+            Err(error) if needs_reselect(&error.message) && self.recover_selection().await => {
+                self.fetch_body_raw_once(uid).await
+            }
+            other => other,
+        }
+    }
+
+    /// 真正发送一次正文抓取；外层负责服务器丢失选中时的重试。
+    async fn fetch_body_raw_once(&mut self, uid: u32) -> Result<Vec<u8>, ConnectionError> {
         if uid == 0 {
             return Err(ConnectionError::protocol("UID 不能为 0"));
         }
@@ -590,6 +621,7 @@ async fn connect_inner(
         capabilities: Vec::new(),
         redactor: vec![config.auth.expose().to_string()],
         timeout: config.timeout,
+        selected_folder: None,
     };
 
     if !authenticated {
@@ -758,4 +790,15 @@ fn parse_addresses(list: &[Value]) -> Vec<Address> {
         out.push(Address { name, address });
     }
     out
+}
+
+/// 判断服务器是不是在说"还没打开文件夹"。有些校园邮会在长连接中途取消选中，
+/// 再用这句话拒绝搜索或抓取；调用方据此重新 SELECT 一次。
+fn needs_reselect(detail: &str) -> bool {
+    let text = detail.to_ascii_lowercase();
+    text.contains("need to select first")
+        || text.contains("mailbox is not selected")
+        || text.contains("mailbox not selected")
+        || text.contains("no mailbox selected")
+        || text.contains("not selected")
 }
