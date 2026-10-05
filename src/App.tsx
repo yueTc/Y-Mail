@@ -6,6 +6,7 @@ import AiPanel from "./AiPanel";
 import InboxPanel from "./InboxPanel";
 import McpPanel from "./McpPanel";
 import ProxyPanel from "./ProxyPanel";
+import ReaderSettingsPanel from "./ReaderSettingsPanel";
 import SyncPanel from "./SyncPanel";
 
 type LoadState =
@@ -68,6 +69,8 @@ export default function App() {
           <p className="subtitle">
             授权码只进 Windows 凭据管理器，保存前会先做一次连接自检。
           </p>
+
+          <ReaderSettingsPanel />
 
           <SyncPanel />
 

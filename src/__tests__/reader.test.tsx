@@ -14,6 +14,9 @@ vi.mock("../api", () => ({
   api: {
     getMessageBody: vi.fn(),
     downloadAttachment: vi.fn(),
+    rememberRemoteSender: vi.fn(),
+    listTrustedRemoteSenders: vi.fn(),
+    forgetRemoteSender: vi.fn(),
   },
 }));
 
@@ -66,6 +69,7 @@ beforeEach(() => {
   window.localStorage.clear();
   vi.mocked(api.getMessageBody).mockResolvedValue(body());
   vi.mocked(api.downloadAttachment).mockResolvedValue("D:/downloads/报告.pdf");
+  vi.mocked(api.rememberRemoteSender).mockResolvedValue(["z@example.com"]);
 });
 
 afterEach(() => {
@@ -93,6 +97,21 @@ describe("读信窗格的沙箱与远程图片", () => {
     await vi.waitFor(() => expect(api.getMessageBody).toHaveBeenCalledTimes(2));
     expect(vi.mocked(api.getMessageBody).mock.calls[1][1]).toBe(true);
     await screen.findByText(/本封已放行远程图片/);
+  });
+
+  it("可以记住发件人，之后自动放行", async () => {
+    render(<MessageReader message={MESSAGE} />);
+    fireEvent.click(await screen.findByRole("button", { name: "以后这个发件人都自动显示" }));
+    await vi.waitFor(() => expect(api.rememberRemoteSender).toHaveBeenCalledWith(42));
+    await screen.findByText(/已记住这个发件人/);
+  });
+
+  it("后端自动放行时不再显示拦截条，并把 http 加进 CSP", async () => {
+    vi.mocked(api.getMessageBody).mockResolvedValue(body({ remoteImagesAllowed: true }));
+    render(<MessageReader message={MESSAGE} />);
+    const frame = await screen.findByTitle("邮件正文");
+    await vi.waitFor(() => expect(frame.getAttribute("srcdoc") ?? "").toContain("https:"));
+    expect(screen.queryByText(/已拦截远程图片/)).toBeNull();
   });
 
   it("文档 CSP 默认不放行远程图片，放行后才加 http/https", () => {

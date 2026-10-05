@@ -83,6 +83,34 @@ fn mail(uid: u32, subject: &str, html: &str) -> Mail {
     }
 }
 
+/// 一封带内嵌图（cid）的 HTML 邮件：正文引用一张 1x1 PNG，走 multipart/related。
+///
+/// 用来验证「打开邮件时自动把已拉下来的内嵌图落盘并直接显示」。
+fn mail_with_inline_image(uid: u32, subject: &str) -> Mail {
+    let raw = format!(
+        "From: Alice <alice@example.com>\r\nTo: <me@example.com>\r\nSubject: {subject}\r\n\
+         Message-ID: <m{uid}@example.com>\r\nDate: {MAIL_DATE}\r\nMIME-Version: 1.0\r\n\
+         Content-Type: multipart/related; boundary=\"B{uid}\"\r\n\r\n\
+         --B{uid}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n\
+         <p>看图</p><img src=\"cid:inline-{uid}@example.com\" alt=\"内嵌图\">\r\n\
+         --B{uid}\r\nContent-Type: image/png\r\nContent-Disposition: inline\r\n\
+         Content-ID: <inline-{uid}@example.com>\r\nContent-Transfer-Encoding: base64\r\n\r\n\
+         iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==\r\n\
+         --B{uid}--\r\n"
+    )
+    .into_bytes();
+    Mail {
+        uid,
+        subject: subject.to_string(),
+        from_name: "Alice".to_string(),
+        from_addr: "alice@example.com".to_string(),
+        message_id: format!("m{uid}@example.com"),
+        internal_date: INTERNAL_DATE.to_string(),
+        seen: false,
+        raw,
+    }
+}
+
 #[derive(Clone)]
 struct ImapConfig {
     uidvalidity: u32,
@@ -579,7 +607,10 @@ fn tracking_html() -> &'static str {
 async fn 验收_账号自检同步统一收件箱搜索与安全读信() {
     let imap_a = start_imap(ImapConfig {
         uidvalidity: 11,
-        mails: vec![mail(1, "项目进度报告", tracking_html())],
+        mails: vec![
+            mail(1, "项目进度报告", tracking_html()),
+            mail_with_inline_image(2, "内嵌图邮件"),
+        ],
         accept_login: true,
         accept_xoauth2: true,
         advertise_idle: false,
@@ -622,21 +653,22 @@ async fn 验收_账号自检同步统一收件箱搜索与安全读信() {
     assert_eq!(report.imap_folder_count, 2, "应看到 INBOX 与 Sent 两个文件夹");
     assert_eq!(report.smtp_mechanism, "PLAIN");
 
-    // 同步：两个账号各拉一封，统一收件箱聚合。
+    // 同步：两个账号共三封（含一封内嵌图邮件），统一收件箱聚合。
     assert_eq!(engine.start_sync(None).expect("启动同步"), 2);
-    wait_for_inbox(&engine, 2).await;
+    wait_for_inbox(&engine, 3).await;
     engine.stop_sync(None).await;
 
     let page = engine.inbox_messages(&InboxQuery::default()).expect("统一收件箱");
-    assert_eq!(page.total, 2);
+    assert_eq!(page.total, 3);
     let subjects: Vec<&str> = page.items.iter().map(|item| item.subject.as_str()).collect();
     assert!(subjects.contains(&"项目进度报告"));
     assert!(subjects.contains(&"发票通知"));
+    assert!(subjects.contains(&"内嵌图邮件"));
 
     let summary = engine.inbox_account_summary().expect("账号汇总");
     assert_eq!(summary.len(), 2, "两个账号都要汇总");
     let unread_total: i64 = summary.iter().map(|item| item.unread_count).sum();
-    assert_eq!(unread_total, 2, "两个账号各一条未读");
+    assert_eq!(unread_total, 3, "三封未读");
 
     // 搜索：命中已同步邮件。
     let hits = engine
@@ -669,15 +701,76 @@ async fn 验收_账号自检同步统一收件箱搜索与安全读信() {
         "应留下被拦占位：{html}"
     );
 
+    assert!(!body.remote_images_allowed, "默认不该放行远程图片");
+
     // 用户放行后，本次返回才还原真实地址。
     let allowed = engine
         .get_message_body(target.id, true)
         .await
         .expect("放行读正文");
-    let allowed_html = allowed.html.expect("应有 HTML");
+    let allowed_html = allowed.html.clone().expect("应有 HTML");
     assert!(
         allowed_html.contains("https://track.example.com/pixel.gif"),
         "放行后应还原真实地址"
+    );
+
+    // 记住发件人：以后这个发件人的邮件自动放行；移除后恢复默认拦截。
+    let trusted = engine.remember_remote_sender(target.id).expect("记住发件人");
+    assert_eq!(trusted, vec!["alice@example.com".to_string()]);
+    let auto = engine
+        .get_message_body(target.id, false)
+        .await
+        .expect("按记住的发件人读正文");
+    assert!(auto.remote_images_allowed, "记住发件人后应自动放行");
+    let auto_html = auto.html.clone().expect("应有 HTML");
+    assert!(
+        auto_html.contains("https://track.example.com/pixel.gif"),
+        "记住发件人后应还原真实地址：{auto_html}"
+    );
+    engine
+        .forget_remote_sender("ALICE@example.com")
+        .expect("移除发件人");
+    let blocked_again = engine
+        .get_message_body(target.id, false)
+        .await
+        .expect("移除后再读");
+    assert!(!blocked_again.remote_images_allowed, "移除后应恢复默认拦截");
+    let blocked_html = blocked_again.html.clone().expect("应有 HTML");
+    assert!(
+        blocked_html.contains("data-em-original-src"),
+        "移除后应重新改写为占位：{blocked_html}"
+    );
+
+    // 内嵌图：打开邮件时就自动落盘并直接可显示，不用再点「点一下加载」。
+    let inline_target = engine
+        .inbox_messages(&InboxQuery::default())
+        .expect("统一收件箱")
+        .items
+        .into_iter()
+        .find(|item| item.subject == "内嵌图邮件")
+        .expect("应有内嵌图邮件");
+    let inline_body = engine
+        .get_message_body(inline_target.id, false)
+        .await
+        .expect("读内嵌图正文");
+    assert_eq!(inline_body.inline_images.len(), 1, "应有一张内嵌图");
+    let image = &inline_body.inline_images[0];
+    assert_eq!(
+        image.state,
+        mail_core::InlineImageState::Available,
+        "内嵌图应在打开时自动落盘为可用"
+    );
+    assert!(
+        image
+            .data_url
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("data:image/png;base64,"),
+        "应直接给出受控 data URL"
+    );
+    assert!(
+        data_dir_contains(&dir.path().join("downloads"), b"\x89PNG"),
+        "内嵌图应已落到本地下载目录"
     );
 
     // 凭据只进保险箱，任何数据文件都不许出现明文授权码。

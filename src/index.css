@@ -682,6 +682,36 @@ select:focus {
   font-size: 0.82rem;
 }
 
+.reader-blocked-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reader-remember {
+  flex: none;
+  font-size: 0.82rem;
+}
+
+.trusted-senders {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trusted-senders li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 6px;
+}
+
 .reader-frame {
   width: 100%;
   min-height: 260px;

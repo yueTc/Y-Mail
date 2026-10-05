@@ -7,10 +7,10 @@
 //! 已保存的账号只回一个 `hasCredential` 布尔值。命令入参不写日志。
 
 use mail_core::{
-    AccountInboxSummary, AiAuthorizationPreview, AiFunction, AiModelMapEntry, AiProviderInput,
-    AiProviderKind, AiProviderView, AiTextOutcome, AiThinkingLevel, AiTranslation, ConnectionReport,
-    EngineError, InboxFolder, InboxMessage, InboxQuery, InboxThread, NewOutbox, OutboxKind, SearchHit,
-    SearchQuery, SnippetSegment, StoredAiAudit, StoredAttachment, StoredContact, StoredOutbox,
+    decode_encoded_words, AccountInboxSummary, AiAuthorizationPreview, AiFunction, AiModelMapEntry,
+    AiProviderInput, AiProviderKind, AiProviderView, AiTextOutcome, AiThinkingLevel, AiTranslation,
+    ConnectionReport, EngineError, InboxFolder, InboxMessage, InboxQuery, InboxThread, NewOutbox, OutboxKind,
+    SearchHit, SearchQuery, SnippetSegment, StoredAiAudit, StoredAttachment, StoredContact, StoredOutbox,
     StoredSignature,
 };
 use mail_domain::account::{
@@ -1090,8 +1090,10 @@ impl InboxMessageDto {
             folder_id: message.folder_id,
             uid: message.uid,
             thread_key: message.thread_key.clone(),
-            subject: message.subject.clone(),
-            from_name: message.from_name.clone(),
+            // 兜底解码：老版本存库时没解编码字，读出来再解一次，保证历史邮件
+            // 也能正常显示；对普通文字是幂等的。
+            subject: decode_encoded_words(&message.subject),
+            from_name: decode_encoded_words(&message.from_name),
             from_addr: message.from_addr.clone(),
             date_utc: message.date_utc.clone(),
             size: message.size,
@@ -1349,6 +1351,8 @@ pub struct MessageBodyDto {
     pub html: Option<String>,
     /// 被拦下的远程图片数量。
     pub blocked_remote_images: usize,
+    /// 本次是否放行了远程图片（用户本封放行，或发件人在「记住」名单里）。
+    pub remote_images_allowed: bool,
     /// 正文可用的内嵌图片（cid → 本地图片）；没缓存的不含图片字节。
     pub inline_images: Vec<InlineImageDto>,
     /// 附件清单。
@@ -1377,6 +1381,7 @@ pub async fn get_message_body(
         text_plain: view.text_plain,
         html: view.html,
         blocked_remote_images: view.blocked_remote_images,
+        remote_images_allowed: view.remote_images_allowed,
         inline_images: view
             .inline_images
             .iter()
@@ -1395,6 +1400,38 @@ pub async fn get_message_body(
             .map(AttachmentDto::from_attachment)
             .collect(),
     })
+}
+
+/// 记住一封邮件的发件人：以后自动放行这个发件人的远程图片。
+#[tauri::command]
+pub async fn remember_remote_sender(
+    state: tauri::State<'_, AppState>,
+    message_id: i64,
+) -> Result<Vec<String>, CommandError> {
+    if message_id <= 0 {
+        return Err(CommandError::input("邮件编号不合法"));
+    }
+    let engine = state.engine().await;
+    Ok(engine.remember_remote_sender(message_id)?)
+}
+
+/// 当前记住的发件人名单（按字母序）。
+#[tauri::command]
+pub async fn list_trusted_remote_senders(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, CommandError> {
+    let engine = state.engine().await;
+    Ok(engine.trusted_remote_senders()?)
+}
+
+/// 从名单里移除一个发件人；移除后恢复默认拦截。
+#[tauri::command]
+pub async fn forget_remote_sender(
+    state: tauri::State<'_, AppState>,
+    address: String,
+) -> Result<Vec<String>, CommandError> {
+    let engine = state.engine().await;
+    Ok(engine.forget_remote_sender(&address)?)
 }
 
 /// 下载一个附件到本地，返回保存路径。

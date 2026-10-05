@@ -18,6 +18,7 @@ use mail_domain::auth::AuthMaterial;
 use mail_domain::dates::unix_now;
 use mail_domain::{Account, AccountId, FolderKind};
 use mail_imap::{ClientConfig, ImapClient};
+use mail_mime::decode_encoded_words;
 use mail_smtp::{
     build_message, guess_mime_type, Mailbox, OutgoingAttachment, OutgoingMessage, SendErrorKind, SendReport,
     SendRequest,
@@ -113,11 +114,14 @@ impl MailEngine {
     ///
     /// 新建邮件不走这里，界面直接给空模板。原邮件不存在时返回可读错误。
     pub fn compose_draft(&self, kind: OutboxKind, source_message_id: i64) -> Result<DraftSeed, EngineError> {
-        let source = {
+        let mut source = {
             let store = lock_store(&self.store);
             store.get_compose_source(source_message_id)?
         }
         .ok_or(EngineError::MessageNotFound(source_message_id))?;
+        // 原邮件主题 / 发件人显示名可能是 RFC 2047 编码字，回信与转发都要用可读文字。
+        source.subject = decode_encoded_words(&source.subject);
+        source.from_name = decode_encoded_words(&source.from_name);
 
         match kind {
             OutboxKind::New => Err(EngineError::BadRequest(
@@ -679,6 +683,98 @@ mod tests {
         forward_bodies, forward_seed, load_attachments, parse_participants, parse_references, reply_seed,
         to_json, ComposeAttachment, ComposeParticipant, OutboxKind,
     };
+
+    /// 建一个临时引擎，并插一封「主题与显示名还是编码字」的老邮件。
+    fn engine_with_encoded_message() -> (tempfile::TempDir, crate::engine::MailEngine, i64) {
+        use std::sync::Arc;
+
+        use mail_domain::account::{AccountDraft, AccountProxyMode, AuthType, Security, ServerConfig};
+        use mail_domain::FolderKind;
+        use mail_store::{InboxQuery, NewMessage};
+
+        use crate::secrets::MemorySecretStore;
+
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = crate::engine::MailEngine::initialize_with_secrets(
+            dir.path(),
+            Arc::new(MemorySecretStore::new()),
+        )
+        .expect("初始化引擎");
+        let store = engine.store();
+        let draft = AccountDraft {
+            display_name: "测试账号".to_string(),
+            email: "me@example.com".to_string(),
+            auth_type: AuthType::Password,
+            username: "me@example.com".to_string(),
+            imap: ServerConfig {
+                host: "imap.example.com".to_string(),
+                port: 993,
+                security: Security::Tls,
+            },
+            smtp: ServerConfig {
+                host: "smtp.example.com".to_string(),
+                port: 465,
+                security: Security::Tls,
+            },
+            proxy: AccountProxyMode::InheritGlobal,
+            color: "#3366ff".to_string(),
+            enabled: true,
+            oauth_provider: None,
+            oauth_client_id: String::new(),
+        };
+        let account_id = store.insert_account(&draft, None).expect("插账号").0;
+        let folder_id = store
+            .upsert_folder(account_id, "INBOX", "/", FolderKind::Inbox)
+            .expect("插文件夹");
+        store
+            .insert_messages(&[NewMessage {
+                account_id,
+                folder_id,
+                uid: 1,
+                message_id_header: "<enc@example.com>".to_string(),
+                thread_key: "enc".to_string(),
+                subject: "=?UTF-8?B?5L2g5aW9?= 报告".to_string(),
+                from_name: "=?UTF-8?Q?Alice_Smith?=".to_string(),
+                from_addr: "alice@example.com".to_string(),
+                to_json: "[]".to_string(),
+                cc_json: "[]".to_string(),
+                date_utc: "2026-10-05T01:00:00Z".to_string(),
+                size: 100,
+                has_attachments: false,
+                is_read: false,
+                is_flagged: false,
+                is_answered: false,
+                is_draft: false,
+            }])
+            .expect("插邮件");
+        let message_id = store
+            .list_inbox_messages(&InboxQuery {
+                account_id: Some(account_id),
+                folder_id: Some(folder_id),
+                unread_only: false,
+                offset: 0,
+                limit: 10,
+            })
+            .expect("读回收件箱")
+            .into_iter()
+            .find(|message| message.uid == 1)
+            .expect("应有邮件")
+            .id;
+        drop(store);
+        (dir, engine, message_id)
+    }
+
+    #[test]
+    fn 回信预填会把编码字主题与显示名解出来() {
+        let (_dir, engine, message_id) = engine_with_encoded_message();
+        let seed = engine
+            .compose_draft(OutboxKind::Reply, message_id)
+            .expect("回信预填");
+        assert_eq!(seed.subject, "回复：你好 报告");
+        assert!(seed.body_text.contains("你好 报告"), "{}", seed.body_text);
+        let people: Vec<ComposeParticipant> = serde_json::from_str(&seed.to_json).expect("解析收件人");
+        assert_eq!(people[0].name, "Alice Smith");
+    }
 
     fn source() -> ComposeSource {
         ComposeSource {

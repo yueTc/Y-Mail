@@ -292,6 +292,8 @@ export interface MessageBody {
   html: string | null;
   /** 被拦下的远程图片数量。 */
   blockedRemoteImages: number;
+  /** 本次是否放行了远程图片（用户本封放行，或发件人在「记住」名单里）。旧载荷可能缺省。 */
+  remoteImagesAllowed?: boolean;
   /** 正文可用的内嵌图片（cid → 本地图片）；没缓存的不含图片字节。旧载荷可能缺省。 */
   inlineImages?: InlineImage[];
   attachments: MessageAttachment[];
@@ -638,6 +640,16 @@ export const api = {
 
   downloadAttachment: (attachmentId: number) =>
     call<string>("download_attachment", { attachmentId }),
+
+  /** 记住这封邮件的发件人：以后这个发件人的邮件自动放行远程图片。 */
+  rememberRemoteSender: (messageId: number) =>
+    call<string[]>("remember_remote_sender", { messageId }),
+
+  /** 当前记住的发件人名单。 */
+  listTrustedRemoteSenders: () => call<string[]>("list_trusted_remote_senders"),
+
+  /** 移除一个记住的发件人；移除后恢复默认拦截。 */
+  forgetRemoteSender: (address: string) => call<string[]>("forget_remote_sender", { address }),
 
   // ===== 搜索与写信（Wave 5） =====
 

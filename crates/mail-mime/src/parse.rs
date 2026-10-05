@@ -9,7 +9,9 @@ use std::collections::HashSet;
 
 use mail_parser::{MessageParser, MimeHeaders, PartType};
 
-use crate::inline::normalize_content_id;
+use crate::inline::{
+    is_renderable_inline_image_mime, normalize_content_id, validate_inline_image, MAX_INLINE_IMAGE_BYTES,
+};
 use crate::sanitize::{sanitize_html, REMOTE_SRC_ATTRIBUTE};
 
 /// 解析一封邮件时接受的原文上限（32 MiB，与 IMAP 层一致）。
@@ -52,6 +54,19 @@ pub struct ParsedAttachment {
     pub is_inline: bool,
 }
 
+/// 正文里可以直接内联显示的图片字节（打开邮件时顺带落盘用）。
+///
+/// 只收图片白名单内、单张不超过上限、且能通过文件头校验的部分；SVG 与非图片不收。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedInlineImage {
+    /// 在 MIME 结构里的分片下标。
+    pub part_index: u32,
+    /// 声明的 MIME 类型。
+    pub mime_type: String,
+    /// 解码后的图片字节。
+    pub bytes: Vec<u8>,
+}
+
 /// 一封解析完成的邮件正文与附件清单。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ParsedMessage {
@@ -63,6 +78,8 @@ pub struct ParsedMessage {
     pub blocked_remote_images: usize,
     /// 附件元数据（按分片下标升序）。
     pub attachments: Vec<ParsedAttachment>,
+    /// 可内联显示的图片字节；打开正文时顺带落盘，不额外联网。
+    pub inline_images: Vec<ParsedInlineImage>,
 }
 
 impl ParsedMessage {
@@ -97,12 +114,14 @@ pub fn parse_message(raw: &[u8]) -> Result<ParsedMessage, ParseError> {
     };
 
     let attachments = collect_attachments(&message);
+    let inline_images = collect_inline_images(&message, &attachments);
 
     Ok(ParsedMessage {
         text_plain,
         html_sanitized,
         blocked_remote_images,
         attachments,
+        inline_images,
     })
 }
 
@@ -157,6 +176,38 @@ fn collect_attachments<'a>(message: &'a mail_parser::Message<'a>) -> Vec<ParsedA
             size: part.contents().len() as u64,
             content_id,
             is_inline,
+        });
+    }
+    out
+}
+
+/// 收集可内联的图片字节；只收白名单图片、单张不超上限、且文件头一致的部分。
+fn collect_inline_images<'a>(
+    message: &'a mail_parser::Message<'a>,
+    attachments: &[ParsedAttachment],
+) -> Vec<ParsedInlineImage> {
+    let mut out = Vec::new();
+    for attachment in attachments {
+        if !attachment.is_inline || attachment.content_id.is_none() {
+            continue;
+        }
+        if !is_renderable_inline_image_mime(&attachment.mime_type) {
+            continue;
+        }
+        if attachment.size == 0 || attachment.size > MAX_INLINE_IMAGE_BYTES as u64 {
+            continue;
+        }
+        let Some(part) = message.part(attachment.part_index) else {
+            continue;
+        };
+        let bytes = part.contents();
+        if validate_inline_image(&attachment.mime_type, bytes).is_err() {
+            continue;
+        }
+        out.push(ParsedInlineImage {
+            part_index: attachment.part_index,
+            mime_type: attachment.mime_type.clone(),
+            bytes: bytes.to_vec(),
         });
     }
     out

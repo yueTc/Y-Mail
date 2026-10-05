@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use mail_domain::dates::{format_imap_date, format_iso8601_utc, parse_mail_date, unix_now};
 use mail_domain::{thread_key, FolderKind, HistoryRange};
-use mail_imap::{FolderInfo, ImapClient, MessageMeta};
+use mail_imap::{Address, FolderInfo, ImapClient, MessageMeta};
+use mail_mime::decode_encoded_words;
 use mail_store::{NewMessage, StoredFolder};
 
 use super::state::SyncState;
@@ -249,7 +250,7 @@ fn insert_metas(ctx: &Arc<WorkerContext>, folder_id: i64, metas: Vec<MessageMeta
             .chain(meta.envelope.cc.iter())
         {
             if !addr.address.trim().is_empty() {
-                contacts.push((addr.name.clone(), addr.address.clone()));
+                contacts.push((decode_encoded_words(&addr.name), addr.address.clone()));
             }
         }
     }
@@ -286,14 +287,20 @@ fn to_new_message(account_id: i64, folder_id: i64, meta: MessageMeta) -> NewMess
         .unwrap_or_else(|| format_iso8601_utc(unix_now()));
     let upper: Vec<String> = meta.flags.iter().map(|flag| flag.to_ascii_uppercase()).collect();
     let has = |name: &str| upper.iter().any(|flag| flag == name);
+    // 主题与显示名在 IMAP ENVELOPE 里常是 RFC 2047 编码字，先解成正常文字再入库，
+    // 免得列表和读信页显示出一串 `=?UTF-8?B?...?=`。
+    let subject = decode_encoded_words(&envelope.subject);
+    let from_name = from
+        .map(|addr| decode_encoded_words(&addr.name))
+        .unwrap_or_default();
     NewMessage {
         account_id,
         folder_id,
         uid: meta.uid,
         message_id_header: envelope.message_id.clone(),
-        thread_key: thread_key(&envelope.subject, Some(&envelope.message_id)),
-        subject: envelope.subject.clone(),
-        from_name: from.map(|addr| addr.name.clone()).unwrap_or_default(),
+        thread_key: thread_key(&subject, Some(&envelope.message_id)),
+        subject,
+        from_name,
         from_addr: from.map(|addr| addr.address.clone()).unwrap_or_default(),
         to_json: addresses_json(&envelope.to),
         cc_json: addresses_json(&envelope.cc),
@@ -308,12 +315,12 @@ fn to_new_message(account_id: i64, folder_id: i64, meta: MessageMeta) -> NewMess
 }
 
 /// 地址列表序列化成 JSON 数组（只存显示名与邮箱）。
-fn addresses_json(list: &[mail_imap::Address]) -> String {
+fn addresses_json(list: &[Address]) -> String {
     let items: Vec<serde_json::Value> = list
         .iter()
         .map(|addr| {
             serde_json::json!({
-                "name": addr.name,
+                "name": decode_encoded_words(&addr.name),
                 "address": addr.address,
             })
         })
@@ -340,4 +347,54 @@ fn history_range(ctx: &Arc<WorkerContext>) -> HistoryRange {
 fn load_folder(ctx: &Arc<WorkerContext>, folder_id: i64) -> Result<Option<StoredFolder>, Failure> {
     let store = lock_store(&ctx.store);
     store.get_folder_by_id(folder_id).map_err(Failure::store)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::to_new_message;
+    use mail_imap::{Address, Envelope, MessageMeta};
+
+    fn meta(subject: &str, from_name: &str) -> MessageMeta {
+        MessageMeta {
+            uid: 1,
+            flags: Vec::new(),
+            internal_date: "2026-10-05T01:00:00Z".to_string(),
+            size: 100,
+            envelope: Envelope {
+                date: "2026-10-05T09:00:00+0800".to_string(),
+                subject: subject.to_string(),
+                from: vec![Address {
+                    name: from_name.to_string(),
+                    address: "alice@example.com".to_string(),
+                }],
+                to: vec![Address {
+                    name: "=?UTF-8?Q?Bob_Lee?=".to_string(),
+                    address: "bob@example.com".to_string(),
+                }],
+                cc: Vec::new(),
+                in_reply_to: String::new(),
+                message_id: "<m1@example.com>".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn 入库前会把编码字主题与显示名解出来() {
+        let message = to_new_message(
+            1,
+            2,
+            meta("=?UTF-8?B?5L2g5aW9?= 报告", "=?ISO-8859-1?Q?Olle_J=E4rnefors?="),
+        );
+        assert_eq!(message.subject, "你好 报告");
+        assert_eq!(message.from_name, "Olle Järnefors");
+        assert_eq!(message.thread_key, "你好 报告");
+        assert!(message.to_json.contains("Bob Lee"), "{}", message.to_json);
+    }
+
+    #[test]
+    fn 普通主题入库保持不变() {
+        let message = to_new_message(1, 2, meta("季度报价", "李四"));
+        assert_eq!(message.subject, "季度报价");
+        assert_eq!(message.from_name, "李四");
+    }
 }

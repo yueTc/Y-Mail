@@ -1,7 +1,10 @@
-//! HTML 白名单清洗与远程图片拦截。
+//! HTML 白名单清洗、CSS 清洗与远程图片拦截。
 //!
 //! 安全约定：正文是不可信输入。这里只输出白名单内的标签和属性，
-//! 去掉脚本、表单、内联样式与事件属性；远程图片默认改写成
+//! 脚本、表单、iframe 与事件属性一律删掉；`style` 属性与 `<style>` 块里的
+//! CSS 只保留排版 / 颜色 / 字体 / 间距 / 边框等安全属性，`url(...)`、
+//! `@import`、`expression(...)`、`javascript:`、`behavior:`、`-moz-binding`、
+//! `position:fixed` 等危险写法全部清掉；远程图片默认改写成
 //! `data-em-original-src`，只有用户明确放行时才还原成 `src`。
 
 use std::collections::{HashMap, HashSet};
@@ -16,6 +19,8 @@ const ALLOWED_TAGS: &[&str] = &[
     "caption",
     "center",
     "code",
+    "col",
+    "colgroup",
     "dd",
     "div",
     "dl",
@@ -53,14 +58,147 @@ const ALLOWED_TAGS: &[&str] = &[
 ];
 
 /// 原样丢弃、连正文内容都不保留的标签。
+///
+/// `style` 留在这里是兜底：正常的 `<style>` 块在清洗前就被单独摘出来处理，
+/// 万一有漏网的畸形写法，也不至于把 CSS 文本当正文显示出来。
 const DROPPED_CONTENT_TAGS: &[&str] = &["script", "style", "iframe", "object", "embed", "form", "noscript"];
 
 /// img 上允许的属性。
-const IMG_ATTRIBUTES: &[&str] = &["src", "alt", "width", "height", "data-em-original-src", "title"];
+const IMG_ATTRIBUTES: &[&str] = &[
+    "src",
+    "alt",
+    "width",
+    "height",
+    "data-em-original-src",
+    "title",
+    "class",
+    "style",
+    "border",
+    "align",
+    "valign",
+];
 
 /// 全局允许的属性（会出现在所有保留标签上）。
-const GENERIC_ATTRIBUTES: &[&str] = &["title"];
+const GENERIC_ATTRIBUTES: &[&str] = &["title", "class", "style", "dir"];
 
+/// 表格 / 布局类标签允许的属性。
+const LAYOUT_ATTRIBUTES: &[&str] = &[
+    "width",
+    "height",
+    "align",
+    "valign",
+    "bgcolor",
+    "cellpadding",
+    "cellspacing",
+    "border",
+    "colspan",
+    "rowspan",
+    "class",
+    "style",
+];
+
+/// 内联样式里允许保留的属性（只留排版、颜色、字体、间距、边框）。
+const SAFE_STYLE_PROPERTIES: &[&str] = &[
+    "color",
+    "background-color",
+    "font",
+    "font-family",
+    "font-size",
+    "font-style",
+    "font-weight",
+    "font-variant",
+    "line-height",
+    "letter-spacing",
+    "word-spacing",
+    "text-align",
+    "text-decoration",
+    "text-decoration-color",
+    "text-indent",
+    "text-transform",
+    "text-shadow",
+    "white-space",
+    "word-break",
+    "word-wrap",
+    "overflow-wrap",
+    "vertical-align",
+    "direction",
+    "margin",
+    "margin-top",
+    "margin-right",
+    "margin-bottom",
+    "margin-left",
+    "padding",
+    "padding-top",
+    "padding-right",
+    "padding-bottom",
+    "padding-left",
+    "border",
+    "border-top",
+    "border-right",
+    "border-bottom",
+    "border-left",
+    "border-color",
+    "border-style",
+    "border-width",
+    "border-radius",
+    "border-collapse",
+    "border-spacing",
+    "width",
+    "min-width",
+    "max-width",
+    "height",
+    "min-height",
+    "max-height",
+    "display",
+    "float",
+    "clear",
+    "list-style-type",
+    "list-style-position",
+    "table-layout",
+    "caption-side",
+    "empty-cells",
+    "box-shadow",
+    "opacity",
+];
+
+/// 值里允许出现的 CSS 函数；其余 `xxx(` 一律拒绝，`url(` 自然也在其中。
+const SAFE_CSS_FUNCTIONS: &[&str] = &[
+    "rgb",
+    "rgba",
+    "hsl",
+    "hsla",
+    "linear-gradient",
+    "radial-gradient",
+    "repeating-linear-gradient",
+    "repeating-radial-gradient",
+    "calc",
+    "min",
+    "max",
+    "clamp",
+    "translate",
+    "translatex",
+    "translatey",
+    "scale",
+    "rotate",
+    "skew",
+    "matrix",
+    "cubic-bezier",
+    "steps",
+];
+
+/// 危险写法关键字：去掉注释、统一小写、去掉空白后必须一个都不含。
+const DANGEROUS_CSS_TOKENS: &[&str] = &[
+    "url(",
+    "expression(",
+    "javascript:",
+    "vbscript:",
+    "behavior:",
+    "-moz-binding",
+    "@import",
+    "@charset",
+    "@namespace",
+    "image-set(",
+];
 /// 远程图片改写为这个属性，清洗后再按需还原。
 pub const REMOTE_SRC_ATTRIBUTE: &str = "data-em-original-src";
 
@@ -75,9 +213,22 @@ pub fn is_remote_image_url(value: &str) -> bool {
 ///
 /// 返回清洗后的 HTML 与被拦截的远程图片数量。
 pub fn sanitize_html(input: &str) -> (String, usize) {
-    let (rewritten, blocked) = rewrite_remote_images(input);
+    // `<style>` 块在清洗器里会被整块删掉（它不做样式表判断），所以先单独摘出来，
+    // 用我们自己的 CSS 清洗器处理后再拼回去。
+    let (html_without_styles, styles) = extract_style_blocks(input);
+    let (rewritten, blocked) = rewrite_remote_images(&html_without_styles);
     let cleaned = build_builder().clean(&rewritten).to_string();
-    (cleaned, blocked)
+    let mut out = String::with_capacity(cleaned.len() + styles.iter().map(String::len).sum::<usize>());
+    for css in styles {
+        if css.is_empty() {
+            continue;
+        }
+        out.push_str("<style>");
+        out.push_str(&css);
+        out.push_str("</style>");
+    }
+    out.push_str(&cleaned);
+    (out, blocked)
 }
 
 /// 把已经清洗过的 HTML 里的远程图片还原成 `src`（用户放行本封时调用）。
@@ -97,7 +248,13 @@ fn build_builder() -> ammonia::Builder<'static> {
     let tags: HashSet<&str> = ALLOWED_TAGS.iter().copied().collect();
     let mut tag_attributes: HashMap<&str, HashSet<&str>> = HashMap::new();
     tag_attributes.insert("img", IMG_ATTRIBUTES.iter().copied().collect());
-    tag_attributes.insert("a", ["href", "title"].into_iter().collect());
+    tag_attributes.insert("a", ["href", "title", "class", "style"].into_iter().collect());
+    let layout: HashSet<&str> = LAYOUT_ATTRIBUTES.iter().copied().collect();
+    for tag in [
+        "table", "td", "th", "tr", "tbody", "thead", "tfoot", "caption", "col", "colgroup",
+    ] {
+        tag_attributes.insert(tag, layout.clone());
+    }
     let generic: HashSet<&str> = GENERIC_ATTRIBUTES.iter().copied().collect();
     let url_schemes: HashSet<&str> = ["http", "https", "mailto", "data", "cid"].into_iter().collect();
 
@@ -114,39 +271,55 @@ fn build_builder() -> ammonia::Builder<'static> {
             if attribute.starts_with("on") {
                 return None;
             }
-            match (element, attribute) {
-                ("img", "src") => {
-                    let lower = value.trim().to_ascii_lowercase();
-                    if lower.starts_with("data:") || lower.starts_with("cid:") {
-                        Some(value.into())
-                    } else {
-                        None
-                    }
+            match attribute {
+                "style" => sanitize_style_attribute(value).map(Into::into),
+                "class" => sanitize_class(value).map(Into::into),
+                "dir" => sanitize_keyword(value, &["ltr", "rtl", "auto"]).map(Into::into),
+                "align" | "valign" => sanitize_keyword(
+                    value,
+                    &[
+                        "left", "right", "center", "justify", "top", "middle", "bottom", "baseline",
+                    ],
+                )
+                .map(Into::into),
+                "bgcolor" => sanitize_color(value).map(Into::into),
+                "width" | "height" => sanitize_dimension(value).map(Into::into),
+                "colspan" | "rowspan" | "cellpadding" | "cellspacing" | "border" => {
+                    sanitize_number(value).map(Into::into)
                 }
-                ("img", REMOTE_SRC_ATTRIBUTE) => {
-                    if is_remote_image_url(value) {
-                        Some(value.into())
-                    } else {
-                        None
+                _ => match (element, attribute) {
+                    ("img", "src") => {
+                        let lower = value.trim().to_ascii_lowercase();
+                        if lower.starts_with("data:") || lower.starts_with("cid:") {
+                            Some(value.into())
+                        } else {
+                            None
+                        }
                     }
-                }
-                ("a", "href") => {
-                    let lower = value.trim().to_ascii_lowercase();
-                    if lower.starts_with("http://")
-                        || lower.starts_with("https://")
-                        || lower.starts_with("mailto:")
-                    {
-                        Some(value.into())
-                    } else {
-                        None
+                    ("img", REMOTE_SRC_ATTRIBUTE) => {
+                        if is_remote_image_url(value) {
+                            Some(value.into())
+                        } else {
+                            None
+                        }
                     }
-                }
-                _ => Some(value.into()),
+                    ("a", "href") => {
+                        let lower = value.trim().to_ascii_lowercase();
+                        if lower.starts_with("http://")
+                            || lower.starts_with("https://")
+                            || lower.starts_with("mailto:")
+                        {
+                            Some(value.into())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => Some(value.into()),
+                },
             }
         });
     builder
 }
-
 /// 扫描 `<img>` 标签，把远程 `src` 改名为 `data-em-original-src`。
 fn rewrite_remote_images(input: &str) -> (String, usize) {
     let mut blocked = 0;
@@ -329,6 +502,484 @@ fn escape_attribute(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// 清洗 `style` 属性：只保留安全声明；全被清掉时返回 None（属性直接删掉）。
+fn sanitize_style_attribute(value: &str) -> Option<String> {
+    let cleaned = sanitize_declarations(value);
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+/// 清洗一段声明列表（如 `color:red; font-size:12px`）。
+fn sanitize_declarations(text: &str) -> String {
+    let without_comments = strip_css_comments(text);
+    let mut out = String::new();
+    for declaration in split_css(&without_comments, ';') {
+        let Some(kept) = sanitize_declaration(&declaration) else {
+            continue;
+        };
+        if !out.is_empty() {
+            out.push(';');
+        }
+        out.push_str(&kept);
+    }
+    out
+}
+
+/// 清洗单条声明；属性不在白名单、或值里有危险写法时返回 None。
+fn sanitize_declaration(declaration: &str) -> Option<String> {
+    let (name, raw_value) = declaration.split_once(':')?;
+    let name = name.trim().to_ascii_lowercase();
+    if !SAFE_STYLE_PROPERTIES.contains(&name.as_str()) {
+        return None;
+    }
+    let mut value = raw_value.trim();
+    // `!important` 本身无害，但没保留的必要，直接去掉（不参与安全判断）。
+    if let Some(position) = value.rfind('!') {
+        if value
+            .get(position + 1..)
+            .is_some_and(|tail| tail.trim().eq_ignore_ascii_case("important"))
+        {
+            value = value.get(..position)?.trim_end();
+        }
+    }
+    if value.is_empty()
+        || value.contains('\\')
+        || value.contains('<')
+        || value.contains('>')
+        || value.contains('{')
+        || value.contains('}')
+    {
+        return None;
+    }
+    // 去掉注释、统一小写、去掉空白后再比对，专门对付大小写 / 空格 / 注释绕过。
+    let canonical: String = value
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect();
+    if DANGEROUS_CSS_TOKENS.iter().any(|token| canonical.contains(token)) {
+        return None;
+    }
+    if !css_functions_are_safe(&canonical) {
+        return None;
+    }
+    Some(format!("{name}:{value}"))
+}
+
+/// 值里出现的函数只能是白名单里的（`rgb(...)`、`calc(...)` 等）。
+fn css_functions_are_safe(value: &str) -> bool {
+    let chars: Vec<char> = value.chars().collect();
+    let mut quote: Option<char> = None;
+    let mut index = 0usize;
+    while index < chars.len() {
+        let ch = chars[index];
+        match quote {
+            Some(active) => {
+                if ch == active {
+                    quote = None;
+                }
+            }
+            None => {
+                if ch == '"' || ch == '\'' {
+                    quote = Some(ch);
+                } else if ch == '(' {
+                    let mut start = index;
+                    while start > 0 {
+                        let previous = chars[start - 1];
+                        if previous.is_ascii_alphanumeric() || previous == '-' || previous == '_' {
+                            start -= 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if start == index {
+                        return false;
+                    }
+                    let name: String = chars[start..index].iter().collect();
+                    if !SAFE_CSS_FUNCTIONS.contains(&name.as_str()) {
+                        return false;
+                    }
+                }
+            }
+        }
+        index += 1;
+    }
+    true
+}
+
+/// 去掉 CSS 注释并用空格代替，避免把前后两个记号粘起来绕过检查。
+fn strip_css_comments(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css;
+    loop {
+        let Some(start) = rest.find("/*") else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("*/") else {
+            // 注释没闭合：后面的内容全部吃掉。
+            break;
+        };
+        out.push(' ');
+        rest = &after[end + 2..];
+    }
+    out
+}
+
+/// 按分隔符拆分，但括号内和引号内的分隔符不算。
+fn split_css(text: &str, separator: char) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut depth = 0usize;
+    for ch in text.chars() {
+        match quote {
+            Some(active) => {
+                current.push(ch);
+                if ch == active {
+                    quote = None;
+                }
+            }
+            None => match ch {
+                '"' | '\'' => {
+                    quote = Some(ch);
+                    current.push(ch);
+                }
+                '(' => {
+                    depth += 1;
+                    current.push(ch);
+                }
+                ')' => {
+                    depth = depth.saturating_sub(1);
+                    current.push(ch);
+                }
+                value if value == separator && depth == 0 => {
+                    parts.push(std::mem::take(&mut current));
+                }
+                value => current.push(value),
+            },
+        }
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    parts
+}
+
+/// 清洗一整段样式表（`<style>` 块里的内容）。
+///
+/// 选择器原样保留（但拒绝含 `<`、`\`、`@`、`;` 的畸形写法），声明走与内联样式
+/// 相同的白名单；所有 `@` 开头的规则（`@import`、`@media`、`@font-face` 等）
+/// 整块丢弃。输出前再兜底检查一遍，确保没有 `<` 或 `\` 漏网。
+fn sanitize_stylesheet(css: &str) -> String {
+    let without_comments = strip_css_comments(css);
+    let chars: Vec<char> = without_comments.chars().collect();
+    let mut out = String::new();
+    let mut index = 0usize;
+    while index < chars.len() {
+        if chars[index].is_whitespace() {
+            index += 1;
+            continue;
+        }
+        if chars[index] == '@' {
+            index = skip_at_rule(&chars, index);
+            continue;
+        }
+        let selector_start = index;
+        let mut quote: Option<char> = None;
+        let mut brace = None;
+        while index < chars.len() {
+            let ch = chars[index];
+            match quote {
+                Some(active) => {
+                    if ch == active {
+                        quote = None;
+                    }
+                }
+                None => {
+                    if ch == '"' || ch == '\'' {
+                        quote = Some(ch);
+                    } else if ch == '{' {
+                        brace = Some(index);
+                        break;
+                    }
+                }
+            }
+            index += 1;
+        }
+        let Some(brace) = brace else {
+            break;
+        };
+        let selector: String = chars[selector_start..brace].iter().collect();
+        let selector = selector.trim().to_string();
+        let (block, next) = read_css_block(&chars, brace);
+        index = next;
+        if selector.is_empty() || !is_safe_selector(&selector) {
+            continue;
+        }
+        let declarations = sanitize_declarations(&block);
+        if declarations.is_empty() {
+            continue;
+        }
+        out.push_str(&selector);
+        out.push('{');
+        out.push_str(&declarations);
+        out.push('}');
+    }
+    if out.contains('<') || out.contains('\\') {
+        return String::new();
+    }
+    out
+}
+
+/// 读一个 `{ ... }` 块的内容，返回内容与块结束后面的下标；支持嵌套。
+fn read_css_block(chars: &[char], open: usize) -> (String, usize) {
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut inner = String::new();
+    let mut index = open;
+    while index < chars.len() {
+        let ch = chars[index];
+        match quote {
+            Some(active) => {
+                if ch == active {
+                    quote = None;
+                }
+                if depth >= 1 {
+                    inner.push(ch);
+                }
+            }
+            None => match ch {
+                '"' | '\'' => {
+                    quote = Some(ch);
+                    if depth >= 1 {
+                        inner.push(ch);
+                    }
+                }
+                '{' => {
+                    depth += 1;
+                    if depth >= 2 {
+                        inner.push(ch);
+                    }
+                }
+                '}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return (inner, index + 1);
+                    }
+                    inner.push(ch);
+                }
+                value => {
+                    if depth >= 1 {
+                        inner.push(value);
+                    }
+                }
+            },
+        }
+        index += 1;
+    }
+    (inner, chars.len())
+}
+
+/// 跳过一条 `@` 规则（到 `;` 或配对的 `}`），整条丢弃。
+fn skip_at_rule(chars: &[char], start: usize) -> usize {
+    let mut index = start;
+    let mut quote: Option<char> = None;
+    while index < chars.len() {
+        let ch = chars[index];
+        match quote {
+            Some(active) => {
+                if ch == active {
+                    quote = None;
+                }
+            }
+            None => match ch {
+                '"' | '\'' => quote = Some(ch),
+                ';' => return index + 1,
+                '{' => {
+                    let (_, next) = read_css_block(chars, index);
+                    return next;
+                }
+                _ => {}
+            },
+        }
+        index += 1;
+    }
+    chars.len()
+}
+
+/// 选择器是否安全：不许出现会破坏 `<style>` 结构的字符或 CSS 转义。
+fn is_safe_selector(selector: &str) -> bool {
+    if selector.is_empty() || selector.chars().count() > 2000 {
+        return false;
+    }
+    !selector
+        .chars()
+        .any(|ch| matches!(ch, '<' | '@' | '\\' | '{' | '}' | ';') || ch.is_control())
+}
+
+/// 找 `<style`（大小写不敏感，后面必须是空白 / `/` / `>`）。
+fn find_style_start(input: &str) -> Option<usize> {
+    let lower = input.to_ascii_lowercase();
+    let mut from = 0usize;
+    while let Some(found) = lower[from..].find("<style") {
+        let index = from + found;
+        let next = lower.as_bytes().get(index + 6).copied();
+        if matches!(
+            next,
+            None | Some(b' ') | Some(b'\t') | Some(b'\r') | Some(b'\n') | Some(b'/') | Some(b'>')
+        ) {
+            return Some(index);
+        }
+        from = index + 6;
+    }
+    None
+}
+
+/// 找 `</style`（大小写不敏感，后面必须是空白 / `>`），返回相对下标。
+fn find_style_close(input: &str) -> Option<usize> {
+    let lower = input.to_ascii_lowercase();
+    let mut from = 0usize;
+    while let Some(found) = lower[from..].find("</style") {
+        let index = from + found;
+        let next = lower.as_bytes().get(index + 7).copied();
+        if matches!(
+            next,
+            None | Some(b' ') | Some(b'\t') | Some(b'\r') | Some(b'\n') | Some(b'>')
+        ) {
+            return Some(index);
+        }
+        from = index + 7;
+    }
+    None
+}
+
+/// 把 `<style>` 块摘出来单独清洗，返回「去掉样式块的 HTML」与「清洗后的样式」。
+fn extract_style_blocks(input: &str) -> (String, Vec<String>) {
+    let mut out = String::with_capacity(input.len());
+    let mut styles = Vec::new();
+    let mut rest = input;
+    loop {
+        let Some(start) = find_style_start(rest) else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..start]);
+        let Some(tag_end) = find_tag_end(&rest.as_bytes()[start..]) else {
+            break;
+        };
+        let content_start = start + tag_end + 1;
+        let Some(close) = find_style_close(&rest[content_start..]) else {
+            styles.push(sanitize_stylesheet(&rest[content_start..]));
+            break;
+        };
+        let content_end = content_start + close;
+        styles.push(sanitize_stylesheet(&rest[content_start..content_end]));
+        let after_close = &rest[content_end..];
+        match after_close.find('>') {
+            Some(gt) => rest = &after_close[gt + 1..],
+            None => break,
+        }
+    }
+    (out, styles)
+}
+
+/// 清洗 class 属性：只留标识符允许的字符，长度设上限。
+fn sanitize_class(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 200 {
+        return None;
+    }
+    if !trimmed
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b' '))
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+/// 关键字类属性（align / valign / dir）：只接受白名单里的词。
+fn sanitize_keyword(value: &str, allowed: &[&str]) -> Option<String> {
+    let lower = value.trim().to_ascii_lowercase();
+    if allowed.contains(&lower.as_str()) {
+        Some(lower)
+    } else {
+        None
+    }
+}
+
+/// 尺寸类属性（width / height）：纯数字 + 常见单位，或百分比。
+fn sanitize_dimension(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 12 {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let split = lower.find(|ch: char| !ch.is_ascii_digit()).unwrap_or(lower.len());
+    let (digits, unit) = lower.split_at(split);
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    match unit {
+        "" | "%" | "px" | "em" | "pt" | "ex" | "rem" | "vw" | "vh" => Some(trimmed.to_string()),
+        _ => None,
+    }
+}
+
+/// 纯数字属性（colspan / rowspan / border / cellpadding / cellspacing）。
+fn sanitize_number(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 6 || !trimmed.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+/// 颜色类属性（bgcolor）：`#rrggbb` 十六进制、颜色名、`rgb(...)` 这类写法。
+fn sanitize_color(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 32 {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if let Some(hex) = lower.strip_prefix('#') {
+        if !hex.is_empty() && hex.len() <= 8 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Some(trimmed.to_string());
+        }
+        return None;
+    }
+    if lower.starts_with("rgb(")
+        || lower.starts_with("rgba(")
+        || lower.starts_with("hsl(")
+        || lower.starts_with("hsla(")
+    {
+        let canonical: String = lower.chars().filter(|ch| !ch.is_whitespace()).collect();
+        if canonical.bytes().all(|byte| {
+            byte.is_ascii_digit()
+                || matches!(
+                    byte,
+                    b'(' | b')' | b',' | b'.' | b'%' | b'r' | b'g' | b'b' | b'h' | b's' | b'l' | b'a'
+                )
+        }) {
+            return Some(trimmed.to_string());
+        }
+        return None;
+    }
+    if lower.len() <= 24
+        && lower
+            .bytes()
+            .all(|byte| byte.is_ascii_alphabetic() || byte == b'-')
+    {
+        return Some(trimmed.to_string());
+    }
+    None
+}
 #[cfg(test)]
 mod tests {
     use super::{restore_remote_images, sanitize_html};
@@ -385,5 +1036,109 @@ mod tests {
         assert!(html.contains("data:image/png"));
         assert!(html.contains("cid:abc"));
         assert!(!html.contains("<img src=\"http://a/b.png\""));
+    }
+}
+
+#[cfg(test)]
+mod css_tests {
+    use super::{sanitize_html, sanitize_style_attribute, sanitize_stylesheet};
+
+    #[test]
+    fn 内联样式保留安全排版去掉危险写法() {
+        let cleaned = sanitize_style_attribute(
+            "font-size:14px; color:#333; background:url(https://evil.example/a.png); position:fixed; behavior:url(#x)",
+        )
+        .expect("应保留安全声明");
+        assert!(cleaned.contains("font-size:14px"), "{cleaned}");
+        assert!(cleaned.contains("color:#333"), "{cleaned}");
+        assert!(!cleaned.to_ascii_lowercase().contains("url("), "{cleaned}");
+        assert!(!cleaned.to_ascii_lowercase().contains("position"), "{cleaned}");
+        assert!(!cleaned.to_ascii_lowercase().contains("behavior"), "{cleaned}");
+    }
+
+    #[test]
+    fn 大小写空格与注释绕过都会被清掉() {
+        let cleaned = sanitize_style_attribute(
+            "COLOR: #FFF; BACKGROUND-COLOR: u/**/rl(https://evil.example/x); WIDTH: expr/**/ession(alert(1)); color: javas cript:alert(1)",
+        )
+        .expect("至少 color 应保留");
+        let lower = cleaned.to_ascii_lowercase();
+        assert!(lower.contains("color:#fff"), "{cleaned}");
+        assert!(!lower.contains("url("), "{cleaned}");
+        assert!(!lower.contains("expression("), "{cleaned}");
+        assert!(!lower.contains("javascript:"), "{cleaned}");
+    }
+
+    #[test]
+    fn 样式表规则保留安全声明丢掉at规则与url() {
+        let css = sanitize_stylesheet(
+            "@import url(https://evil.example/a.css); p { color: #333; font-size: 14px; background: url(https://evil.example/1.png); -moz-binding: url(#x) }",
+        );
+        assert!(css.contains("p{color:#333;font-size:14px}"), "{css}");
+        assert!(!css.contains("@import"), "{css}");
+        assert!(!css.to_ascii_lowercase().contains("url("), "{css}");
+        assert!(!css.contains("-moz-binding"), "{css}");
+    }
+
+    #[test]
+    fn 危险属性在样式表里也不会漏网() {
+        for css in [
+            "p{color:red;position:fixed;top:0}",
+            "p{color:red;behavior:url(#default#x)}",
+            "p{color:red;background:u/**/rl(http://evil/x)}",
+            "p{color:red;width:expression(alert(1))}",
+            "p{color:red;color:javascript:alert(1)}",
+        ] {
+            let cleaned = sanitize_stylesheet(css);
+            let lower = cleaned.to_ascii_lowercase();
+            assert!(!lower.contains("position"), "{cleaned}");
+            assert!(!lower.contains("behavior"), "{cleaned}");
+            assert!(!lower.contains("url("), "{cleaned}");
+            assert!(!lower.contains("expression"), "{cleaned}");
+            assert!(!lower.contains("javascript"), "{cleaned}");
+            assert!(lower.contains("color:red"), "{cleaned}");
+        }
+    }
+
+    #[test]
+    fn style块与表格属性被保留而脚本仍被清掉() {
+        let (html, _) = sanitize_html(concat!(
+            "<style>p{color:red}</style>",
+            "<p style=\"font-size:12px;position:fixed\">hi</p>",
+            "<table width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" bgcolor=\"#ffffff\">",
+            "<tr><td colspan=\"2\" valign=\"top\">x</td></tr></table>",
+            "<script>alert(1)</script><iframe src=\"https://evil\"></iframe>",
+            "<p onclick=\"alert(1)\">ok</p>",
+        ));
+        assert!(html.contains("<style>p{color:red}</style>"), "{html}");
+        assert!(html.contains("font-size:12px"), "{html}");
+        assert!(!html.contains("position:fixed"), "{html}");
+        assert!(html.contains("width=\"600\""), "{html}");
+        assert!(html.contains("cellpadding=\"0\""), "{html}");
+        assert!(html.contains("bgcolor=\"#ffffff\""), "{html}");
+        assert!(html.contains("colspan=\"2\""), "{html}");
+        assert!(html.contains("valign=\"top\""), "{html}");
+        assert!(!html.contains("<script"), "{html}");
+        assert!(!html.contains("<iframe"), "{html}");
+        assert!(!html.contains("onclick"), "{html}");
+        assert!(html.contains("ok"), "{html}");
+    }
+
+    #[test]
+    fn 全是危险声明的style块整块不留() {
+        let (html, _) =
+            sanitize_html("<style>a{background:url(https://evil/x.png);behavior:url(#x)}</style><p>正文</p>");
+        assert!(!html.contains("<style>"), "{html}");
+        assert!(!html.to_ascii_lowercase().contains("url("), "{html}");
+        assert!(html.contains("正文"), "{html}");
+    }
+
+    #[test]
+    fn 表格属性里的表达式会被丢掉() {
+        let (html, _) =
+            sanitize_html("<table><tr><td width=\"expression(alert(1))\" align=\"evil\">x</td></tr></table>");
+        assert!(!html.contains("expression"), "{html}");
+        assert!(!html.contains("align"), "{html}");
+        assert!(html.contains("x"), "{html}");
     }
 }

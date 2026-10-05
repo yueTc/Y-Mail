@@ -2,7 +2,7 @@
 //!
 //! 安全约定：
 //! - 正文一律放进 `sandbox` 且不含 `allow-scripts` 的 iframe，文档再上一条严格 CSP；
-//! - 远程图片默认拦截，用户点了「本封放行」才把 http/https 加进图片白名单，且不回写数据库；
+//! - 远程图片默认拦截；用户可「本封放行」，也可记住发件人以后自动放行（名单存本地设置）；
 //! - 附件只给本地下载按钮；可执行文件用红色警示提醒来源风险；
 //! - 正文内容不可信，界面不据此跳转、不执行任何脚本。
 
@@ -193,6 +193,9 @@ export default function MessageReader({ message, aiEnabled = false }: MessageRea
   const [error, setError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const [remoteAllowedFor, setRemoteAllowedFor] = useState<number>();
+  /** 本封已记住发件人（界面提示用）。 */
+  const [rememberedFor, setRememberedFor] = useState<number>();
+  const [rememberBusy, setRememberBusy] = useState(false);
   const [theme, setTheme] = useState<ReaderTheme>(() => readStoredTheme());
   const [systemDark, setSystemDark] = useState(false);
   const [downloading, setDownloading] = useState<ReadonlySet<number>>(new Set());
@@ -214,7 +217,10 @@ export default function MessageReader({ message, aiEnabled = false }: MessageRea
   const [aiDowngraded, setAiDowngraded] = useState(false);
 
   const messageId = message?.id;
-  const allowRemote = messageId !== undefined && remoteAllowedFor === messageId;
+  /** 用户本封点过放行（请求参数用它，避免后端已经自动放行时重复请求）。 */
+  const userAllowedRemote = messageId !== undefined && remoteAllowedFor === messageId;
+  /** 界面是否按放行渲染：用户本封放行，或后端因「记住的发件人」已自动放行。 */
+  const allowRemote = userAllowedRemote || body?.remoteImagesAllowed === true;
 
   /** 跟随系统深色：监听系统主题变化。 */
   useEffect(() => {
@@ -238,7 +244,7 @@ export default function MessageReader({ message, aiEnabled = false }: MessageRea
     setError(undefined);
     setActionError(undefined);
     api
-      .getMessageBody(messageId, allowRemote)
+      .getMessageBody(messageId, userAllowedRemote)
       .then((value) => {
         if (!cancelled) setBody(value);
       })
@@ -251,11 +257,13 @@ export default function MessageReader({ message, aiEnabled = false }: MessageRea
     return () => {
       cancelled = true;
     };
-  }, [messageId, allowRemote, reloadKey]);
+  }, [messageId, userAllowedRemote, reloadKey]);
 
   /** 切邮件时清掉上一封的内嵌图加载状态，避免串封。 */
   useEffect(() => {
     setInlineBusy(new Set());
+    setRememberedFor(undefined);
+    setRememberBusy(false);
   }, [messageId]);
 
   /** 切邮件时清掉上一封的 AI 结果，避免串封。 */
@@ -332,6 +340,22 @@ export default function MessageReader({ message, aiEnabled = false }: MessageRea
       });
     }
   }, []);
+
+  /** 记住本封发件人：以后这个发件人的邮件自动放行远程图片。 */
+  const rememberSender = useCallback(async () => {
+    if (messageId === undefined || rememberBusy) return;
+    setRememberBusy(true);
+    setActionError(undefined);
+    try {
+      await api.rememberRemoteSender(messageId);
+      setRemoteAllowedFor(messageId);
+      setRememberedFor(messageId);
+    } catch (caught) {
+      setActionError(describeError(caught));
+    } finally {
+      setRememberBusy(false);
+    }
+  }, [messageId, rememberBusy]);
 
   /** 翻译按钮：先拿只读预览；缓存命中不弹窗，直接取结果。 */
   const requestTranslation = useCallback(async () => {
@@ -572,17 +596,32 @@ export default function MessageReader({ message, aiEnabled = false }: MessageRea
                 <span>
                   已拦截远程图片（{blocked} 张）。放行后服务器可能知道你打开了这封邮件，请先确认发件人可信。
                 </span>
-                <button
-                  type="button"
-                  className="reader-allow"
-                  onClick={() => setRemoteAllowedFor(message.id)}
-                >
-                  本封放行远程图片
-                </button>
+                <span className="reader-blocked-actions">
+                  <button
+                    type="button"
+                    className="reader-allow"
+                    onClick={() => setRemoteAllowedFor(message.id)}
+                  >
+                    本封放行远程图片
+                  </button>
+                  <button
+                    type="button"
+                    className="reader-remember"
+                    disabled={rememberBusy}
+                    title={`记住 ${message.fromAddr}，以后自动显示远程图片`}
+                    onClick={() => void rememberSender()}
+                  >
+                    {rememberBusy ? "记住中……" : "以后这个发件人都自动显示"}
+                  </button>
+                </span>
               </div>
             )}
             {blocked > 0 && allowRemote && (
-              <p className="hint">本封已放行远程图片，关闭后自动恢复默认拦截。</p>
+              <p className="hint">
+                {rememberedFor === message.id
+                  ? "已记住这个发件人，以后自动显示远程图片；可在「账号与代理」设置里移除。"
+                  : "本封已放行远程图片，关闭后自动恢复默认拦截。"}
+              </p>
             )}
 
             {(inlineApplication.pending.length > 0 || inlineApplication.rejected > 0) && (

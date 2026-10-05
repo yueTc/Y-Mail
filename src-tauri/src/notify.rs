@@ -109,8 +109,8 @@ async fn scan(app: &AppHandle) -> Result<Vec<NewMailEvent>, String> {
             message_id: item.id,
             account_id: item.account_id,
             account_name: display_name(&item.account_display_name, &item.account_email),
-            subject: item.subject,
-            from: display_name(&item.from_name, &item.from_addr),
+            subject: mail_core::decode_encoded_words(&item.subject),
+            from: display_name(&mail_core::decode_encoded_words(&item.from_name), &item.from_addr),
         })
         .collect())
 }

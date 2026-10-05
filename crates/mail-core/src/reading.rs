@@ -16,7 +16,8 @@ use mail_domain::AccountId;
 use mail_imap::{ClientConfig, ImapClient};
 use mail_mime::{
     attachment_content, inline_image_data_url, is_renderable_inline_image_mime, normalize_content_id,
-    parse_message, restore_remote_images, ParsedAttachment, MAX_INLINE_IMAGE_BYTES, REMOTE_SRC_ATTRIBUTE,
+    parse_message, restore_remote_images, ParsedAttachment, ParsedInlineImage, MAX_INLINE_IMAGE_BYTES,
+    REMOTE_SRC_ATTRIBUTE,
 };
 use mail_store::{AttachmentState, BodyState, MessageLocation, NewAttachment, Store, StoredAttachment};
 
@@ -78,6 +79,8 @@ pub struct MessageBodyView {
     pub html: Option<String>,
     /// 被拦下的远程图片数量（按清洗结果里的占位属性统计）。
     pub blocked_remote_images: usize,
+    /// 本次返回是否放行了远程图片（用户本封放行，或发件人在「记住」名单里）。
+    pub remote_images_allowed: bool,
     /// 正文里可能用到的内嵌图片（只含本地状态，不含远程探测）。
     pub inline_images: Vec<InlineImageView>,
     /// 附件清单（含本地保存状态）。
@@ -102,6 +105,8 @@ impl MailEngine {
         };
 
         let location = location.ok_or(EngineError::MessageNotFound(message_id))?;
+        // 发件人在「记住」名单里时，这封（以及以后的邮件）默认放行远程图片。
+        let allow_remote_images = allow_remote_images || self.sender_trusts_remote_images(message_id);
         if let Some(body) = cached {
             let attachments = {
                 let store = lock_store(&self.store);
@@ -153,6 +158,8 @@ impl MailEngine {
             store.set_message_has_attachments(message_id, count > 0)?;
             store.list_attachments(message_id)?
         };
+        // 打开邮件时把已经随原文拉下来的内嵌图片顺带落盘，界面直接显示，不再联网。
+        let attachments = self.persist_inline_images(attachments, &parsed.inline_images);
 
         Ok(self.view_of(
             message_id,
@@ -226,6 +233,7 @@ impl MailEngine {
             text_plain,
             html,
             blocked_remote_images,
+            remote_images_allowed: allow_remote_images,
             inline_images,
             attachments,
         }
@@ -321,6 +329,160 @@ impl MailEngine {
         ImapClient::connect(&config, route.as_ref())
             .await
             .map_err(EngineError::from)
+    }
+
+    /// 把这次已经拿到的内嵌图片字节落盘并标记已下载；失败就跳过，留给兜底按钮。
+    fn persist_inline_images(
+        &self,
+        attachments: Vec<StoredAttachment>,
+        images: &[ParsedInlineImage],
+    ) -> Vec<StoredAttachment> {
+        if images.is_empty() {
+            return attachments;
+        }
+        let mut attachments = attachments;
+        for image in images {
+            let Some(target) = attachments
+                .iter_mut()
+                .find(|item| item.part_index == image.part_index)
+            else {
+                continue;
+            };
+            if target.state == AttachmentState::Downloaded {
+                continue;
+            }
+            let path = match self.attachment_path(target) {
+                Ok(path) => path,
+                Err(_) => continue,
+            };
+            if std::fs::write(&path, &image.bytes).is_err() {
+                continue;
+            }
+            let local = path.to_string_lossy().to_string();
+            let marked = {
+                let store = lock_store(&self.store);
+                store.set_attachment_downloaded(target.id, &local).is_ok()
+            };
+            if marked {
+                target.state = AttachmentState::Downloaded;
+                target.local_path = Some(local);
+            }
+        }
+        attachments
+    }
+
+    /// 这个发件人是否已经被用户记住，打开邮件时自动放行远程图片。
+    fn sender_trusts_remote_images(&self, message_id: i64) -> bool {
+        let (address, trusted) = {
+            let store = lock_store(&self.store);
+            let address = store
+                .get_inbox_message(message_id)
+                .ok()
+                .flatten()
+                .map(|message| message.from_addr);
+            let trusted = trusted_remote_senders(&store).unwrap_or_default();
+            (address, trusted)
+        };
+        let Some(address) = address.and_then(|value| normalize_sender_address(&value)) else {
+            return false;
+        };
+        trusted.iter().any(|item| item == &address)
+    }
+}
+
+/// 记住的发件人存放在这个设置项里，值是 JSON 字符串数组。
+pub const TRUSTED_REMOTE_SENDERS_KEY: &str = "reader.trusted_remote_senders";
+
+/// 发件人地址的基本校验：只接受 `本地部分@域名`，两边都不许有空白的常见非法字符。
+fn normalize_sender_address(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_matches(['<', '>']);
+    let (local, domain) = trimmed.split_once('@')?;
+    if local.is_empty() || domain.is_empty() || trimmed.len() > 254 {
+        return None;
+    }
+    if trimmed.matches('@').count() != 1 {
+        return None;
+    }
+    if trimmed
+        .chars()
+        .any(|ch| ch.is_whitespace() || ch.is_control() || matches!(ch, '<' | '>' | '"' | ',' | ';' | '\\'))
+    {
+        return None;
+    }
+    if !domain.contains('.') || domain.starts_with('.') || domain.ends_with('.') {
+        return None;
+    }
+    Some(trimmed.to_ascii_lowercase())
+}
+
+/// 读「记住的发件人」列表；坏数据当作空列表，不让它影响读信。
+fn trusted_remote_senders(store: &Store) -> Result<Vec<String>, EngineError> {
+    let raw = store.get_setting(TRUSTED_REMOTE_SENDERS_KEY)?;
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let parsed: Vec<String> = serde_json::from_str(&raw).unwrap_or_default();
+    let mut unique: Vec<String> = Vec::new();
+    for item in parsed {
+        if let Some(address) = normalize_sender_address(&item) {
+            if !unique.contains(&address) {
+                unique.push(address);
+            }
+        }
+    }
+    Ok(unique)
+}
+
+/// 写回「记住的发件人」列表。
+fn save_trusted_remote_senders(store: &Store, senders: &[String]) -> Result<(), EngineError> {
+    let value = serde_json::to_string(senders)
+        .map_err(|error| EngineError::BadRequest(format!("记住发件人失败：{error}")))?;
+    store.set_setting(TRUSTED_REMOTE_SENDERS_KEY, &value)?;
+    Ok(())
+}
+
+impl MailEngine {
+    /// 记住一封邮件的发件人：以后打开这个发件人的邮件时自动放行远程图片。
+    pub fn remember_remote_sender(&self, message_id: i64) -> Result<Vec<String>, EngineError> {
+        let address = {
+            let store = lock_store(&self.store);
+            let message = store
+                .get_inbox_message(message_id)?
+                .ok_or(EngineError::MessageNotFound(message_id))?;
+            normalize_sender_address(&message.from_addr)
+                .ok_or_else(|| EngineError::BadRequest("这封邮件的发件人地址不合法，无法记住".to_string()))?
+        };
+        let store = lock_store(&self.store);
+        let mut senders = trusted_remote_senders(&store)?;
+        if !senders.contains(&address) {
+            senders.push(address);
+            senders.sort();
+        }
+        save_trusted_remote_senders(&store, &senders)?;
+        Ok(senders)
+    }
+
+    /// 当前记住的发件人列表（按字母序）。
+    pub fn trusted_remote_senders(&self) -> Result<Vec<String>, EngineError> {
+        let store = lock_store(&self.store);
+        trusted_remote_senders(&store)
+    }
+
+    /// 从名单里移除一个发件人；移除后这个发件人的邮件恢复默认拦截。
+    pub fn forget_remote_sender(&self, address: &str) -> Result<Vec<String>, EngineError> {
+        let normalized = normalize_sender_address(address)
+            .ok_or_else(|| EngineError::BadRequest("发件人地址不合法".to_string()))?;
+        let store = lock_store(&self.store);
+        let mut senders = trusted_remote_senders(&store)?;
+        let before = senders.len();
+        senders.retain(|item| item != &normalized);
+        if senders.len() == before {
+            return Err(EngineError::BadRequest(format!(
+                "这个发件人不在记住名单里：{normalized}"
+            )));
+        }
+        save_trusted_remote_senders(&store, &senders)?;
+        Ok(senders)
     }
 }
 
@@ -425,7 +587,31 @@ mod tests {
 
     use crate::secrets::MemorySecretStore;
 
-    use super::{inline_image_view, sanitize_filename, InlineImageState, MailEngine};
+    use super::{
+        inline_image_view, normalize_sender_address, sanitize_filename, InlineImageState, MailEngine,
+    };
+
+    #[test]
+    fn 发件人地址规范化会转小写并拒绝坏数据() {
+        assert_eq!(
+            normalize_sender_address(" Alice@Example.COM ").as_deref(),
+            Some("alice@example.com")
+        );
+        assert_eq!(normalize_sender_address("<a@b.com>").as_deref(), Some("a@b.com"));
+        for bad in [
+            "",
+            "no-at-sign",
+            "a@b",
+            "a b@c.com",
+            "a@b.com, c@d.com",
+            "a@@b.com",
+            "a@.com",
+            "a@b.com.",
+            "a@b\\c.com",
+        ] {
+            assert!(normalize_sender_address(bad).is_none(), "{bad} 应被拒绝");
+        }
+    }
 
     #[test]
     fn 文件名消毒能挡住路径穿越() {

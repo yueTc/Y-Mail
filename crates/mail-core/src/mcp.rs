@@ -19,6 +19,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use mail_domain::account::AccountId;
+use mail_mime::decode_encoded_words;
 use mail_store::{InboxMessage, McpAuditRecord, NewOutbox, OutboxKind, OutboxState, SearchQuery, Store};
 
 use crate::engine::{EngineError, MailEngine};
@@ -729,8 +730,9 @@ impl From<&InboxMessage> for McpMessageView {
             account_id: message.account_id,
             folder_id: message.folder_id,
             thread_key: message.thread_key.clone(),
-            subject: message.subject.clone(),
-            from_name: message.from_name.clone(),
+            // 外部 Agent 看到的主题 / 显示名也要是正常文字，不能是编码字原文。
+            subject: decode_encoded_words(&message.subject),
+            from_name: decode_encoded_words(&message.from_name),
             from_addr: message.from_addr.clone(),
             date_utc: message.date_utc.clone(),
             size: message.size,
@@ -839,6 +841,33 @@ mod tests {
             .find(|message| message.uid == uid)
             .expect("应能读回刚插的邮件")
             .id
+    }
+
+    #[test]
+    fn 外部视图会把编码字主题与显示名解出来() {
+        let message = InboxMessage {
+            id: 1,
+            account_id: 1,
+            folder_id: 1,
+            uid: 1,
+            thread_key: "t1".to_string(),
+            subject: "=?UTF-8?B?5L2g5aW9?=".to_string(),
+            from_name: "=?ISO-8859-1?Q?Olle_J=E4rnefors?=".to_string(),
+            from_addr: "alice@example.com".to_string(),
+            date_utc: "2026-10-05T01:00:00Z".to_string(),
+            size: 10,
+            has_attachments: false,
+            is_read: false,
+            is_flagged: false,
+            snippet: String::new(),
+            account_email: "me@example.com".to_string(),
+            account_display_name: "我".to_string(),
+            account_color: "#3366ff".to_string(),
+            folder_path: "INBOX".to_string(),
+        };
+        let view = McpMessageView::from(&message);
+        assert_eq!(view.subject, "你好");
+        assert_eq!(view.from_name, "Olle Järnefors");
     }
 
     fn sample_draft(account_id: i64) -> McpDraftInput {

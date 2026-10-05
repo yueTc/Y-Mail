@@ -38,6 +38,8 @@ pub use reading::{InlineImageState, InlineImageView, MessageBodyView};
 pub use search::DeepSearchPage;
 
 // 存储层的收件箱类型在这里重新导出，外壳无需直接依赖 mail-store。
+/// 邮件头里的 RFC 2047 编码字解码；外壳组装展示字段时用，避免直接依赖 mail-mime。
+pub use mail_mime::decode_encoded_words;
 pub use mail_store::{
     AccountInboxSummary, AiFunction, AiModelMapEntry, AiProviderKind, AiThinkingLevel, AttachmentState,
     BodyState, InboxFolder, InboxMessage, InboxQuery, InboxThread, McpAuditRecord, MessageLocation,

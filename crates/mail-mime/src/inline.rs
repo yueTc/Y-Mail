@@ -131,6 +131,15 @@ fn mime_matches(declared: &str, sniffed: &str) -> bool {
 /// 校验顺序：非空 → 不超上限 → 类型白名单 → 文件头可识别 → 声明与文件头一致。
 /// 任何一步不过都返回错误，绝不产生可执行内容。
 pub fn inline_image_data_url(declared_mime: &str, bytes: &[u8]) -> Result<String, InlineImageError> {
+    let sniffed = validate_inline_image(declared_mime, bytes)?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{sniffed};base64,{encoded}"))
+}
+
+/// 校验一张图片是否可以内联显示：类型白名单、单张上限、文件头与声明一致。
+///
+/// 通过时返回嗅探出的真实类型；落盘前也可以先用它挡掉坏数据与 SVG。
+pub fn validate_inline_image(declared_mime: &str, bytes: &[u8]) -> Result<&'static str, InlineImageError> {
     if bytes.is_empty() {
         return Err(InlineImageError::Empty);
     }
@@ -152,8 +161,7 @@ pub fn inline_image_data_url(declared_mime: &str, bytes: &[u8]) -> Result<String
             sniffed: sniffed.to_string(),
         });
     }
-    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-    Ok(format!("data:{sniffed};base64,{encoded}"))
+    Ok(sniffed)
 }
 
 #[cfg(test)]
