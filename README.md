@@ -124,14 +124,3 @@ docs/            用户手册、安全审计、人工验收、发布与回滚、
 ```
 
 依赖方向单向、无环：`mail-domain` ← 其余全部；`mail-store` ← `mail-core`；协议层 ← `mail-core`；`mail-core` ← `src-tauri` ← 前端。
-
-## 应用图标
-
-整套图标放在 `src-tauri/icons/`，由一张 1024×1024 的源图经 `tauri icon` 生成：
-
-```powershell
-# 用现成的源图重新生成整套图标
-npm run tauri -- icon src-tauri/icons/icon-source.png
-```
-
-换图标时，准备好新的 1024×1024 源图后跑上面这条命令即可；`npm run tauri build` 会重新编译并把图标写进 exe。
