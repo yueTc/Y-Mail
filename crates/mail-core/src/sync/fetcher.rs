@@ -10,13 +10,30 @@ use mail_domain::dates::{format_imap_date, format_iso8601_utc, parse_mail_date, 
 use mail_domain::{thread_key, FolderKind, HistoryRange};
 use mail_imap::{Address, FolderInfo, ImapClient, MessageMeta};
 use mail_mime::decode_encoded_words;
-use mail_store::{NewMessage, StoredFolder};
+use mail_store::{NewFolder, NewMessage, StoredFolder};
 
 use super::state::SyncState;
 use super::worker::{lock_store, set_status, Failure, WorkerContext, FETCH_BATCH};
 
 /// 一次唤醒里最多补几批历史，避免长时间占着连接不处理新邮件。
 const BACKFILL_BATCHES_PER_CYCLE: usize = 8;
+
+/// 把服务器返回的文件夹列表对齐到本地：认领旧乱码行、合并重复、清掉空的残留。
+pub(super) fn align_folders(ctx: &Arc<WorkerContext>, folders: &[FolderInfo]) -> Result<(), Failure> {
+    let prepared: Vec<NewFolder> = folders
+        .iter()
+        .map(|info| NewFolder {
+            full_path: info.full_path.clone(),
+            server_path: info.server_path.clone(),
+            delimiter: info.delimiter.clone(),
+            kind: FolderKind::classify(&info.full_path, &info.attributes),
+        })
+        .collect();
+    let store = lock_store(&ctx.store);
+    store
+        .align_folders(ctx.account_id, &prepared)
+        .map_err(Failure::store)
+}
 
 /// 同步一个文件夹：SELECT → 处理 UIDVALIDITY → 快照 / 增量 / 补齐 → 收尾。
 pub(super) async fn sync_folder(
@@ -31,12 +48,18 @@ pub(super) async fn sync_folder(
     let folder_id = {
         let store = lock_store(&ctx.store);
         store
-            .upsert_folder(ctx.account_id, &info.full_path, &info.delimiter, kind)
+            .upsert_folder_mapped(
+                ctx.account_id,
+                &info.full_path,
+                &info.server_path,
+                &info.delimiter,
+                kind,
+            )
             .map_err(Failure::store)?
     };
 
     let status = client
-        .select(&info.full_path)
+        .select(&info.server_path)
         .await
         .map_err(Failure::connection)?;
 
@@ -85,10 +108,60 @@ pub(super) async fn sync_folder(
     incremental(ctx, client, folder_id).await?;
     backfill(ctx, client, folder_id, range).await?;
 
+    refresh_attachment_flags(ctx, client, folder_id).await?;
+
     {
         let store = lock_store(&ctx.store);
         store.touch_folder_synced_at(folder_id).map_err(Failure::store)?;
     }
+    Ok(())
+}
+
+/// 一次性补齐已有邮件的附件标记。
+///
+/// 列表抓取早先不请求 BODYSTRUCTURE，老库里 `has_attachments` 全是 0。升级后把该
+/// 文件夹已入库的 UID 重抓一遍元数据（写入路径只刷新附件标记，不动本地状态），
+/// 跑完在设置项里记一笔，之后不再重复。
+async fn refresh_attachment_flags(
+    ctx: &Arc<WorkerContext>,
+    client: &mut ImapClient,
+    folder_id: i64,
+) -> Result<(), Failure> {
+    let key = format!("sync.attachment_scan.v1.{folder_id}");
+    let done = {
+        let store = lock_store(&ctx.store);
+        store.get_setting(&key).map_err(Failure::store)?.is_some()
+    };
+    if done {
+        return Ok(());
+    }
+    let uids = {
+        let store = lock_store(&ctx.store);
+        store.list_message_uids(folder_id).map_err(Failure::store)?
+    };
+    if uids.is_empty() {
+        let store = lock_store(&ctx.store);
+        store.set_setting(&key, "empty").map_err(Failure::store)?;
+        return Ok(());
+    }
+    let total = uids.len();
+    for (index, chunk) in uids.chunks(ctx.config.backfill_batch).enumerate() {
+        if ctx.cancel.is_cancelled() {
+            return Ok(());
+        }
+        let scanned = (index * ctx.config.backfill_batch).min(total);
+        set_status(
+            ctx,
+            SyncState::Syncing,
+            scanned as i64,
+            total as i64,
+            "正在补齐附件标记",
+        );
+        let metas = fetch_all(ctx, client, chunk).await?;
+        insert_metas(ctx, folder_id, metas)?;
+    }
+    let store = lock_store(&ctx.store);
+    store.set_setting(&key, "done").map_err(Failure::store)?;
     Ok(())
 }
 
@@ -271,9 +344,7 @@ fn insert_metas(ctx: &Arc<WorkerContext>, folder_id: i64, metas: Vec<MessageMeta
     }
     let inserted = store.insert_messages(&messages).map_err(Failure::store)?;
     if inserted > 0 {
-        store
-            .upsert_contacts(ctx.account_id, &contacts)
-            .map_err(Failure::store)?;
+        store.upsert_contacts(&contacts).map_err(Failure::store)?;
     }
     Ok(inserted as i64)
 }
@@ -306,7 +377,7 @@ fn to_new_message(account_id: i64, folder_id: i64, meta: MessageMeta) -> NewMess
         cc_json: addresses_json(&envelope.cc),
         date_utc,
         size: meta.size,
-        has_attachments: false,
+        has_attachments: meta.has_attachments,
         is_read: has("\\SEEN"),
         is_flagged: has("\\FLAGGED"),
         is_answered: has("\\ANSWERED"),
@@ -360,6 +431,7 @@ mod tests {
             flags: Vec::new(),
             internal_date: "2026-10-05T01:00:00Z".to_string(),
             size: 100,
+            has_attachments: false,
             envelope: Envelope {
                 date: "2026-10-05T09:00:00+0800".to_string(),
                 subject: subject.to_string(),

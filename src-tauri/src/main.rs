@@ -7,5 +7,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    em_master_lib::run();
+    ymail_lib::run();
 }

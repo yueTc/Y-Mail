@@ -5,6 +5,8 @@
 
 use mail_domain::error::ConnectionError;
 
+use super::utf7;
+
 /// 一段解析出来的取值。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Value {
@@ -143,7 +145,10 @@ impl<'a> Parser<'a> {
 pub(crate) struct ParsedList {
     pub attributes: Vec<String>,
     pub delimiter: String,
+    /// 展示名，已从 Modified UTF-7 解码。
     pub full_path: String,
+    /// 服务器原始名，后续命令必须用它。
+    pub server_path: String,
 }
 
 /// 解析一行 LIST 应答；不是 LIST 行返回 None。
@@ -163,11 +168,13 @@ pub(crate) fn parse_list_line(line: &[u8]) -> Option<ParsedList> {
         .filter_map(Value::as_text)
         .collect();
     let delimiter = p.parse_value()?.as_text().unwrap_or_default();
-    let full_path = p.parse_value()?.as_text()?;
+    let server_path = p.parse_value()?.as_text()?;
+    let full_path = utf7::decode(&server_path);
     Some(ParsedList {
         attributes,
         delimiter,
         full_path,
+        server_path,
     })
 }
 
@@ -252,6 +259,7 @@ pub(crate) struct ParsedFetch {
     pub internal_date: Option<String>,
     pub size: Option<u32>,
     pub envelope: Option<Vec<Value>>,
+    pub body_structure: Option<Value>,
 }
 
 /// 解析一行 FETCH 应答；不是 FETCH 行返回 None。
@@ -276,6 +284,7 @@ pub(crate) fn parse_fetch_line(line: &[u8]) -> Option<ParsedFetch> {
         internal_date: None,
         size: None,
         envelope: None,
+        body_structure: None,
     };
     for pair in items.chunks(2) {
         if pair.len() < 2 {
@@ -296,11 +305,59 @@ pub(crate) fn parse_fetch_line(line: &[u8]) -> Option<ParsedFetch> {
             parsed.size = value.as_number().and_then(|n| u32::try_from(n).ok());
         } else if key.eq_ignore_ascii_case("ENVELOPE") {
             parsed.envelope = value.as_list().map(|list| list.to_vec());
+        } else if key.eq_ignore_ascii_case("BODYSTRUCTURE") {
+            parsed.body_structure = Some(value.clone());
         }
     }
     Some(parsed)
 }
 
+/// 从 BODYSTRUCTURE 判断这封邮件有没有附件（含内嵌图片）。
+///
+/// 判据：某个部分带 attachment / inline 处置，或者是正文以外的单部分
+/// （图片、PDF 等）。multipart 递归检查子部分；解析不出来时按没有附件处理。
+pub(crate) fn body_structure_has_attachments(value: &Value) -> bool {
+    let Some(parts) = value.as_list() else {
+        return false;
+    };
+    let Some(first) = parts.first() else {
+        return false;
+    };
+    if first.as_list().is_some() {
+        // multipart：子部分在前，收尾是一个子类型字符串；遇到非列表就停。
+        return parts
+            .iter()
+            .take_while(|item| item.as_list().is_some())
+            .any(body_structure_has_attachments);
+    }
+    let main_type = parts
+        .first()
+        .and_then(Value::as_text)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if main_type == "multipart" {
+        return false;
+    }
+    let subtype = parts
+        .get(1)
+        .and_then(Value::as_text)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    // 处置字段形如 ("attachment" ("filename" "报告.pdf"))：出现即按附件算。
+    let has_disposition = parts.iter().any(|item| {
+        item.as_list()
+            .and_then(|list| list.first())
+            .and_then(Value::as_text)
+            .is_some_and(|text| {
+                text.eq_ignore_ascii_case("attachment") || text.eq_ignore_ascii_case("inline")
+            })
+    });
+    if has_disposition {
+        return true;
+    }
+    // 没有显式处置时，正文以外的单部分（图片、PDF 等）也算附件。
+    !(main_type == "text" && (subtype == "plain" || subtype == "html"))
+}
 /// 若一行以 `{n}` 结尾，返回 n（字面量字节长度）。
 pub(crate) fn trailing_literal(line: &[u8]) -> Option<usize> {
     if !line.ends_with(b"}") {

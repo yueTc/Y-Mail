@@ -13,8 +13,8 @@ use mail_net::{connect_tcp, tls_wrap, Stream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::parse::{
-    format_uid_set, parse_fetch_line, parse_list_line, parse_search_line, parse_select_line,
-    quote_imap_string, trailing_literal, SelectEvent, Value,
+    body_structure_has_attachments, format_uid_set, parse_fetch_line, parse_list_line, parse_search_line,
+    parse_select_line, quote_imap_string, trailing_literal, SelectEvent, Value,
 };
 use super::{
     Address, ClientConfig, Envelope, FolderInfo, IdleOutcome, ImapClient, MailboxStatus, MessageMeta,
@@ -27,7 +27,7 @@ const MAX_TOTAL: usize = 32 * 1024 * 1024;
 /// 单封邮件原文上限（32 MiB，与解析层一致）。
 const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 /// 自报身份用的客户端名。
-const CLIENT_NAME: &str = "em-master";
+const CLIENT_NAME: &str = "ymail";
 const TIMEOUT_TEXT: &str = "连接超时：服务器在规定时间内没有完成应答";
 
 /// 一条服务器命令的应答。
@@ -73,6 +73,7 @@ impl ImapClient {
             if let Some(parsed) = parse_list_line(line) {
                 folders.push(FolderInfo {
                     full_path: parsed.full_path,
+                    server_path: parsed.server_path,
                     delimiter: parsed.delimiter,
                     attributes: parsed.attributes,
                 });
@@ -113,6 +114,26 @@ impl ImapClient {
             None => return false,
         };
         self.select(&folder).await.is_ok()
+    }
+
+    /// 用 UID STORE 把一封邮件的 `\Flagged` 写回服务器。
+    ///
+    /// 只允许操作红旗：标红用 `+FLAGS.SILENT`，取消用 `-FLAGS.SILENT`。
+    pub async fn uid_store_flags(&mut self, uid: u32, flagged: bool) -> Result<(), ConnectionError> {
+        let operation = if flagged { "+FLAGS.SILENT" } else { "-FLAGS.SILENT" };
+        let command = format!("UID STORE {uid} {operation} (\\Flagged)");
+        let mut reply = self.command(&command).await?;
+        // 和搜索/抓取一样：服务器若丢了选中状态，先重开文件夹再补一次。
+        if reply.status != "OK" && needs_reselect(&reply.detail) && self.recover_selection().await {
+            reply = self.command(&command).await?;
+        }
+        if reply.status != "OK" {
+            return Err(ConnectionError::rejected(format!(
+                "回写红旗失败：{}",
+                reply.detail
+            )));
+        }
+        Ok(())
     }
 
     /// 执行一次 UID 搜索，返回升序去重的 UID 列表。
@@ -166,7 +187,7 @@ impl ImapClient {
             return Ok(Vec::new());
         }
         let set = format_uid_set(uids);
-        let command = format!("UID FETCH {set} (UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE)");
+        let command = format!("UID FETCH {set} (UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODYSTRUCTURE)");
         let mut reply = self.command(&command).await?;
         // 和搜索同样的防御：服务器若丢失选中状态，就重开文件夹再抓一次。
         if reply.status != "OK" && needs_reselect(&reply.detail) && self.recover_selection().await {
@@ -188,6 +209,10 @@ impl ImapClient {
                         internal_date: parsed.internal_date.unwrap_or_default(),
                         size: parsed.size.unwrap_or_default(),
                         envelope: parsed.envelope.as_deref().map(build_envelope).unwrap_or_default(),
+                        has_attachments: parsed
+                            .body_structure
+                            .as_ref()
+                            .is_some_and(body_structure_has_attachments),
                     });
                 }
             }

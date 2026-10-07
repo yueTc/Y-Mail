@@ -6,6 +6,7 @@
 //! - 临时失败会自动重试，最多三次尝试；用尽后标失败并保留草稿，按钮可手动重试；
 //! - 联系人补全、签名、附件都只在本窗格里操作，不碰凭据。
 
+import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -23,6 +24,24 @@ import {
   type Signature,
 } from "./api";
 import AiAuthorizationDialog from "./AiAuthorizationDialog";
+import {
+  mergeAttachments,
+  pathsToAttachments,
+  pointInsideRect,
+  toCssPoint,
+} from "./composeAttachments";
+import {
+  COMPOSE_DRAFT_STORAGE_KEY,
+  deserializeComposeDraft,
+  hasUnsavedChanges,
+  serializeComposeDraft,
+  type ComposeDraftAttachment,
+  type ComposeDraftSnapshot,
+} from "./composeDraft";
+import { htmlForEditor, htmlForSending, type ResolvedInlineImage } from "./composeRichText";
+import { subscribeFileDrop } from "./fileDrop";
+import RichTextEditor from "./RichTextEditor";
+
 
 /** 一次发送最多调用几轮发送命令：1 次首发 + 2 次重试。 */
 export const MAX_SEND_ROUNDS = 3;
@@ -41,6 +60,8 @@ export interface ComposeRequest {
   kind: OutboxKind;
   /** 回复 / 转发时的原邮件编号；新建时省略。 */
   sourceMessageId?: number;
+  /** 新建时要预填进「收件人」的人；从通讯录点「写邮件」进来时用。 */
+  to?: ComposeParticipant[];
 }
 
 /** 把一段纯文本转成安全的 HTML 正文（换行转 br，特殊字符转义）。 */
@@ -53,13 +74,6 @@ export function textToHtml(text: string): string {
   return escaped.replace(/\r?\n/g, "<br>");
 }
 
-/** 从路径里取文件名；取不到就用原串。 */
-export function basename(path: string): string {
-  const trimmed = path.trim().replace(/[\\/]+$/, "");
-  if (trimmed === "") return "";
-  const parts = trimmed.split(/[\\/]/);
-  return parts[parts.length - 1] || trimmed;
-}
 
 /**
  * 解析收件人输入框：支持 `名字 <a@b>` 与裸地址 `a@b`，用逗号 / 分号 / 换行分隔。
@@ -87,6 +101,25 @@ export function formatRecipients(people: ComposeParticipant[]): string {
     .join(", ");
 }
 
+/**
+ * 把一批联系人并进收件人输入框；已经在里面的地址不重复加。
+ * 通讯录点「写邮件」时用它预填，不覆盖用户已经敲进去的人。
+ */
+export function mergeRecipients(
+  text: string,
+  people: readonly ComposeParticipant[],
+): string {
+  const merged = parseRecipients(text);
+  const seen = new Set(merged.map((person) => person.address.toLowerCase()));
+  for (const person of people) {
+    const address = person.address.trim();
+    if (address === "" || seen.has(address.toLowerCase())) continue;
+    seen.add(address.toLowerCase());
+    merged.push({ name: person.name.trim(), address });
+  }
+  return formatRecipients(merged);
+}
+
 /** 取输入框里最后一个待补全的词（按逗号 / 分号分隔）。 */
 export function lastRecipientToken(text: string): string {
   const pieces = text.split(/[,;]/);
@@ -100,6 +133,32 @@ export function applyContact(text: string, contact: Contact): string {
   const label =
     contact.name.trim() === "" ? contact.email : `${contact.name} <${contact.email}>`;
   return `${head}${label}`;
+}
+
+/**
+ * 把草稿里的内嵌图片重新读成 data URL，恢复编辑器里的显示。
+ * 图片文件不在了就跳过：让它显示成裂图，不拦着用户继续写信。
+ */
+async function resolveInlineImages(
+  attachments: readonly ComposeDraftAttachment[],
+): Promise<ResolvedInlineImage[]> {
+  const resolved: ResolvedInlineImage[] = [];
+  for (const item of attachments) {
+    const contentId = item.contentId?.trim();
+    if (!contentId || item.path.trim() === "") continue;
+    try {
+      const info = await api.readInlineImage(item.path);
+      resolved.push({
+        contentId,
+        path: item.path,
+        filename: item.filename || info.filename,
+        dataUrl: info.dataUrl,
+      });
+    } catch {
+      // 读不出来就先不管，正文里那张图会显示成裂图。
+    }
+  }
+  return resolved;
 }
 
 interface ComposePanelProps {
@@ -122,9 +181,10 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
   const [ccText, setCcText] = useState("");
   const [bccText, setBccText] = useState("");
   const [subject, setSubject] = useState("");
+  const [bodyHtml, setBodyHtml] = useState("");
   const [bodyText, setBodyText] = useState("");
   const [attachments, setAttachments] = useState<ComposeAttachment[]>([]);
-  const [attachmentPath, setAttachmentPath] = useState("");
+  const [dragActive, setDragActive] = useState(false);
   const [signature, setSignature] = useState<Signature>();
   const [signatureOn, setSignatureOn] = useState(false);
   const [signatureDraft, setSignatureDraft] = useState("");
@@ -142,7 +202,14 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
   const [aiDowngraded, setAiDowngraded] = useState(false);
   const [aiAuth, setAiAuth] = useState<AiAuthorization>();
 
+  const [restoredFromBackup, setRestoredFromBackup] = useState(false);
+  const [baselineReady, setBaselineReady] = useState(false);
+  const [closePromptOpen, setClosePromptOpen] = useState(false);
+
   const sendGuard = useRef(false);
+  const baselineRef = useRef<ComposeDraftSnapshot | undefined>(undefined);
+  const attachmentsRef = useRef<ComposeAttachment[]>([]);
+  const paneRef = useRef<HTMLElement | null>(null);
 
   const title = request.kind === "reply" ? "回复" : request.kind === "forward" ? "转发" : "写邮件";
 
@@ -160,10 +227,48 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
     [accountId],
   );
 
-  /** 初始化：新建给空模板，回复 / 转发由外壳组装预填内容。 */
+  /** 生成当前编辑内容的纯值快照，用来判断有没有未保存改动。 */
+  const captureSnapshot = useCallback(
+    (): ComposeDraftSnapshot => {
+      // 本地备份里不存 base64：正文里的图片先换成 cid 引用，
+      // 图片本身跟着附件清单一起存（只存路径），恢复时再读回来。
+      const { html, images } = htmlForSending(bodyHtml);
+      return {
+        accountId,
+        toText,
+        ccText,
+        bccText,
+        subject,
+        bodyHtml: html,
+        bodyText,
+        attachments: [
+          ...attachmentsRef.current.map((item) => ({ path: item.path, filename: item.filename })),
+          ...images.map((item) => ({
+            path: item.path,
+            filename: item.filename,
+            contentId: item.contentId,
+          })),
+        ],
+        signatureOn,
+      };
+    },
+    [accountId, toText, ccText, bccText, subject, bodyHtml, bodyText, signatureOn, attachments],
+  );
+
+  /** 关闭前清掉本地备份，避免下次打开又冒出来。 */
+  const clearBackup = useCallback(() => {
+    try {
+      window.localStorage.removeItem(COMPOSE_DRAFT_STORAGE_KEY);
+    } catch {
+      // 本地存储不可用时忽略，不能因此阻断关闭。
+    }
+  }, []);
+
+  /** 初始化：新建时优先恢复本地备份，回复 / 转发由外壳组装预填内容。 */
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setBaselineReady(false);
     const boot = async () => {
       try {
         let seed: ComposeDraft | undefined;
@@ -172,16 +277,61 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
         }
         if (cancelled) return;
         const targetAccount = seed?.accountId ?? accounts[0]?.accountId;
-        if (seed) {
+        let restored = false;
+        if (!seed && request.kind === "new") {
+          let raw: string | null = null;
+          try {
+            raw = window.localStorage.getItem(COMPOSE_DRAFT_STORAGE_KEY);
+          } catch {
+            raw = null;
+          }
+          const backup = deserializeComposeDraft(raw);
+          if (backup && backup.kind === "new") {
+            const restoredInline = await resolveInlineImages(backup.attachments);
+            setToText(backup.toText);
+            setCcText(backup.ccText);
+            setBccText(backup.bccText);
+            setSubject(backup.subject);
+            setBodyText(backup.bodyText);
+            setBodyHtml(
+              htmlForEditor(backup.bodyHtml || textToHtml(backup.bodyText), restoredInline),
+            );
+            setAttachments(
+              backup.attachments
+                .filter((item) => !item.contentId)
+                .map((item) => ({ path: item.path, filename: item.filename })),
+            );
+            setSignatureOn(backup.signatureOn);
+            if (backup.accountId !== undefined) {
+              setAccountId(backup.accountId);
+            } else {
+              setAccountId(targetAccount);
+            }
+            setRestoredFromBackup(true);
+            restored = true;
+          }
+        }
+        if (!restored && seed) {
           setToText(formatRecipients(seed.to));
           setCcText(formatRecipients(seed.cc));
           setBccText(formatRecipients(seed.bcc));
           setSubject(seed.subject);
           setBodyText(seed.bodyText || "");
+          setBodyHtml(
+            seed.bodyHtml.trim() === "" ? textToHtml(seed.bodyText || "") : seed.bodyHtml,
+          );
           setAttachments(seed.attachments);
         }
-        setAccountId(targetAccount);
+        if (!restored) {
+          setAccountId(targetAccount);
+        }
+        // 通讯录点进来的预填收件人：拼在恢复出来的内容后面，不重复。
+        const preset = request.to ?? [];
+        if (preset.length > 0) {
+          setToText((current) => mergeRecipients(current, preset));
+        }
         setError("");
+        setBaselineReady(true);
       } catch (caught) {
         if (!cancelled) setError(describeError(caught));
       } finally {
@@ -195,6 +345,86 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
     // 只在打开时初始化一次。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** 附件列表随时同步到 ref，供快照和自动草稿读取最新值。 */
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
+
+  /**
+   * 初始化完成后，只记一次“刚打开时”的内容，作为未保存判断的基准。
+   * 基准一旦定下就不再随编辑变化，否则永远判断成“没改动”。
+   */
+  useEffect(() => {
+    if (!baselineReady || baselineRef.current !== undefined) return;
+    baselineRef.current = captureSnapshot();
+    // captureSnapshot 用 ref 读取附件，这里只在初始化时取一次，故意不放进依赖。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baselineReady]);
+
+  /** 停止编辑约 1 秒后，把草稿写进本地备份；内容没变就不重复写。 */
+  useEffect(() => {
+    if (!baselineReady || !baselineRef.current) return;
+    const current = captureSnapshot();
+    if (!hasUnsavedChanges(current, baselineRef.current)) {
+      try {
+        window.localStorage.removeItem(COMPOSE_DRAFT_STORAGE_KEY);
+      } catch {
+        // 本地存储不可用时忽略。
+      }
+      return;
+    }
+    const handle = setTimeout(() => {
+      try {
+        window.localStorage.setItem(
+          COMPOSE_DRAFT_STORAGE_KEY,
+          serializeComposeDraft(current, request.kind, new Date().toISOString()),
+        );
+        setRestoredFromBackup(true);
+      } catch {
+        // 本地存储写不进去时只放弃这次备份，不影响继续编辑。
+      }
+    }, 1000);
+    return () => clearTimeout(handle);
+  }, [baselineReady, captureSnapshot, request.kind]);
+
+  /** Esc 键：关确认框，或走带保护的关闭流程。 */
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (busy) return;
+      event.preventDefault();
+      if (closePromptOpen) {
+        setClosePromptOpen(false);
+        return;
+      }
+      if (restoredFromBackup || hasUnsavedChanges(captureSnapshot(), baselineRef.current)) {
+        setClosePromptOpen(true);
+        return;
+      }
+      clearBackup();
+      onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [busy, closePromptOpen, restoredFromBackup, captureSnapshot, clearBackup, onClose]);
+
+  /**
+   * 关闭应用 / 刷新前再拦一道，尽量别丢没保存的内容。
+   * 这里只能弹浏览器原生的「确定离开吗」，三选一确认框仍由上面的关闭流程负责。
+   */
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (busy) return;
+      const dirty =
+        restoredFromBackup || hasUnsavedChanges(captureSnapshot(), baselineRef.current);
+      if (!dirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [busy, restoredFromBackup, captureSnapshot]);
 
   /** 账号变化时读取签名与发件箱。 */
   useEffect(() => {
@@ -228,7 +458,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
     let cancelled = false;
     const handle = setTimeout(() => {
       api
-        .searchContacts(accountId, token, 6)
+        .searchContacts(token, 6)
         .then((list) => {
           if (!cancelled) setSuggestions(list);
         })
@@ -245,10 +475,10 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
   const draftPayload = useMemo<OutboxDraft | undefined>(() => {
     if (!accountId) return undefined;
     const signatureHtml = signatureOn && signature?.html.trim() ? signature.html : "";
-    const composed =
-      signatureHtml.trim() === ""
-        ? textToHtml(bodyText)
-        : `${textToHtml(bodyText)}<br><br>${signatureHtml}`;
+    // 正文里的图片换成 cid: 引用，图片本身进附件清单（带编号），
+    // 这样邮件不会把整张 base64 塞进正文，也不会撑爆单封上限。
+    const { html, images } = htmlForSending(bodyHtml);
+    const composed = signatureHtml.trim() === "" ? html : `${html}<br><br>${signatureHtml}`;
     return {
       ...(outboxId === undefined ? {} : { id: outboxId }),
       accountId,
@@ -261,7 +491,14 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
       bodyText,
       inReplyTo: null,
       references: [],
-      attachments,
+      attachments: [
+        ...attachments,
+        ...images.map((item) => ({
+          path: item.path,
+          filename: item.filename,
+          contentId: item.contentId,
+        })),
+      ],
     };
   }, [
     accountId,
@@ -271,6 +508,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
     ccText,
     bccText,
     subject,
+    bodyHtml,
     bodyText,
     attachments,
     signature,
@@ -318,6 +556,13 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
       }
       await refreshOutbox();
       if (sent) {
+        // 发送成功就清掉本地兜底草稿，避免下次打开又恢复出来。
+        try {
+          window.localStorage.removeItem(COMPOSE_DRAFT_STORAGE_KEY);
+        } catch {
+          // 本地存储不可用时忽略。
+        }
+        setRestoredFromBackup(false);
         setStatusText("已发送");
         onSent?.();
         return;
@@ -372,6 +617,12 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
     [runQueue],
   );
 
+  /** AI 返回的都是纯文本：正文同时写回 HTML 与纯文本两份。 */
+  const applyAiText = useCallback((text: string) => {
+    setBodyText(text);
+    setBodyHtml(textToHtml(text));
+  }, []);
+
   /** 打开一个 AI 动作：先只做预览，不发送正文。 */
   const previewAi = useCallback(
     async (action: "polish" | "draft") => {
@@ -393,11 +644,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
             action === "polish"
               ? await api.polishText(source, "")
               : await api.draftText(source, "");
-          if (action === "polish") {
-            setBodyText(result.text);
-          } else {
-            setBodyText(result.text);
-          }
+          applyAiText(result.text);
           setAiDowngraded(result.thinkingDowngraded);
           setAiAction(undefined);
           return;
@@ -410,7 +657,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
         setAiBusy(false);
       }
     },
-    [aiBusy, aiInstruction, bodyText],
+    [aiBusy, aiInstruction, bodyText, applyAiText],
   );
 
   /** 用户确认后才真正调用模型；结果只写回纯文本正文框。 */
@@ -424,7 +671,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
         aiAction === "polish"
           ? await api.polishText(source, aiAuth.authorizationToken)
           : await api.draftText(source, aiAuth.authorizationToken);
-      setBodyText(result.text);
+      applyAiText(result.text);
       setAiDowngraded(result.thinkingDowngraded);
       setAiAuth(undefined);
       setAiAction(undefined);
@@ -433,7 +680,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
     } finally {
       setAiBusy(false);
     }
-  }, [aiAction, aiAuth, aiInstruction, bodyText]);
+  }, [aiAction, aiAuth, aiInstruction, bodyText, applyAiText]);
 
   /** 保存签名。 */
   const handleSaveSignature = useCallback(async () => {
@@ -447,14 +694,66 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
     }
   }, [accountId, signatureDraft, signatureOn]);
 
-  /** 添加附件：按路径取文件名。 */
-  const addAttachment = useCallback(() => {
-    const path = attachmentPath.trim();
-    if (path === "") return;
-    const filename = basename(path);
-    setAttachments((old) => [...old, { path, filename }]);
-    setAttachmentPath("");
-  }, [attachmentPath]);
+  /** 把一批本地路径加进附件列表；重复的路径跳过，不重复挂同一个文件。 */
+  const addAttachmentPaths = useCallback((paths: readonly string[]) => {
+    const incoming = pathsToAttachments(paths);
+    if (incoming.length === 0) return;
+    const current = attachmentsRef.current;
+    const merged = mergeAttachments(current, incoming);
+    const added = merged.length - current.length;
+    const skipped = incoming.length - added;
+    if (added > 0) {
+      attachmentsRef.current = merged;
+      setAttachments(merged);
+    }
+    setStatusText(
+      skipped === 0
+        ? `已添加 ${added} 个附件`
+        : added === 0
+          ? `这 ${skipped} 个附件已经在列表里`
+          : `已添加 ${added} 个附件，跳过 ${skipped} 个重复项`,
+    );
+  }, []);
+
+  /** 走系统资源管理器选文件；选完把绝对路径加进附件列表。 */
+  const chooseAttachments = useCallback(async () => {
+    try {
+      const chosen = await open({ multiple: true, title: "选择附件" });
+      if (!chosen) return;
+      addAttachmentPaths(Array.isArray(chosen) ? chosen : [chosen]);
+    } catch (caught) {
+      setError(describeError(caught));
+    }
+  }, [addAttachmentPaths]);
+
+
+  /**
+   * 拖拽文件进写信窗格：只认落点在窗格里的那些。
+   * 坐标由外壳按物理像素给，这里换算成网页像素再和窗格矩形比。
+   */
+  useEffect(() => {
+    return subscribeFileDrop((event) => {
+      const pane = paneRef.current;
+      const point =
+        event.position && pane
+          ? toCssPoint(event.position, window.devicePixelRatio)
+          : undefined;
+      const inside =
+        point !== undefined && pane !== null
+          ? pointInsideRect(point, pane.getBoundingClientRect())
+          : false;
+      if (event.type === "drop") {
+        setDragActive(false);
+        if (inside) addAttachmentPaths(event.paths);
+        return;
+      }
+      if (event.type === "leave") {
+        setDragActive(false);
+        return;
+      }
+      setDragActive(inside);
+    });
+  }, [addAttachmentPaths]);
 
   const chooseSuggestion = useCallback(
     (contact: Contact) => {
@@ -464,14 +763,83 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
     [],
   );
 
+  /** 关闭按钮：有未保存改动就先弹三选一，否则直接关。 */
+  const handleCloseRequest = useCallback(() => {
+    if (busy) return;
+    if (restoredFromBackup || hasUnsavedChanges(captureSnapshot(), baselineRef.current)) {
+      setClosePromptOpen(true);
+      return;
+    }
+    clearBackup();
+    onClose();
+  }, [busy, restoredFromBackup, captureSnapshot, clearBackup, onClose]);
+
+  /** 选择“保存草稿”：写进发件队列后再关，失败就留在窗里报错。 */
+  const confirmSaveAndClose = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await saveDraft();
+      clearBackup();
+      setClosePromptOpen(false);
+      onClose();
+    } catch (caught) {
+      setError(describeError(caught));
+      setClosePromptOpen(false);
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, saveDraft, clearBackup, onClose]);
+
+  /** 选择“放弃修改”：清本地备份后直接关。 */
+  const confirmDiscardAndClose = useCallback(() => {
+    clearBackup();
+    setClosePromptOpen(false);
+    onClose();
+  }, [clearBackup, onClose]);
+
   return (
-    <section className="compose-pane" aria-label="写信窗格">
+    <section className="compose-pane" aria-label="写信窗格" ref={paneRef}>
       <header className="compose-head">
-        <h3>{title}</h3>
-        <button type="button" onClick={onClose} disabled={busy}>
+        <h3>
+          {title}
+          {restoredFromBackup && <span className="compose-draft-badge">草稿</span>}
+        </h3>
+        <button type="button" onClick={handleCloseRequest} disabled={busy}>
           关闭
         </button>
       </header>
+
+      {closePromptOpen && (
+        <div className="ai-modal-backdrop" role="presentation">
+          <section
+            className="ai-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="关闭写信窗格"
+          >
+            <h3>还有内容没保存</h3>
+            <p>直接关闭会丢掉没保存的内容，要先存成草稿吗？</p>
+            <div className="form-actions">
+              <button
+                type="button"
+                className="primary"
+                onClick={() => void confirmSaveAndClose()}
+                disabled={busy}
+              >
+                保存草稿
+              </button>
+              <button type="button" onClick={confirmDiscardAndClose} disabled={busy}>
+                放弃修改
+              </button>
+              <button type="button" onClick={() => setClosePromptOpen(false)} disabled={busy}>
+                取消关闭
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {aiAuth && aiAction && (
         <AiAuthorizationDialog
@@ -574,15 +942,23 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
           {aiError && <p className="error">AI 操作失败：{aiError}</p>}
         </div>
 
-        <label className="compose-field compose-body">
+        <div className="compose-field compose-body">
           <span>正文</span>
-          <textarea
-            aria-label="正文"
-            rows={10}
-            value={bodyText}
-            onChange={(event) => setBodyText(event.target.value)}
+          <RichTextEditor
+            value={bodyHtml}
+            onChange={(html, text) => {
+              setBodyHtml(html);
+              setBodyText(text);
+            }}
+            onAttach={() => void chooseAttachments()}
+            attachments={attachments}
+            onRemoveAttachment={(index) =>
+              setAttachments((old) => old.filter((_, i) => i !== index))
+            }
+            dropActive={dragActive}
+            disabled={busy}
           />
-        </label>
+        </div>
 
         <div className="compose-signature">
           <label className="checkbox">
@@ -605,36 +981,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
           </button>
         </div>
 
-        <div className="compose-attachments">
-          <label className="compose-field">
-            <span>附件路径</span>
-            <input
-              aria-label="附件路径"
-              value={attachmentPath}
-              placeholder="粘贴本地文件完整路径"
-              onChange={(event) => setAttachmentPath(event.target.value)}
-            />
-          </label>
-          <button type="button" onClick={addAttachment}>
-            添加附件
-          </button>
-          {attachments.length > 0 && (
-            <ul className="compose-attachment-list">
-              {attachments.map((item, index) => (
-                <li key={`${item.path}-${index}`}>
-                  <span>{item.filename || item.path}</span>
-                  <button
-                    type="button"
-                    aria-label={`移除附件 ${item.filename}`}
-                    onClick={() => setAttachments((old) => old.filter((_, i) => i !== index))}
-                  >
-                    移除
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+
       </div>
 
       <footer className="compose-actions">

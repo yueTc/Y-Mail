@@ -18,14 +18,16 @@ use mail_domain::auth::AuthMaterial;
 use mail_domain::dates::unix_now;
 use mail_domain::{Account, AccountId, FolderKind};
 use mail_imap::{ClientConfig, ImapClient};
-use mail_mime::decode_encoded_words;
+use mail_mime::{
+    decode_encoded_words, is_renderable_inline_image_mime, normalize_content_id, sniff_image_mime,
+    validate_inline_image,
+};
 use mail_smtp::{
-    build_message, guess_mime_type, Mailbox, OutgoingAttachment, OutgoingMessage, SendErrorKind, SendReport,
-    SendRequest,
+    build_message, guess_mime_type, Mailbox, OutgoingAttachment, OutgoingInlineImage, OutgoingMessage,
+    SendErrorKind, SendReport, SendRequest,
 };
 use mail_store::{
-    NewOutbox, OutboxKind, OutboxState, SearchPage, SearchQuery, Store, StoredContact, StoredOutbox,
-    StoredSignature,
+    NewOutbox, OutboxKind, OutboxState, SearchPage, SearchQuery, Store, StoredOutbox, StoredSignature,
 };
 
 use crate::engine::{EngineError, MailEngine};
@@ -33,9 +35,6 @@ use crate::proxies::resolve_route_with;
 
 /// 一封信最多挂多少附件，防止一次塞爆内存。
 const MAX_ATTACHMENTS: usize = 50;
-
-/// 联系人自动补全一次最多返回多少条。
-const MAX_CONTACT_HITS: usize = 20;
 
 /// 发件箱列表一次最多读多少条。
 const MAX_OUTBOX_PAGE: usize = 200;
@@ -100,13 +99,16 @@ pub struct ComposeParticipant {
     pub address: String,
 }
 
-/// 附件引用：本地路径 + 展示文件名。
+/// 附件引用：本地路径 + 展示文件名；带 `content_id` 的是正文内嵌图片。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct ComposeAttachment {
     /// 本地文件路径。
     pub path: String,
     /// 展示文件名。
     pub filename: String,
+    /// 内嵌图片编号；普通附件为空。
+    #[serde(default, alias = "contentId")]
+    pub content_id: Option<String>,
 }
 
 impl MailEngine {
@@ -206,17 +208,6 @@ impl MailEngine {
         Ok(store.delete_outbox(id)?)
     }
 
-    /// 收件人自动补全：按名字或邮箱片段搜联系人。
-    pub fn search_contacts(
-        &self,
-        account_id: i64,
-        keyword: &str,
-        limit: usize,
-    ) -> Result<Vec<StoredContact>, EngineError> {
-        let store = lock_store(&self.store);
-        Ok(store.search_contacts(Some(account_id), keyword, limit.min(MAX_CONTACT_HITS))?)
-    }
-
     /// 读一个账号的签名。
     pub fn get_signature(&self, account_id: i64) -> Result<StoredSignature, EngineError> {
         let store = lock_store(&self.store);
@@ -311,7 +302,7 @@ impl MailEngine {
         if recipients.is_empty() {
             return Err(("收件人为空，无法发送".to_string(), false));
         }
-        let attachments = load_attachments(&outbox.attachments_json)?;
+        let (attachments, inline_images) = load_outgoing(&outbox.attachments_json)?;
         let references =
             parse_references(&outbox.references_json).map_err(|error| (error.to_string(), false))?;
 
@@ -327,6 +318,7 @@ impl MailEngine {
             in_reply_to: outbox.in_reply_to.clone(),
             references,
             attachments,
+            inline_images,
             date_unix: unix_now(),
         })
         .map_err(|error| (format!("邮件组装失败：{error}"), false))?;
@@ -452,7 +444,7 @@ impl MailEngine {
             parse_participants(&outbox.cc_json).map_err(|(message, _)| EngineError::BadRequest(message))?;
         let bcc =
             parse_participants(&outbox.bcc_json).map_err(|(message, _)| EngineError::BadRequest(message))?;
-        let attachments = load_attachments(&outbox.attachments_json)
+        let (attachments, inline_images) = load_outgoing(&outbox.attachments_json)
             .map_err(|(message, _)| EngineError::BadRequest(message))?;
         let references = parse_references(&outbox.references_json)?;
         let built = build_message(&OutgoingMessage {
@@ -467,6 +459,7 @@ impl MailEngine {
             in_reply_to: outbox.in_reply_to.clone(),
             references,
             attachments,
+            inline_images,
             date_unix: unix_now(),
         })
         .map_err(|error| EngineError::BadRequest(format!("邮件组装失败：{error}")))?;
@@ -474,7 +467,7 @@ impl MailEngine {
     }
 }
 /// 取存储锁；锁中毒时取回内部值继续用。
-fn lock_store(store: &Mutex<Store>) -> MutexGuard<'_, Store> {
+pub(crate) fn lock_store(store: &Mutex<Store>) -> MutexGuard<'_, Store> {
     store.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
@@ -558,6 +551,7 @@ fn forward_bodies(
             } else {
                 item.filename.clone()
             },
+            content_id: None,
         })
         .collect();
     (body, attachments_json(&list))
@@ -598,14 +592,18 @@ fn parse_participants(raw: &str) -> Result<Vec<ComposeParticipant>, (String, boo
     Ok(out)
 }
 
-/// 解析附件清单 JSON，逐个读成字节；文件读不到时给出可读错误。
-fn load_attachments(raw: &str) -> Result<Vec<OutgoingAttachment>, (String, bool)> {
+/// 解析附件清单 JSON，逐个读成字节；返回（普通附件, 正文内嵌图片）。
+///
+/// 带编号的条目算内嵌图片：会按图片白名单再校验一次类型与大小（只认常见光栅图，
+/// 单张不超过 2MB），校验不过直接给可读错误，不把可疑内容塞进邮件。
+fn load_outgoing(raw: &str) -> Result<(Vec<OutgoingAttachment>, Vec<OutgoingInlineImage>), (String, bool)> {
     let items: Vec<ComposeAttachment> =
         serde_json::from_str(raw).map_err(|error| (format!("附件清单格式不对：{error}"), false))?;
     if items.len() > MAX_ATTACHMENTS {
         return Err((format!("一次最多挂 {MAX_ATTACHMENTS} 个附件，请分批发送"), false));
     }
-    let mut out = Vec::with_capacity(items.len());
+    let mut attachments = Vec::new();
+    let mut inline_images = Vec::new();
     for item in items {
         if item.path.trim().is_empty() {
             return Err(("附件缺少本地路径，请重新选择文件".to_string(), false));
@@ -622,13 +620,40 @@ fn load_attachments(raw: &str) -> Result<Vec<OutgoingAttachment>, (String, bool)
             item.filename.clone()
         };
         let mime_type = guess_mime_type(&filename);
-        out.push(OutgoingAttachment {
+        let raw_content_id = item
+            .content_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let Some(raw_content_id) = raw_content_id else {
+            attachments.push(OutgoingAttachment {
+                filename,
+                mime_type,
+                bytes,
+            });
+            continue;
+        };
+
+        let content_id = normalize_content_id(raw_content_id)
+            .ok_or_else(|| (format!("内嵌图片「{filename}」的编号不合法，请重新插入"), false))?;
+        // 扩展名猜不出图片类型时，回退到按文件头嗅探，避免把真图片当二进制流拒掉。
+        let declared = if is_renderable_inline_image_mime(&mime_type) {
+            mime_type
+        } else {
+            sniff_image_mime(&bytes)
+                .unwrap_or("application/octet-stream")
+                .to_string()
+        };
+        let sniffed = validate_inline_image(&declared, &bytes)
+            .map_err(|error| (format!("内嵌图片「{filename}」不能用：{error}"), false))?;
+        inline_images.push(OutgoingInlineImage {
             filename,
-            mime_type,
+            mime_type: sniffed.to_string(),
+            content_id,
             bytes,
         });
     }
-    Ok(out)
+    Ok((attachments, inline_images))
 }
 
 /// 收件人列表转 JSON。
@@ -640,11 +665,17 @@ fn to_json(people: &[ComposeParticipant]) -> String {
     serde_json::Value::Array(value).to_string()
 }
 
-/// 附件清单转 JSON。
+/// 附件清单转 JSON；内嵌图片多带一个编号。
 fn attachments_json(items: &[ComposeAttachment]) -> String {
     let value: Vec<serde_json::Value> = items
         .iter()
-        .map(|item| serde_json::json!({ "path": item.path, "filename": item.filename }))
+        .map(|item| {
+            let mut entry = serde_json::json!({ "path": item.path, "filename": item.filename });
+            if let Some(content_id) = item.content_id.as_deref() {
+                entry["content_id"] = serde_json::Value::String(content_id.to_string());
+            }
+            entry
+        })
         .collect();
     serde_json::Value::Array(value).to_string()
 }
@@ -680,7 +711,7 @@ mod tests {
     use mail_store::{AttachmentState, ComposeSource, StoredAttachment};
 
     use super::{
-        forward_bodies, forward_seed, load_attachments, parse_participants, parse_references, reply_seed,
+        forward_bodies, forward_seed, load_outgoing, parse_participants, parse_references, reply_seed,
         to_json, ComposeAttachment, ComposeParticipant, OutboxKind,
     };
 
@@ -752,6 +783,8 @@ mod tests {
                 account_id: Some(account_id),
                 folder_id: Some(folder_id),
                 unread_only: false,
+                flagged_only: false,
+                folder_kind: None,
                 offset: 0,
                 limit: 10,
             })
@@ -866,12 +899,70 @@ mod tests {
     #[test]
     fn 附件读不到给出可读错误且不重试() {
         let json = "[{\"path\":\"D:\\\\不存在的目录\\\\没有.pdf\",\"filename\":\"没有.pdf\"}]";
-        let (message, retryable) = load_attachments(json).unwrap_err();
+        let (message, retryable) = load_outgoing(json).unwrap_err();
         assert!(!retryable, "文件读不到属于输入问题，不该自动重试");
         assert!(
             message.contains("没有.pdf"),
             "错误要指出是哪个附件，实际：{message}"
         );
+    }
+
+    /// 造一张只过文件头的假 PNG；校验只看头，不解码整张图。
+    fn png_bytes() -> Vec<u8> {
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        bytes.extend_from_slice(b"fake-png-payload");
+        bytes
+    }
+
+    #[test]
+    fn 带编号的附件走内嵌图片且普通附件分开() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let image_path = dir.path().join("粘贴.png");
+        std::fs::write(&image_path, png_bytes()).expect("写图");
+        let file_path = dir.path().join("报告.pdf");
+        std::fs::write(&file_path, b"pdf").expect("写附件");
+        let json = serde_json::json!([
+            { "path": image_path.to_string_lossy(), "filename": "粘贴.png", "content_id": "<Shot-1@Ymail>" },
+            { "path": file_path.to_string_lossy(), "filename": "报告.pdf" },
+        ])
+        .to_string();
+
+        let (attachments, inline_images) = load_outgoing(&json).expect("读取");
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].filename, "报告.pdf");
+        assert_eq!(inline_images.len(), 1);
+        assert_eq!(inline_images[0].content_id, "shot-1@ymail", "编号统一小写");
+        assert_eq!(inline_images[0].mime_type, "image/png");
+    }
+
+    #[test]
+    fn 内嵌图片不是图片时给出可读错误() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let path = dir.path().join("伪装.png");
+        std::fs::write(&path, b"this is not an image").expect("写文件");
+        let json = serde_json::json!([
+            { "path": path.to_string_lossy(), "filename": "伪装.png", "content_id": "shot-2@ymail" },
+        ])
+        .to_string();
+
+        let (message, retryable) = load_outgoing(&json).unwrap_err();
+        assert!(!retryable);
+        assert!(message.contains("内嵌图片"), "实际：{message}");
+    }
+
+    #[test]
+    fn 内嵌图片编号不合法会被拒() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let path = dir.path().join("图.png");
+        std::fs::write(&path, png_bytes()).expect("写图");
+        // 编号里带路径分隔符号是明确不允许的（空白会被规范化掉，不算非法）。
+        let json = serde_json::json!([
+            { "path": path.to_string_lossy(), "filename": "图.png", "content_id": "shot/1" },
+        ])
+        .to_string();
+
+        let (message, _) = load_outgoing(&json).unwrap_err();
+        assert!(message.contains("编号不合法"), "实际：{message}");
     }
 
     #[test]

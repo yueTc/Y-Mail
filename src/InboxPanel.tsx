@@ -5,13 +5,21 @@
 //! 正文与搜索片段一律当普通文本处理，绝不注入 HTML。
 
 import { listen } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import {
   api,
   describeError,
   type AccountInboxSummary,
+  type ComposeParticipant,
   type InboxFolder,
   type InboxMessage,
   type InboxQuery,
@@ -19,9 +27,19 @@ import {
   type InboxThread,
   type SearchHit,
   type SnippetSegment,
+  type SyncStatus,
 } from "./api";
 import ComposePanel, { type ComposeRequest } from "./ComposePanel";
 import MessageReader from "./MessageReader";
+import FlagButton from "./FlagButton";
+import AddAccountDialog from "./AddAccountDialog";
+import PaneResizer from "./PaneResizer";
+import {
+  COMPOSE_MIN_WIDTH,
+  READER_MIN_WIDTH,
+  RESIZER_WIDTH,
+  usePaneWidths,
+} from "./usePaneWidths";
 
 /** 每页条数；外壳上限是 500。 */
 const PAGE_SIZE = 200;
@@ -37,6 +55,20 @@ export type InboxRow =
   | { kind: "thread-message"; key: string; message: InboxMessage }
   | { kind: "search"; key: string; hit: SearchHit };
 
+/**
+ * 列表行的像素高度。
+ *
+ * 行高必须和行里真正渲染的文字对齐：虚拟列表给行盒的高度小于内容时，
+ * 多出来的那行会溢到下一行去（会话聚合下「来自 xxx」就是这么溢出来的）。
+ * 实测：两行（发件人 + 主题）约 72.7 像素；会话子邮件多一行「来自 xxx」约
+ * 91.9 像素；搜索结果多一行摘要约 95.1 像素。取整后往上留不到 1 像素的余量。
+ */
+export function inboxRowHeight(kind: InboxRow["kind"]): number {
+  if (kind === "thread-message") return 92;
+  if (kind === "search") return 96;
+  return 73;
+}
+
 /** 文件夹归类的中文名。 */
 const FOLDER_KIND_LABEL: Record<string, string> = {
   inbox: "收件箱",
@@ -47,10 +79,148 @@ const FOLDER_KIND_LABEL: Record<string, string> = {
   custom: "自定义",
 };
 
-/** 文件夹显示名：已知归类用中文名，自定义文件夹用服务器路径（更有辨识度）。 */
+/**
+ * 文件夹显示名：服务器给的展示名优先，只有 INBOX 这种纯英文占位名才回退到中文归类名。
+ * 这样「广告邮件」不会被分类名「垃圾邮件」顶掉，左侧也不会出现两个同名文件夹。
+ */
 export function folderLabel(folder: InboxFolder): string {
-  if (folder.kind === "custom") return folder.fullPath;
-  return FOLDER_KIND_LABEL[folder.kind] ?? folder.fullPath;
+  const path = folder.fullPath.trim();
+  if (path && path.toUpperCase() !== "INBOX") return path;
+  return FOLDER_KIND_LABEL[folder.kind] ?? path;
+}
+
+/**
+ * 左侧一条文件夹项：真文件夹，或者「红旗邮件」这条虚拟入口。
+ *
+ * 「红旗邮件」不落在服务器上，是按账号把所有标红的邮件收在一起看，
+ * 所以它只在界面上存在，不占 folder 表。
+ */
+export type SidebarEntry =
+  | { kind: "folder"; folder: InboxFolder }
+  | { kind: "flagged"; accountId: number };
+
+/**
+ * 把一个账号的文件夹排成左侧顺序：文件夹照原样，
+ * 只在「收件箱」后面插一条「红旗邮件」；账号没有收件箱时补在最后。
+ */
+export function accountSidebarEntries(
+  folders: readonly InboxFolder[],
+  accountId: number,
+): SidebarEntry[] {
+  const entries: SidebarEntry[] = [];
+  let inserted = false;
+  for (const folder of folders) {
+    if (folder.accountId !== accountId) continue;
+    entries.push({ kind: "folder", folder });
+    if (folder.kind === "inbox") {
+      entries.push({ kind: "flagged", accountId });
+      inserted = true;
+    }
+  }
+  if (!inserted) entries.push({ kind: "flagged", accountId });
+  return entries;
+}
+
+/**
+ * 顶部统一区的入口：收件箱 / 未读 / 红旗 / 草稿 / 已发送。
+ *
+ * 参考图里的「所有最近查看」按用户要求不做，所以这里没有那一项。
+ */
+export type UnifiedView = "inbox" | "unread" | "flagged" | "draft" | "sent";
+
+/** 顶部统一区的入口顺序，照着参考图来。 */
+export const UNIFIED_VIEWS: ReadonlyArray<{ id: UnifiedView; label: string }> = [
+  { id: "inbox", label: "统一收件箱" },
+  { id: "unread", label: "所有未读" },
+  { id: "flagged", label: "所有红旗" },
+  { id: "draft", label: "所有草稿" },
+  { id: "sent", label: "所有已发送" },
+];
+
+/** 某一类文件夹（草稿、已发送）在各账号下的邮件合计。 */
+export function folderKindMessageCount(
+  folders: readonly InboxFolder[],
+  kind: string,
+): number {
+  return folders
+    .filter((folder) => folder.kind === kind)
+    .reduce((sum, folder) => sum + folder.messageCount, 0);
+}
+
+/**
+ * 列表空着时该说什么。
+ *
+ * 已经配了账号还说「先去配置账号」很误导，所以这里只在一个账号都没有时才提配置。
+ */
+export function inboxEmptyHint(options: {
+  searchMode: boolean;
+  flaggedView: boolean;
+  hasAccounts: boolean;
+}): string {
+  if (options.searchMode) return "没有找到匹配的邮件。";
+  if (options.flaggedView) return "还没有标红的邮件。在列表里点星星就能标红。";
+  if (!options.hasAccounts) return "这里还没有邮件。先在「账号与代理」里配置账号并同步。";
+  return "这里还没有邮件。";
+}
+
+/** 同步状态里挑“最需要注意”的一个，用于统一收件箱的聚合徽标。 */
+export function worstSyncStatus(list: SyncStatus[]): SyncStatus | undefined {
+  if (list.length === 0) return undefined;
+  const rank = (status: SyncStatus): number => {
+    if (status.needsReauth || status.state === "error") return 0;
+    if (status.state === "syncing" || status.state === "backfilling" || status.state === "connecting") {
+      return 1;
+    }
+    if (status.state === "idle" || status.state === "idle_waiting") return 2;
+    return 3;
+  };
+  let worst = list[0];
+  for (const status of list) {
+    if (rank(status) < rank(worst)) worst = status;
+  }
+  return worst;
+}
+
+/** 同步徽标的人话说明；鼠标悬停或键盘聚焦时可见。 */
+export function syncBadgeTitle(status: SyncStatus): string {
+  const parts = [`账号 ${status.email}`, `状态 ${status.stateLabel}`];
+  if (status.total > 0) parts.push(`进度 ${status.progress}/${status.total}`);
+  else if (status.progress > 0) parts.push(`已处理 ${status.progress} 封`);
+  if (status.message) parts.push(status.message);
+  return parts.join("；");
+}
+
+/** 同步徽标的状态配色类名。 */
+export function syncBadgeClass(status: SyncStatus): string {
+  if (status.needsReauth || status.state === "error") return "sync-badge danger";
+  if (status.state === "syncing" || status.state === "backfilling" || status.state === "connecting") {
+    return "sync-badge syncing";
+  }
+  if (status.state === "stopped" || status.state === "idle_waiting") return "sync-badge paused";
+  return "sync-badge";
+}
+
+/** 徽标上的短文字：状态名带进度（有进度才显示）。 */
+export function syncBadgeText(status: SyncStatus): string {
+  if (status.total > 0) return `${status.stateLabel} ${status.progress}/${status.total}`;
+  return status.stateLabel;
+}
+
+/**
+ * 判断这次同步状态是否该刷新列表：新账号第一次出现（可能已经同步完），
+ * 或账号从连接 / 拉取态进入等待、出错、停止等稳定态。
+ */
+export function syncJustSettled(
+  previous: ReadonlyMap<number, SyncStatus["state"]>,
+  list: SyncStatus[],
+): boolean {
+  const working = (state: SyncStatus["state"]): boolean =>
+    state === "connecting" || state === "syncing" || state === "backfilling";
+  return list.some((status) => {
+    const before = previous.get(status.accountId);
+    if (working(status.state)) return false;
+    return before === undefined || working(before);
+  });
 }
 
 /** 把时间整理成列表里的短文本：今天只给时分，昨天给「昨天」，更早给月日。 */
@@ -109,6 +279,29 @@ export function searchRows(hits: SearchHit[]): InboxRow[] {
   return hits.map((hit) => ({ kind: "search" as const, key: `s-${hit.message.id}`, hit }));
 }
 
+/**
+ * 邮件行的键盘操作：回车 / 空格打开当前行，上下方向键在可见行之间搬焦点。
+ * 虚拟列表只渲染可视行，所以方向键先在当前屏能到的行内移动。
+ */
+function handleRowKeyDown(
+  event: ReactKeyboardEvent<HTMLElement>,
+  onActivate: () => void,
+): void {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    onActivate();
+    return;
+  }
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  const current = event.currentTarget;
+  const scope = current.closest(".inbox-scroll") ?? document;
+  const rows = Array.from(scope.querySelectorAll<HTMLElement>(".inbox-row[tabindex]"));
+  const index = rows.indexOf(current);
+  if (index < 0) return;
+  const next = event.key === "ArrowDown" ? rows[index + 1] : rows[index - 1];
+  next?.focus();
+}
 /** 列表行的发件人文本。 */
 function senderText(message: InboxMessage): string {
   return message.fromName.trim() !== "" ? message.fromName : message.fromAddr;
@@ -135,11 +328,13 @@ function MessageRow({
   child,
   selected,
   onOpen,
+  onToggleFlag,
 }: {
   message: InboxMessage;
   child?: boolean;
   selected?: boolean;
   onOpen?: () => void;
+  onToggleFlag?: (message: InboxMessage) => void;
 }) {
   const className = ["inbox-row", child ? "inbox-row-child" : "", selected ? "inbox-row-selected" : ""]
     .filter(Boolean)
@@ -150,6 +345,10 @@ function MessageRow({
       data-read={message.isRead ? "true" : "false"}
       onClick={onOpen}
       role={onOpen ? "button" : undefined}
+      tabIndex={onOpen === undefined ? undefined : 0}
+      onKeyDown={
+        onOpen === undefined ? undefined : (event) => handleRowKeyDown(event, onOpen)
+      }
     >
       <span className="dot" style={{ background: message.accountColor || "#888" }} />
       <div className="inbox-row-main">
@@ -161,7 +360,9 @@ function MessageRow({
           <span className="inbox-row-subject">{message.subject || "（无主题）"}</span>
           <span className="inbox-row-marks">
             {message.hasAttachments && <span title="有附件">📎</span>}
-            {message.isFlagged && <span title="已星标">★</span>}
+            {onToggleFlag && (
+              <FlagButton flagged={message.isFlagged} onToggle={() => onToggleFlag(message)} />
+            )}
           </span>
         </div>
         {child && (
@@ -179,10 +380,12 @@ function SearchResultRow({
   hit,
   selected,
   onOpen,
+  onToggleFlag,
 }: {
   hit: SearchHit;
   selected?: boolean;
   onOpen: () => void;
+  onToggleFlag?: (message: InboxMessage) => void;
 }) {
   const message = hit.message;
   const className = ["inbox-row", selected ? "inbox-row-selected" : ""].filter(Boolean).join(" ");
@@ -192,6 +395,8 @@ function SearchResultRow({
       data-read={message.isRead ? "true" : "false"}
       onClick={onOpen}
       role="button"
+      tabIndex={0}
+      onKeyDown={(event) => handleRowKeyDown(event, onOpen)}
     >
       <span className="dot" style={{ background: message.accountColor || "#888" }} />
       <div className="inbox-row-main">
@@ -203,6 +408,9 @@ function SearchResultRow({
           <span className="inbox-row-subject">{message.subject || "（无主题）"}</span>
           <span className="inbox-row-marks">
             {message.hasAttachments && <span title="有附件">📎</span>}
+            {onToggleFlag && (
+              <FlagButton flagged={message.isFlagged} onToggle={() => onToggleFlag(message)} />
+            )}
             <span className="inbox-account-chip">{message.accountName || message.accountEmail}</span>
           </span>
         </div>
@@ -221,10 +429,12 @@ function ThreadRow({
   thread,
   expanded,
   onToggle,
+  onToggleFlag,
 }: {
   thread: InboxThread;
   expanded: boolean;
   onToggle: () => void;
+  onToggleFlag?: (message: InboxMessage) => void;
 }) {
   const latest = thread.latest;
   return (
@@ -233,6 +443,8 @@ function ThreadRow({
       role="button"
       aria-expanded={expanded}
       onClick={onToggle}
+      tabIndex={0}
+      onKeyDown={(event) => handleRowKeyDown(event, onToggle)}
     >
       <span className="dot" style={{ background: latest.accountColor || "#888" }} />
       <div className="inbox-row-main">
@@ -252,6 +464,9 @@ function ThreadRow({
               </span>
             )}
             {latest.hasAttachments && <span title="有附件">📎</span>}
+            {onToggleFlag && (
+              <FlagButton flagged={latest.isFlagged} onToggle={() => onToggleFlag(latest)} />
+            )}
           </span>
         </div>
       </div>
@@ -260,14 +475,33 @@ function ThreadRow({
   );
 }
 
+/** 从通讯录等别处发起的一次写信请求：这里只需要预填收件人。 */
+export interface InboxComposeSeed {
+  /** 要填进「收件人」的人。 */
+  to: ComposeParticipant[];
+}
+
+type InboxPanelProps = {
+  /** 外壳递进来的写信请求；非空时打开写信窗格并预填收件人。 */
+  composeSeed?: InboxComposeSeed;
+  /** 请求被消费后的回调，让外壳清空，避免重复打开。 */
+  onComposeSeedConsumed?: () => void;
+};
+
 /** 统一收件箱面板。 */
-export default function InboxPanel() {
+export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: InboxPanelProps) {
   const [summary, setSummary] = useState<InboxSummary>();
   const [folders, setFolders] = useState<InboxFolder[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<number>();
   const [selectedFolder, setSelectedFolder] = useState<InboxFolder>();
-  const [threadMode, setThreadMode] = useState(true);
+  const [threadMode, setThreadMode] = useState(false);
   const [unreadOnly, setUnreadOnly] = useState(false);
+  // 左侧「红旗邮件」虚拟入口是否选中；它按账号看全部标红邮件。
+  const [flaggedView, setFlaggedView] = useState(false);
+  // 顶部统一区选中的是哪一个入口。
+  const [unifiedView, setUnifiedView] = useState<UnifiedView>("inbox");
+  // 左侧展开的账号集合：点一下展开，再点一下收起，多个账号可以同时展开。
+  const [expandedAccounts, setExpandedAccounts] = useState<Set<number>>(new Set());
 
   const [threads, setThreads] = useState<InboxThread[]>([]);
   const [messages, setMessages] = useState<InboxMessage[]>([]);
@@ -278,6 +512,8 @@ export default function InboxPanel() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [children, setChildren] = useState<Map<string, InboxMessage[]>>(new Map());
   const [selectedMessage, setSelectedMessage] = useState<InboxMessage>();
+  // 一次性短提示，例如「未读筛选下已移出列表」。
+  const [statusNote, setStatusNote] = useState("");
 
   // 搜索相关状态：输入值、已提交的查询、命中结果与深拉提示。
   const [searchInput, setSearchInput] = useState("");
@@ -287,20 +523,64 @@ export default function InboxPanel() {
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string>();
   const [searchNote, setSearchNote] = useState("");
+  // 联网补历史必须用户显式点击，单独给一个忙碌标记。
+  const [searchDeepBusy, setSearchDeepBusy] = useState(false);
 
   // 写信窗格的打开请求；为空表示当前在收件箱。
   const [composeRequest, setComposeRequest] = useState<ComposeRequest>();
   // 有没有启用的 AI 站点；只控制按钮是否可用，不触发任何请求。
   const [aiEnabled, setAiEnabled] = useState(false);
+  // 已经消费过的通讯录写信请求，用来挡住重复触发。
+  const consumedComposeSeed = useRef<InboxComposeSeed | undefined>(undefined);
+  // 邮箱栏「添加邮箱」弹窗；保存成功后选中新账号。
+  const [addAccountOpen, setAddAccountOpen] = useState(false);
+  // 各账号同步状态快照；邮件列表工具栏用它显示当前账号状态徽标。
+  const [syncStatuses, setSyncStatuses] = useState<SyncStatus[]>([]);
+  // 上一轮同步状态，用来判断新账号是否刚完成首次拉取。
+  const lastSyncStates = useRef<Map<number, SyncStatus["state"]>>(new Map());
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const searchBoxRef = useRef<HTMLInputElement>(null);
+  // 通讯录点了「写邮件」：开写信窗格并预填收件人，然后让外壳清掉这次请求。
+  useEffect(() => {
+    if (!composeSeed || consumedComposeSeed.current === composeSeed) return;
+    consumedComposeSeed.current = composeSeed;
+    setComposeRequest({ kind: "new", to: composeSeed.to });
+    onComposeSeedConsumed?.();
+  }, [composeSeed, onComposeSeedConsumed]);
+
+  // 三栏宽度：邮箱栏与邮件列表可拖动，邮件内容栏永远保底 360 像素。
+  // 写信工作区最小 480 像素，普通阅读区最小 360 像素。
+  const {
+    widths,
+    limits: paneLimits,
+    setSidebar,
+    setList,
+    reset: resetPaneWidths,
+    persist: persistPaneWidths,
+  } = usePaneWidths(composeRequest ? COMPOSE_MIN_WIDTH : READER_MIN_WIDTH);
+
+  // 顶部统一区的入口只在没选具体账号 / 文件夹时生效。
+  const inUnified = selectedAccount === undefined && selectedFolder === undefined;
+  /** 红旗范围：账号里的「红旗邮件」，或顶部「所有红旗」。 */
+  const effectiveFlagged = flaggedView || (inUnified && unifiedView === "flagged");
+  /** 未读范围：用户自己的「只看未读」开关，或顶部「所有未读」。 */
+  const effectiveUnread = unreadOnly || (inUnified && unifiedView === "unread");
+  /** 文件夹类型范围：顶部「所有草稿」「所有已发送」。 */
+  const effectiveFolderKind =
+    inUnified && (unifiedView === "draft" || unifiedView === "sent") ? unifiedView : undefined;
+
+  /** 红旗视图按时间平铺，不折会话；其他视图照用户自己的开关来。 */
+  const listThreadMode = threadMode && !effectiveFlagged;
 
   const query = useMemo<InboxQuery>(() => {
-    const value: InboxQuery = { unreadOnly, limit: PAGE_SIZE };
+    const value: InboxQuery = { unreadOnly: effectiveUnread, limit: PAGE_SIZE };
     if (selectedAccount !== undefined) value.accountId = selectedAccount;
     if (selectedFolder !== undefined) value.folderId = selectedFolder.folderId;
+    if (effectiveFlagged) value.flaggedOnly = true;
+    if (effectiveFolderKind !== undefined) value.folderKind = effectiveFolderKind;
     return value;
-  }, [selectedAccount, selectedFolder, unreadOnly]);
+  }, [selectedAccount, selectedFolder, effectiveUnread, effectiveFlagged, effectiveFolderKind]);
 
   /** 静默检查 AI 站点状态；默认关闭时按钮显示「需启用」。 */
   useEffect(() => {
@@ -319,14 +599,14 @@ export default function InboxPanel() {
   }, []);
 
   /** 文件夹模式下用 folderId 收窄；不然按各账号收件箱。 */
-  const currentCount = threadMode ? threads.length : messages.length;
+  const currentCount = listThreadMode ? threads.length : messages.length;
 
   const load = useCallback(
     async (reset: boolean) => {
       setLoading(true);
       try {
-        const offset = reset ? 0 : threadMode ? threads.length : messages.length;
-        if (threadMode) {
+        const offset = reset ? 0 : listThreadMode ? threads.length : messages.length;
+        if (listThreadMode) {
           const page = await api.listInboxThreads({ ...query, offset });
           setThreads((old) => (reset ? page.items : [...old, ...page.items]));
           setTotal(page.total);
@@ -342,7 +622,7 @@ export default function InboxPanel() {
         setLoading(false);
       }
     },
-    [query, threadMode, threads.length, messages.length],
+    [query, listThreadMode, threads.length, messages.length],
   );
 
   /** 第一次进来，以及筛选条件变化时：清空并重新拉第一页。 */
@@ -357,7 +637,7 @@ export default function InboxPanel() {
 
     const boot = async () => {
       try {
-        if (threadMode) {
+        if (listThreadMode) {
           const page = await api.listInboxThreads({ ...query, offset: 0 });
           if (cancelled) return;
           setThreads(page.items);
@@ -381,7 +661,7 @@ export default function InboxPanel() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, threadMode]);
+  }, [query, listThreadMode]);
 
   /** 总览与文件夹：第一次进来拉一次，之后点刷新再拉。 */
   const refreshSidebar = useCallback(async () => {
@@ -401,42 +681,67 @@ export default function InboxPanel() {
     void refreshSidebar();
   }, [refreshSidebar]);
 
-  /** 搜索：走本地全文检索；deep 让外壳先联网补一批未同步的历史。 */
-  const runSearch = useCallback(async () => {
-    const raw = searchInput.trim();
-    if (raw === "") {
-      setSearchRaw("");
-      setHits([]);
-      setSearchTotal(0);
-      setSearchNote("");
+  /**
+   * 搜索：默认只查本地，绝不自动联网。
+   * deep=true 时才联网补一批历史，且只能由用户点按钮触发；
+   * append=true 表示在已有结果后面续一页。
+   */
+  const runSearch = useCallback(
+    async (options?: { deep?: boolean; append?: boolean }) => {
+      const raw = searchInput.trim();
+      if (raw === "") {
+        setSearchRaw("");
+        setHits([]);
+        setSearchTotal(0);
+        setSearchNote("");
+        setSearchError(undefined);
+        return;
+      }
+      const deep = options?.deep === true;
+      const append = options?.append === true;
+      const offset = append ? hits.length : 0;
+      setSearching(true);
       setSearchError(undefined);
-      return;
-    }
-    setSearching(true);
-    setSearchError(undefined);
-    try {
-      const page = await api.searchMessages({
-        raw,
-        ...(selectedAccount === undefined ? {} : { accountId: selectedAccount }),
-        limit: PAGE_SIZE,
-        deep: true,
-      });
-      setSearchRaw(raw);
-      setHits(page.items);
-      setSearchTotal(page.total);
-      setSearchNote(
-        page.deepSynced
-          ? "已联网补拉一批历史"
-          : page.deepError
-            ? `补拉历史失败：${page.deepError}`
-            : "",
-      );
-    } catch (caught) {
-      setSearchError(describeError(caught));
-    } finally {
-      setSearching(false);
-    }
-  }, [searchInput, selectedAccount]);
+      if (deep) setSearchDeepBusy(true);
+      try {
+        const page = await api.searchMessages({
+          raw,
+          ...(selectedAccount === undefined ? {} : { accountId: selectedAccount }),
+          ...(offset > 0 ? { offset } : {}),
+          limit: PAGE_SIZE,
+          deep,
+        });
+        setSearchRaw(raw);
+        setHits((old) => (append ? [...old, ...page.items] : page.items));
+        setSearchTotal(page.total);
+        setSearchNote(
+          page.deepSynced
+            ? "已联网补拉一批历史"
+            : page.deepError
+              ? `补拉历史失败：${page.deepError}`
+              : "",
+        );
+      } catch (caught) {
+        setSearchError(describeError(caught));
+      } finally {
+        setSearching(false);
+        if (deep) setSearchDeepBusy(false);
+      }
+    },
+    [searchInput, selectedAccount, hits.length],
+  );
+
+  /** Ctrl + K（macOS 为 Cmd + K）把焦点送到搜索框。 */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchBoxRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   /** 退出搜索，回到普通收件箱列表。 */
   const clearSearch = useCallback(() => {
@@ -451,8 +756,11 @@ export default function InboxPanel() {
   const searchMode = searchRaw !== "";
 
   const rows = useMemo(
-    () => (searchMode ? searchRows(hits) : flattenInboxRows(threads, messages, threadMode, expanded, children)),
-    [searchMode, hits, threads, messages, threadMode, expanded, children],
+    () =>
+      searchMode
+        ? searchRows(hits)
+        : flattenInboxRows(threads, messages, listThreadMode, expanded, children),
+    [searchMode, hits, threads, messages, listThreadMode, expanded, children],
   );
 
   const virtualizer = useVirtualizer({
@@ -460,9 +768,7 @@ export default function InboxPanel() {
     getScrollElement: () => scrollRef.current,
     estimateSize: (index) => {
       const row = rows[index];
-      if (row?.kind === "thread-message") return 56;
-      if (row?.kind === "search") return 84;
-      return 68;
+      return row ? inboxRowHeight(row.kind) : 73;
     },
     overscan: 8,
   });
@@ -513,6 +819,99 @@ export default function InboxPanel() {
     await load(true);
   }, [refreshSidebar, load]);
 
+  /** 打开邮件：本地先乐观标已读，失败回滚并提示；未读筛选下移出列表。 */
+  const openMessage = useCallback(
+    async (message: InboxMessage) => {
+      setSelectedMessage(message.isRead ? message : { ...message, isRead: true });
+      if (message.isRead) return;
+      setStatusNote("");
+      // 乐观更新：列表行样式和未读数先动起来，接口回来再拉权威数据。
+      setMessages((old) => old.map((item) => (item.id === message.id ? { ...item, isRead: true } : item)));
+      setThreads((old) =>
+        old.map((item) =>
+          item.accountId === message.accountId && item.threadKey === message.threadKey
+            ? {
+                ...item,
+                unreadCount: Math.max(0, item.unreadCount - 1),
+                latest:
+                  item.latest.id === message.id ? { ...item.latest, isRead: true } : item.latest,
+              }
+            : item,
+        ),
+      );
+      try {
+        await api.setMessageRead(message.id, true);
+        await refreshSidebar();
+        await load(true);
+        if (unreadOnly) setStatusNote("已标为已读，已移出「只看未读」列表");
+      } catch (caught) {
+        setSelectedMessage(message);
+        setError(`标记已读失败：${describeError(caught)}`);
+        await load(true);
+      }
+    },
+    [unreadOnly, refreshSidebar, load],
+  );
+
+  /** 把某个旗标状态铺到所有共享状态源：列表、会话、子邮件、搜索结果、读信页。 */
+  const applyMessageFlag = useCallback((id: number, isFlagged: boolean) => {
+    const patch = (item: InboxMessage): InboxMessage =>
+      item.id === id ? { ...item, isFlagged } : item;
+    setMessages((old) => old.map(patch));
+    setThreads((old) =>
+      old.map((item) =>
+        item.latest.id === id ? { ...item, latest: { ...item.latest, isFlagged } } : item,
+      ),
+    );
+    setChildren((old) => {
+      let changed = false;
+      const copy = new Map(old);
+      for (const [key, list] of copy) {
+        if (list.some((item) => item.id === id)) {
+          copy.set(key, list.map(patch));
+          changed = true;
+        }
+      }
+      return changed ? copy : old;
+    });
+    setHits((old) =>
+      old.map((hit) =>
+        hit.message.id === id ? { ...hit, message: { ...hit.message, isFlagged } } : hit,
+      ),
+    );
+    setSelectedMessage((old) => (old && old.id === id ? { ...old, isFlagged } : old));
+  }, []);
+
+  /** 切换红旗：本地先动，服务器确认失败就提示稍后自动重试。 */
+  const toggleFlag = useCallback(
+    async (message: InboxMessage) => {
+      const next = !message.isFlagged;
+      setStatusNote("");
+      applyMessageFlag(message.id, next);
+      try {
+        const result = await api.setMessageFlagged(message.id, next);
+        if (!result.synced) {
+          setStatusNote(
+            next
+              ? "已在本机标红，服务器同步失败，稍后会自动重试"
+              : "已在本机取消标红，服务器同步失败，稍后会自动重试",
+          );
+        }
+        // 红旗视图里取消标红，这一行就该走人，和「只看未读」一个道理。
+        if (effectiveFlagged && !next) {
+          setMessages((old) => old.filter((item) => item.id !== message.id));
+          setTotal((old) => Math.max(0, old - 1));
+          if (result.synced) setStatusNote("已取消标红，已移出「红旗邮件」");
+        }
+      } catch (caught) {
+        // 本地都没写成功：回滚到点击前的状态，别让界面骗人。
+        applyMessageFlag(message.id, message.isFlagged);
+        setStatusNote(`切换红旗失败：${describeError(caught)}`);
+      }
+    },
+    [applyMessageFlag, effectiveFlagged],
+  );
+
   // 外壳后台发现新邮件时会推一条事件过来；收到就刷新列表与未读计数。
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -538,24 +937,96 @@ export default function InboxPanel() {
     };
   }, [refreshAll]);
 
+  /** 每两秒读一次同步状态；读不到不影响收发，静默即可。 */
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const list = await api.syncStatus();
+        if (!cancelled) setSyncStatuses(list);
+      } catch {
+        // 同步状态读不到不影响收发，静默即可。
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  /**
+   * 新账号第一次同步完成，或已有账号从连接 / 拉取态进入稳定态后，
+   * 再刷新账号栏和邮件列表，避免只显示空列表。
+   */
+  useEffect(() => {
+    if (syncJustSettled(lastSyncStates.current, syncStatuses)) {
+      void refreshAll();
+    }
+    lastSyncStates.current = new Map(
+      syncStatuses.map((status) => [status.accountId, status.state]),
+    );
+  }, [syncStatuses, refreshAll]);
+
+  /** 当前账号的同步状态；统一收件箱取“最需要注意”的一个。 */
+  const currentSync = useMemo(() => {
+    if (syncStatuses.length === 0) return undefined;
+    if (selectedAccount !== undefined) {
+      return syncStatuses.find((item) => item.accountId === selectedAccount);
+    }
+    return worstSyncStatus(syncStatuses);
+  }, [syncStatuses, selectedAccount]);
+
+  /** 同步失败或需要重新授权时的重试入口。 */
+  const retrySync = useCallback(async () => {
+    try {
+      await api.stopSync(selectedAccount);
+      await api.startSync(selectedAccount);
+      setSyncStatuses(await api.syncStatus());
+    } catch (caught) {
+      setError(describeError(caught));
+    }
+  }, [selectedAccount]);
+
   const accounts: AccountInboxSummary[] = summary?.accounts ?? [];
 
   return (
-    <div className="inbox-layout">
+    <>
+    <div
+      className="inbox-layout"
+      style={{
+        gridTemplateColumns: `${widths.sidebar}px ${RESIZER_WIDTH}px ${widths.list}px ${RESIZER_WIDTH}px minmax(0, 1fr)`,
+      }}
+    >
       <aside className="inbox-sidebar">
-        <button
-          type="button"
-          className={selectedAccount === undefined ? "sidebar-item active" : "sidebar-item"}
-          onClick={() => {
-            setSelectedAccount(undefined);
-            setSelectedFolder(undefined);
-          }}
-        >
-          <span className="sidebar-item-title">统一收件箱</span>
-          {(summary?.totalUnread ?? 0) > 0 && (
-            <span className="unread-badge">{summary?.totalUnread}</span>
-          )}
-        </button>
+        {UNIFIED_VIEWS.map((view) => {
+          // 收件箱和未读用未读计数；草稿和已发送用本地条数合计；红旗不显示计数。
+          const badge =
+            view.id === "inbox" || view.id === "unread"
+              ? (summary?.totalUnread ?? 0)
+              : folderKindMessageCount(folders, view.id);
+          return (
+            <button
+              key={view.id}
+              type="button"
+              className={
+                selectedAccount === undefined && unifiedView === view.id
+                  ? "sidebar-item active"
+                  : "sidebar-item"
+              }
+              onClick={() => {
+                setSelectedAccount(undefined);
+                setSelectedFolder(undefined);
+                setFlaggedView(false);
+                setUnifiedView(view.id);
+              }}
+            >
+              <span className="sidebar-item-title">{view.label}</span>
+              {badge > 0 && <span className="unread-badge">{badge}</span>}
+            </button>
+          );
+        })}
 
         {accounts.map((account) => (
           <div key={account.accountId} className="sidebar-account">
@@ -569,7 +1040,18 @@ export default function InboxPanel() {
               onClick={() => {
                 setSelectedAccount(account.accountId);
                 setSelectedFolder(undefined);
+                setFlaggedView(false);
+                setExpandedAccounts((current) => {
+                  const next = new Set(current);
+                  if (next.has(account.accountId)) {
+                    next.delete(account.accountId);
+                  } else {
+                    next.add(account.accountId);
+                  }
+                  return next;
+                });
               }}
+              aria-expanded={expandedAccounts.has(account.accountId)}
             >
               <span className="dot" style={{ background: account.color || "#888" }} />
               <span className="sidebar-item-title">
@@ -580,32 +1062,71 @@ export default function InboxPanel() {
               )}
             </button>
 
-            {selectedAccount === account.accountId && (
+            {expandedAccounts.has(account.accountId) && (
               <div className="sidebar-folders">
-                {folders
-                  .filter((folder) => folder.accountId === account.accountId)
-                  .map((folder) => (
+                {accountSidebarEntries(folders, account.accountId).map((entry) =>
+                  entry.kind === "flagged" ? (
                     <button
-                      key={folder.folderId}
+                      key="flagged"
                       type="button"
                       className={
-                        selectedFolder?.folderId === folder.folderId
+                        flaggedView && selectedAccount === account.accountId
                           ? "sidebar-item sidebar-folder active"
                           : "sidebar-item sidebar-folder"
                       }
-                      onClick={() => setSelectedFolder(folder)}
+                      title="这个账号里所有标红的邮件"
+                      onClick={() => {
+                        setSelectedAccount(account.accountId);
+                        setSelectedFolder(undefined);
+                        setFlaggedView(true);
+                      }}
                     >
-                      <span className="sidebar-item-title">{folderLabel(folder)}</span>
-                      {folder.unreadCount > 0 && (
-                        <span className="unread-badge">{folder.unreadCount}</span>
+                      <span className="sidebar-item-title">红旗邮件</span>
+                    </button>
+                  ) : (
+                    <button
+                      key={entry.folder.folderId}
+                      type="button"
+                      className={
+                        selectedFolder?.folderId === entry.folder.folderId
+                          ? "sidebar-item sidebar-folder active"
+                          : "sidebar-item sidebar-folder"
+                      }
+                      onClick={() => {
+                        setSelectedAccount(entry.folder.accountId);
+                        setSelectedFolder(entry.folder);
+                        setFlaggedView(false);
+                      }}
+                    >
+                      <span className="sidebar-item-title">{folderLabel(entry.folder)}</span>
+                      {entry.folder.unreadCount > 0 && (
+                        <span className="unread-badge">{entry.folder.unreadCount}</span>
                       )}
                     </button>
-                  ))}
+                  ),
+                )}
               </div>
             )}
           </div>
         ))}
+        <button
+          type="button"
+          className="sidebar-item sidebar-add-account"
+          onClick={() => setAddAccountOpen(true)}
+        >
+          <span className="sidebar-item-title">＋ 添加邮箱</span>
+        </button>
       </aside>
+
+      <PaneResizer
+        label="邮箱栏宽度"
+        value={widths.sidebar}
+        min={paneLimits.sidebar.min}
+        max={paneLimits.sidebar.max}
+        onChange={setSidebar}
+        onReset={resetPaneWidths}
+        onCommit={persistPaneWidths}
+      />
 
       <section className="inbox-main">
         <div className="inbox-toolbar">
@@ -636,18 +1157,26 @@ export default function InboxPanel() {
           >
             转发
           </button>
-          <label className="checkbox">
+          <label
+            className="checkbox"
+            title={effectiveFlagged ? "红旗邮件按时间平铺显示，不折会话" : undefined}
+          >
             <input
               type="checkbox"
               checked={threadMode}
+              disabled={effectiveFlagged}
               onChange={(event) => setThreadMode(event.target.checked)}
             />
             按会话聚合
           </label>
-          <label className="checkbox">
+          <label
+            className="checkbox"
+            title={inUnified && unifiedView === "unread" ? "「所有未读」已经只看未读了" : undefined}
+          >
             <input
               type="checkbox"
-              checked={unreadOnly}
+              checked={effectiveUnread}
+              disabled={inUnified && unifiedView === "unread"}
               onChange={(event) => setUnreadOnly(event.target.checked)}
             />
             只看未读
@@ -655,45 +1184,99 @@ export default function InboxPanel() {
           <button type="button" onClick={() => void refreshAll()} disabled={loading}>
             刷新
           </button>
+          {currentSync && (
+            <span
+              className={syncBadgeClass(currentSync)}
+              tabIndex={0}
+              role="status"
+              title={syncBadgeTitle(currentSync)}
+            >
+              {syncBadgeText(currentSync)}
+            </span>
+          )}
+          {currentSync && (currentSync.needsReauth || currentSync.state === "error") && (
+            <button type="button" onClick={() => void retrySync()}>
+              重试
+            </button>
+          )}
           <span className="hint">
             {searchMode
-              ? `找到 ${searchTotal} 封`
-              : `共 ${total} ${threadMode ? "个会话" : "封邮件"}`}
+              ? `共找到 ${searchTotal} 封，当前已显示 ${hits.length} 封`
+              : `共 ${total} ${listThreadMode ? "个会话" : "封邮件"}`}
             {loading || searching ? "，正在加载……" : ""}
           </span>
         </div>
 
         <div className="inbox-search">
           <input
+            ref={searchBoxRef}
             aria-label="搜索邮件"
             value={searchInput}
-            placeholder="搜索邮件，例如：发票 from:alice has:attachment"
+            placeholder="按 Ctrl+K 聚焦；例如：发票 from:alice has:attachment"
             onChange={(event) => setSearchInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") void runSearch();
+              if (event.key === "Escape" && searchMode) clearSearch();
             }}
           />
           <button type="button" onClick={() => void runSearch()} disabled={searching}>
             {searching ? "搜索中……" : "搜索"}
           </button>
           {searchMode && (
-            <button type="button" onClick={clearSearch}>
-              退出搜索
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => void runSearch({ deep: true })}
+                disabled={searching}
+              >
+                {searchDeepBusy ? "联网补历史中……" : "继续联网补历史"}
+              </button>
+              <button type="button" onClick={clearSearch}>
+                退出搜索
+              </button>
+            </>
           )}
           <span className="hint">{SEARCH_SYNTAX_HINT}</span>
         </div>
 
-        {error && <p className="error">加载失败：{error}</p>}
-        {searchError && <p className="error">搜索失败：{searchError}</p>}
+        {error && (
+          <p className="error" role="alert">
+            加载失败：{error}
+          </p>
+        )}
+        {searchError && (
+          <p className="error" role="alert">
+            搜索失败：{searchError}
+          </p>
+        )}
         {searchNote && <p className="hint inbox-search-note">{searchNote}</p>}
+        {statusNote && (
+          <p className="hint inbox-status-note" role="status">
+            {statusNote}
+          </p>
+        )}
+        {searchMode && hits.length > 0 && hits.length < searchTotal && (
+          <div className="inbox-search-more">
+            <button
+              type="button"
+              onClick={() => void runSearch({ append: true })}
+              disabled={searching}
+            >
+              {searching
+                ? "加载中……"
+                : `继续加载（已显示 ${hits.length} / ${searchTotal}）`}
+            </button>
+          </div>
+        )}
 
         <div className="inbox-scroll" ref={scrollRef}>
           {rows.length === 0 && !loading && !searching && (
             <p className="hint inbox-empty">
-              {searchMode
-                ? "没有找到匹配的邮件。"
-                : "这里还没有邮件。先在「账号与代理」里配置账号并同步。"}
+              {inboxEmptyHint({
+                searchMode,
+                flaggedView: effectiveFlagged,
+                hasAccounts: accounts.length > 0,
+              })}
             </p>
           )}
           <div
@@ -721,19 +1304,22 @@ export default function InboxPanel() {
                       thread={row.thread}
                       expanded={expanded.has(row.key)}
                       onToggle={() => void toggleThread(row.thread)}
+                      onToggleFlag={(message) => void toggleFlag(message)}
                     />
                   ) : row.kind === "search" ? (
                     <SearchResultRow
                       hit={row.hit}
                       selected={selectedMessage?.id === row.hit.message.id}
-                      onOpen={() => setSelectedMessage(row.hit.message)}
+                      onOpen={() => void openMessage(row.hit.message)}
+                      onToggleFlag={(message) => void toggleFlag(message)}
                     />
                   ) : (
                     <MessageRow
                       message={row.message}
                       child={row.kind === "thread-message"}
                       selected={selectedMessage?.id === row.message.id}
-                      onOpen={() => setSelectedMessage(row.message)}
+                      onOpen={() => void openMessage(row.message)}
+                      onToggleFlag={(message) => void toggleFlag(message)}
                     />
                   )}
                 </div>
@@ -742,6 +1328,16 @@ export default function InboxPanel() {
           </div>
         </div>
       </section>
+
+      <PaneResizer
+        label="邮件列表宽度"
+        value={widths.list}
+        min={paneLimits.list.min}
+        max={paneLimits.list.max}
+        onChange={setList}
+        onReset={resetPaneWidths}
+        onCommit={persistPaneWidths}
+      />
 
       <aside className="inbox-reader">
         {composeRequest ? (
@@ -753,9 +1349,29 @@ export default function InboxPanel() {
             aiEnabled={aiEnabled}
           />
         ) : (
-          <MessageReader message={selectedMessage} aiEnabled={aiEnabled} />
+          <MessageReader
+            message={selectedMessage}
+            aiEnabled={aiEnabled}
+            onToggleFlag={(message) => void toggleFlag(message)}
+          />
         )}
       </aside>
     </div>
+    <AddAccountDialog
+      open={addAccountOpen}
+      source="mailbox"
+      onClose={() => setAddAccountOpen(false)}
+      onSaved={(accountId) => {
+        setAddAccountOpen(false);
+        void refreshSidebar();
+        const id = Number(accountId);
+        if (Number.isFinite(id)) {
+          setSelectedAccount(id);
+          setSelectedFolder(undefined);
+          setExpandedAccounts((current) => new Set(current).add(id));
+        }
+      }}
+    />
+    </>
   );
 }

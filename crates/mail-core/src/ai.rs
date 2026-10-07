@@ -343,20 +343,43 @@ impl MailEngine {
     }
 
     /// 用一份还没保存的站点配置做「测试连接」并拉模型；不写库、不写保险箱。
+    ///
+    /// `provider_id` 是正在编辑的站点编号。密钥留空时（`None` 或空串），
+    /// 若该站点已存过密钥就回退用它，这样编辑站点不必把密钥重打一遍。
     pub async fn test_ai_provider(
         &self,
         kind: AiProviderKind,
         base_url: &str,
         api_key: Option<&Secret>,
+        provider_id: Option<i64>,
     ) -> Result<Vec<String>, EngineError> {
         let base_url = normalize_base_url(base_url, provider_kind(kind))?;
+        let fallback = match provider_id {
+            Some(id) if api_key.map(|secret| secret.is_empty()).unwrap_or(true) => {
+                self.stored_ai_provider_secret(id)?
+            }
+            _ => None,
+        };
+        let secret = api_key.filter(|secret| !secret.is_empty()).or(fallback.as_ref());
         let route = self.resolve_route(AccountProxyMode::InheritGlobal)?;
         let endpoint = Endpoint {
             kind: provider_kind(kind),
             base_url: &base_url,
-            api_key,
+            api_key: secret,
         };
         Ok(list_models(route.as_ref(), &endpoint, AI_TIMEOUT).await?)
+    }
+
+    /// 取出某个已存站点的密钥；没有密钥或引用为空时返回 `None`。
+    fn stored_ai_provider_secret(&self, id: i64) -> Result<Option<Secret>, EngineError> {
+        let provider = self
+            .store()
+            .get_ai_provider(id)?
+            .ok_or(EngineError::AiProviderNotFound(id))?;
+        match provider.api_key_ref.as_deref() {
+            Some(key) if !key.is_empty() => Ok(self.secrets().get(key)?),
+            _ => Ok(None),
+        }
     }
 
     /// 对已保存的站点重新拉一次模型列表并落库。
@@ -1251,6 +1274,34 @@ mod tests {
             .expect("清空");
         assert!(!cleared.has_key, "显式清空后不应再有密钥");
         assert_eq!(secrets.len(), 0, "显式清空应删掉保险箱条目");
+    }
+
+    #[test]
+    fn 编辑站点测试连接能回退到已存密钥() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let secrets = std::sync::Arc::new(crate::secrets::MemorySecretStore::new());
+        let engine = MailEngine::initialize_with_secrets(dir.path(), secrets.clone()).expect("初始化引擎");
+        let created = engine
+            .save_ai_provider(
+                &AiProviderInput {
+                    id: None,
+                    label: "中转".to_string(),
+                    kind: AiProviderKind::OpenAiCompatible,
+                    base_url: "https://api.example.com/v1".to_string(),
+                    default_model: "m".to_string(),
+                    models: Vec::new(),
+                    thinking_level: AiThinkingLevel::Off,
+                    enabled: true,
+                },
+                Some(&Secret::new("stored-key")),
+            )
+            .expect("新建");
+
+        let stored = engine
+            .stored_ai_provider_secret(created.id)
+            .expect("读取已存密钥")
+            .expect("应有密钥");
+        assert_eq!(stored.expose(), "stored-key");
     }
 
     #[test]

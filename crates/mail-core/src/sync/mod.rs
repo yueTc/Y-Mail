@@ -120,6 +120,30 @@ impl SyncService {
             .map_err(|failure| EngineError::Sync(failure.message))?;
         Ok(true)
     }
+    /// 单开一次连接，把某账号的待同步红旗写回服务器。
+    pub async fn flush_flags_once(&self, account_id: i64) -> Result<(), EngineError> {
+        let exists = {
+            let store = self.lock_store();
+            store.get_account(mail_domain::AccountId(account_id))?.is_some()
+        };
+        if !exists {
+            return Err(EngineError::AccountNotFound(account_id));
+        }
+        let status = self.status_slot(account_id)?;
+        let cancel = Arc::new(CancelFlag::new());
+        let ctx = Arc::new(WorkerContext {
+            account_id,
+            store: self.store.clone(),
+            secrets: self.secrets.clone(),
+            config: self.config.clone(),
+            status,
+            cancel,
+        });
+        worker::flush_flags(&ctx)
+            .await
+            .map_err(|failure| EngineError::Sync(failure.message))
+    }
+
     /// 面向界面的全部账号状态（按编号排序）。
     pub fn statuses(&self) -> Vec<AccountSyncStatus> {
         let mut list: Vec<AccountSyncStatus> = {
@@ -208,6 +232,25 @@ impl MailEngine {
     /// 当前各账号同步状态。
     pub fn sync_statuses(&self) -> Vec<AccountSyncStatus> {
         self.sync.statuses()
+    }
+
+    /// 打开一次连接，把某封邮件所属账号的待同步红旗写回服务器。
+    ///
+    /// 返回 `true` 表示服务器已确认（本地不再有待同步）。
+    pub async fn sync_message_flag(&self, message_id: i64) -> Result<bool, EngineError> {
+        let account_id = {
+            let store = self.store();
+            store.message_account_id(message_id)?
+        };
+        let Some(account_id) = account_id else {
+            return Ok(false);
+        };
+        self.sync.flush_flags_once(account_id).await?;
+        let pending = {
+            let store = self.store();
+            store.is_flag_pending(message_id)?
+        };
+        Ok(!pending)
     }
 }
 

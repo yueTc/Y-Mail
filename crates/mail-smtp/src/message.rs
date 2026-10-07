@@ -1,7 +1,8 @@
 //! 外发邮件的 MIME 组装（Wave 5）。
 //!
-//! 结构：有附件时 `multipart/mixed` 里先放 `multipart/alternative`（纯文本 + HTML），
-//! 再逐个放附件；没有附件时直接 `multipart/alternative`。
+//! 结构：正文是 `multipart/alternative`（纯文本 + HTML）；正文里有内嵌图片时，
+//! 外面再包一层 `multipart/related`（图片按 Content-ID 被 HTML 里的 `cid:` 引用）；
+//! 有附件时最外层套 `multipart/mixed`。
 //! 非 ASCII 的主题、显示名与附件名按 RFC 2047 / RFC 2231 编码；
 //! 所有内容用 base64 传输（不受 8BITMIME 支持与否影响）。
 //!
@@ -53,6 +54,19 @@ pub struct OutgoingAttachment {
     pub bytes: Vec<u8>,
 }
 
+/// 一张正文里内嵌显示的图片（HTML 里用 `cid:<content_id>` 引用）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutgoingInlineImage {
+    /// 展示给对方客户端的文件名，例如 `粘贴的图片.png`。
+    pub filename: String,
+    /// 内容类型，例如 `image/png`。
+    pub mime_type: String,
+    /// Content-ID（不带尖括号），正文里的 `cid:` 引用必须和它一致。
+    pub content_id: String,
+    /// 图片字节。
+    pub bytes: Vec<u8>,
+}
+
 /// 一封待组装的外发邮件。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutgoingMessage {
@@ -78,6 +92,8 @@ pub struct OutgoingMessage {
     pub references: Vec<String>,
     /// 附件。
     pub attachments: Vec<OutgoingAttachment>,
+    /// 正文里内嵌显示的图片。
+    pub inline_images: Vec<OutgoingInlineImage>,
     /// 生成时间（Unix 秒）；由调用方传入，方便测试。
     pub date_unix: i64,
 }
@@ -122,23 +138,16 @@ pub fn build_message(message: &OutgoingMessage) -> Result<BuiltMessage, MessageE
     let mut out = String::with_capacity(2048);
     push_headers(&mut out, message, &from_address, &message_id);
 
-    let alt_boundary = make_boundary("alt");
-    let text_part = text_part(&alt_boundary, message);
+    let body_part = body_part(message)?;
     if message.attachments.is_empty() {
-        out.push_str(&format!(
-            "Content-Type: multipart/alternative; boundary=\"{alt_boundary}\"\r\n\r\n"
-        ));
-        out.push_str(&text_part);
+        out.push_str(&body_part);
     } else {
         let mixed_boundary = make_boundary("mix");
         out.push_str(&format!(
             "Content-Type: multipart/mixed; boundary=\"{mixed_boundary}\"\r\n\r\n"
         ));
         out.push_str(&format!("--{mixed_boundary}\r\n"));
-        out.push_str(&format!(
-            "Content-Type: multipart/alternative; boundary=\"{alt_boundary}\"\r\n\r\n"
-        ));
-        out.push_str(&text_part);
+        out.push_str(&body_part);
         for attachment in &message.attachments {
             out.push_str(&format!("--{mixed_boundary}\r\n"));
             out.push_str(&attachment_part(attachment)?);
@@ -195,6 +204,32 @@ fn push_headers(out: &mut String, message: &OutgoingMessage, from_address: &str,
     out.push_str("MIME-Version: 1.0\r\n");
 }
 
+/// 正文分片：没有内嵌图片就是 `multipart/alternative`；
+/// 有内嵌图片时包一层 `multipart/related`，图片紧跟正文后面。
+fn body_part(message: &OutgoingMessage) -> Result<String, MessageError> {
+    let alt_boundary = make_boundary("alt");
+    let text_part = text_part(&alt_boundary, message);
+    let alternative =
+        format!("Content-Type: multipart/alternative; boundary=\"{alt_boundary}\"\r\n\r\n{text_part}");
+    if message.inline_images.is_empty() {
+        return Ok(alternative);
+    }
+
+    let rel_boundary = make_boundary("rel");
+    let mut out = String::new();
+    out.push_str(&format!(
+        "Content-Type: multipart/related; type=\"multipart/alternative\"; boundary=\"{rel_boundary}\"\r\n\r\n"
+    ));
+    out.push_str(&format!("--{rel_boundary}\r\n"));
+    out.push_str(&alternative);
+    for image in &message.inline_images {
+        out.push_str(&format!("--{rel_boundary}\r\n"));
+        out.push_str(&inline_image_part(image)?);
+    }
+    out.push_str(&format!("--{rel_boundary}--\r\n"));
+    Ok(out)
+}
+
 /// `multipart/alternative` 的两个正文分片。
 fn text_part(boundary: &str, message: &OutgoingMessage) -> String {
     let mut out = String::new();
@@ -241,6 +276,48 @@ fn attachment_part(attachment: &OutgoingAttachment) -> Result<String, MessageErr
     }
     out.push_str(&base64_block(&attachment.bytes));
     Ok(out)
+}
+
+/// 一个内嵌图片分片：`Content-ID` 必须和正文里的 `cid:` 引用完全一致。
+fn inline_image_part(image: &OutgoingInlineImage) -> Result<String, MessageError> {
+    let content_id = sanitize_content_id(&image.content_id)?;
+    let mime_type = sanitize_mime_type(&image.mime_type);
+    let filename = sanitize_header(&image.filename);
+    let filename = if filename.is_empty() {
+        "image".to_string()
+    } else {
+        filename
+    };
+    let encoded_name = if filename.is_ascii() && !filename.contains('"') {
+        filename.clone()
+    } else {
+        encode_unstructured(&filename)
+    };
+
+    let mut out = String::new();
+    out.push_str(&format!("Content-Type: {mime_type}; name=\"{encoded_name}\"\r\n"));
+    out.push_str("Content-Transfer-Encoding: base64\r\n");
+    out.push_str(&format!("Content-ID: <{content_id}>\r\n"));
+    out.push_str(&format!(
+        "Content-Disposition: inline; filename=\"{encoded_name}\"\r\n\r\n"
+    ));
+    out.push_str(&base64_block(&image.bytes));
+    Ok(out)
+}
+
+/// Content-ID 只允许安全字符集，且不能为空：这是信头，必须防注入。
+fn sanitize_content_id(raw: &str) -> Result<String, MessageError> {
+    let trimmed = raw.trim().trim_start_matches('<').trim_end_matches('>').trim();
+    if trimmed.is_empty() {
+        return Err(MessageError::Invalid("内嵌图片缺少编号".to_string()));
+    }
+    let safe = trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '@' | '.' | '_' | '-' | '+' | '=' | '~'));
+    if !safe {
+        return Err(MessageError::Invalid("内嵌图片编号含有不允许的字符".to_string()));
+    }
+    Ok(trimmed.to_ascii_lowercase())
 }
 
 /// 把收件人拼成一行；返回空行前先做地址合法性检查。
@@ -395,7 +472,7 @@ fn make_message_id(from_address: &str) -> String {
         .nth(1)
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
-        .unwrap_or("em-master.local");
+        .unwrap_or("ymail.local");
     let seq = MESSAGE_SEQ.fetch_add(1, Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -466,7 +543,10 @@ mod tests {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine as _;
 
-    use super::{build_message, guess_mime_type, Mailbox, MessageError, OutgoingAttachment, OutgoingMessage};
+    use super::{
+        build_message, guess_mime_type, Mailbox, MessageError, OutgoingAttachment, OutgoingInlineImage,
+        OutgoingMessage,
+    };
 
     fn message() -> OutgoingMessage {
         OutgoingMessage {
@@ -484,6 +564,7 @@ mod tests {
             in_reply_to: None,
             references: Vec::new(),
             attachments: Vec::new(),
+            inline_images: Vec::new(),
             date_unix: 1_700_000_000,
         }
     }
@@ -627,5 +708,71 @@ mod tests {
         );
         assert_eq!(guess_mime_type("unknown.xyz"), "application/octet-stream");
         assert_eq!(guess_mime_type("noext"), "application/octet-stream");
+    }
+
+    /// 造一张内嵌图片；字节内容随便，测的是结构不是图片。
+    fn inline_image(content_id: &str) -> OutgoingInlineImage {
+        OutgoingInlineImage {
+            filename: "粘贴的图片.png".to_string(),
+            mime_type: "image/png".to_string(),
+            content_id: content_id.to_string(),
+            bytes: b"png-bytes".to_vec(),
+        }
+    }
+
+    #[test]
+    fn 内嵌图片用相关视图且编号对得上() {
+        let mut draft = message();
+        draft.inline_images = vec![inline_image("shot-1@ymail")];
+        let built = build_message(&draft).expect("组装");
+        let raw = String::from_utf8(built.raw).expect("文本");
+
+        assert!(raw.contains("multipart/related"), "正文带图要用相关视图");
+        assert!(raw.contains("multipart/alternative"), "正文本身仍是替代视图");
+        assert!(!raw.contains("multipart/mixed"), "没有普通附件就不该套混合视图");
+        assert!(raw.contains("Content-ID: <shot-1@ymail>"));
+        assert!(raw.contains("Content-Disposition: inline"));
+        assert!(raw.contains("=?UTF-8?B?"), "非 ASCII 文件名要编码");
+    }
+
+    #[test]
+    fn 内嵌图片可以被正确解码() {
+        let mut draft = message();
+        draft.inline_images = vec![inline_image("shot-1@ymail")];
+        let built = build_message(&draft).expect("组装");
+        let raw = String::from_utf8(built.raw).expect("文本");
+        let part = raw
+            .split("Content-Disposition: inline")
+            .nth(1)
+            .expect("内嵌图片段");
+        assert_eq!(decode_blocks(part), "png-bytes");
+    }
+
+    #[test]
+    fn 内嵌图片与普通附件同时存在时混合视图包住相关视图() {
+        let mut draft = message();
+        draft.inline_images = vec![inline_image("shot-1@ymail")];
+        draft.attachments = vec![OutgoingAttachment {
+            filename: "报告.pdf".to_string(),
+            mime_type: "application/pdf".to_string(),
+            bytes: b"pdf".to_vec(),
+        }];
+        let built = build_message(&draft).expect("组装");
+        let raw = String::from_utf8(built.raw).expect("文本");
+
+        let mixed = raw.find("multipart/mixed").expect("混合视图");
+        let related = raw.find("multipart/related").expect("相关视图");
+        assert!(mixed < related, "相关视图要在混合视图里面");
+        assert!(raw.contains("Content-Disposition: attachment"));
+    }
+
+    #[test]
+    fn 内嵌图片编号不合法会被拒() {
+        for bad in ["", "   ", "bad id", "bad\r\nX-Evil: 1", "a/b"] {
+            let mut draft = message();
+            draft.inline_images = vec![inline_image(bad)];
+            let err = build_message(&draft).expect_err("非法编号应被拒");
+            assert!(matches!(err, MessageError::Invalid(_)), "编号 {bad:?} 应被拒");
+        }
     }
 }

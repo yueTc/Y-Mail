@@ -1,6 +1,6 @@
-//! 读信安全设置：查看 / 移除「记住的发件人」——这些发件人的远程图片会自动显示。
+//! 读信设置：查看 / 移除「记住的发件人」——这些发件人的远程图片会自动显示。
 //!
-//! 只读取本地设置里的名单，不碰邮件正文，也不发任何网络请求。
+//! 只读写本地名单，不碰邮件正文，也不发任何网络请求。深色模式已经搬到「外观」分组。
 
 import { useCallback, useEffect, useState } from "react";
 
@@ -40,7 +40,7 @@ export default function ReaderSettingsPanel() {
   };
 
   return (
-    <section className="panel">
+    <section className="panel" aria-label="读信与远程图片" aria-busy={loading || busy !== undefined}>
       <div className="panel-head">
         <h2>读信与远程图片</h2>
         <p className="hint">
@@ -48,8 +48,8 @@ export default function ReaderSettingsPanel() {
         </p>
       </div>
 
-      {error && <p className="error">操作失败：{error}</p>}
-      {loading && <p className="hint">正在读取……</p>}
+      {error && <p className="error" role="alert">操作失败：{error}</p>}
+      {loading && <p className="hint" role="status">正在读取……</p>}
       {!loading && senders.length === 0 && (
         <p className="hint">
           还没有记住的发件人。在读信页点「以后这个发件人都自动显示」即可添加。
@@ -63,6 +63,7 @@ export default function ReaderSettingsPanel() {
               <span className="path">{address}</span>
               <button
                 type="button"
+                aria-busy={busy === address}
                 disabled={busy === address}
                 onClick={() => void remove(address)}
               >

@@ -1,5 +1,5 @@
 [package]
-name = "em-master"
+name = "ymail"
 description = "Tauri 2 桌面外壳：只做窗口、生命周期与命令转发，业务逻辑在 mail-core。"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,7 @@ authors.workspace = true
 publish = false
 
 [lib]
-name = "em_master_lib"
+name = "ymail_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [lints]
@@ -21,15 +21,27 @@ tauri-build.workspace = true
 mail-core.workspace = true
 mail-domain.workspace = true
 mail-mcp.workspace = true
+mail-mime.workspace = true
+base64.workspace = true
+# 截图：Windows 下走系统图形接口取屏，不联网。
+xcap = { version = "0.9.8", features = ["image"] }
 tokio = { workspace = true, features = ["sync"] }
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true
 tauri-plugin-notification.workspace = true
+# 自己弹通知：插件在开发模式下不传应用编号，通知会被算到 PowerShell 名下。
+notify-rust.workspace = true
+# 把通知里的应用名登记进当前用户注册表。
+winreg.workspace = true
+tauri-plugin-dialog.workspace = true
+tauri-plugin-autostart.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
+fs2.workspace = true
+tauri-plugin-single-instance = "2.5.2"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
@@ -37,3 +49,6 @@ custom-protocol = ["tauri/custom-protocol"]
 # tauri-build 生成 Windows 资源文件（版本信息 + 图标）所需的元数据。
 [package.metadata.tauri]
 icon = "icons/icon.ico"
+
+[dev-dependencies]
+tempfile.workspace = true

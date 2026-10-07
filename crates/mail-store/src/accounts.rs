@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn 数据库文件里查不到明文授权码() {
         let dir = tempfile::tempdir().expect("临时目录");
-        let db_path = dir.path().join("em-master.db");
+        let db_path = dir.path().join("ymail.db");
         let mut store = Store::open(&db_path).expect("打开");
         store.run_migrations().expect("迁移");
 

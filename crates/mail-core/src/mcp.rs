@@ -833,6 +833,8 @@ mod tests {
                 account_id: Some(account_id),
                 folder_id: Some(folder_id),
                 unread_only: false,
+                flagged_only: false,
+                folder_kind: None,
                 offset: 0,
                 limit: 10,
             })
@@ -985,7 +987,7 @@ mod tests {
         assert!(!joined.contains("credential-key"), "审计里不能出现凭据引用键");
 
         // 数据库文件里也不该落这次查询的原文（参数只存哈希）。
-        for suffix in ["em-master.db", "em-master.db-wal"] {
+        for suffix in ["ymail.db", "ymail.db-wal"] {
             let path = dir.path().join(suffix);
             if let Ok(bytes) = std::fs::read(&path) {
                 assert!(!contains(&bytes, probe.as_bytes()), "{suffix} 里不应出现查询原文");

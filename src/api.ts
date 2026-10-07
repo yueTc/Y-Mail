@@ -164,10 +164,44 @@ export interface ConnectionReport {
 export interface DbStatus {
   databaseFile: string;
   logDir: string;
+  attachmentDir: string;
   schemaVersion: number;
   appliedCount: number;
   appliedVersions: number[];
   fts5Available: boolean;
+}
+
+/** 存储目录与通知开关快照。 */
+export interface AppSettings {
+  /** 已保存的邮件数据目录；空字符串表示用默认。 */
+  dataDir: string;
+  /** 已保存的附件下载目录；空字符串表示用默认。 */
+  attachmentDir: string;
+  /** 新邮件是否弹系统通知。 */
+  notifyNewMail: boolean;
+  /** 默认邮件数据目录。 */
+  defaultDataDir: string;
+  /** 附件目录留空时会用的默认位置。 */
+  defaultAttachmentDir: string;
+  /** 当前引擎实际在用的邮件数据目录（改过要重启才生效）。 */
+  activeDataDir: string;
+  /** 当前引擎实际在用的附件目录。 */
+  activeAttachmentDir: string;
+  /** 是不是全新安装后的第一次启动；界面据此弹「数据放哪」向导。 */
+  firstRun: boolean;
+}
+
+/** 保存存储目录与通知开关时提交的内容。 */
+export interface AppSettingsInput {
+  dataDir: string;
+  attachmentDir: string;
+  notifyNewMail: boolean;
+}
+
+/** 更改数据目录的结果；需要确认时先弹一次确认，再带 confirmed 重试。 */
+export interface ChangeDataDirResult {
+  needsConfirmation: boolean;
+  message: string;
 }
 
 // ============================ 统一收件箱类型（Wave 3） ============================
@@ -235,6 +269,10 @@ export interface InboxQuery {
   accountId?: number;
   folderId?: number;
   unreadOnly?: boolean;
+  /** 只看标红旗的邮件（左侧「红旗邮件」入口用）。旧载荷可能缺省。 */
+  flaggedOnly?: boolean;
+  /** 只看某一类文件夹：inbox / draft / sent / trash / junk / custom。旧载荷可能缺省。 */
+  folderKind?: string;
   offset?: number;
   limit?: number;
 }
@@ -271,6 +309,13 @@ export interface MessageAttachment {
   isInline: boolean;
   localPath: string | null;
   state: AttachmentState;
+}
+
+/** 外部大附件（网易超大附件）下载完的结果。 */
+export interface ExternalDownload {
+  path: string;
+  filename: string;
+  size: number;
 }
 
 /** 读信窗格要展示的一封邮件。 */
@@ -343,10 +388,21 @@ export interface ComposeParticipant {
   address: string;
 }
 
-/** 一个待发附件：本地路径 + 展示文件名。 */
+/** 一张可插入正文的图片：本地路径 + 展示用 data URL。 */
+export interface InlineImageInfo {
+  path: string;
+  filename: string;
+  mimeType: string;
+  dataUrl: string;
+  bytes: number;
+}
+
+/** 一个待发附件：本地路径 + 展示文件名；带编号的是正文内嵌图片。 */
 export interface ComposeAttachment {
   path: string;
   filename: string;
+  /** 正文内嵌图片的编号；普通附件为空。 */
+  contentId?: string | null;
 }
 
 /** 写信窗格的预填内容（新建走空模板，回复 / 转发由外壳组装）。 */
@@ -406,13 +462,82 @@ export interface SendOutcome {
   reports: SendReport[];
 }
 
-/** 一位联系人。 */
+/** 一位联系人。一个邮箱一条。 */
 export interface Contact {
   id: number;
-  accountId: number | null;
   name: string;
   email: string;
+  /** 本地备注，纯文本。 */
+  note: string;
+  groupId: number | null;
+  groupName: string | null;
+  /** auto = 同步收集；manual = 用户建或改过。 */
+  source: "auto" | "manual";
+  hidden: boolean;
   lastUsedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 一个新分组。 */
+export interface ContactGroup {
+  id: number;
+  name: string;
+  memberCount: number;
+}
+
+/** 通讯录条数快照。 */
+export interface ContactCounts {
+  active: number;
+  hidden: number;
+  ungrouped: number;
+}
+
+/** 新建 / 修改联系人时提交的字段。 */
+export interface ContactDraft {
+  name: string;
+  email: string;
+  note: string;
+  groupId: number | null;
+}
+
+/** 导出结果。 */
+export interface ContactExport {
+  count: number;
+  path: string;
+}
+
+/** 导入里读不出来的一行。 */
+export interface ContactProblem {
+  line: number;
+  reason: string;
+}
+
+/** 导入里的一条联系人。 */
+export interface ContactImportEntry {
+  name: string;
+  email: string;
+  note: string;
+  group: string;
+}
+
+/** 导入预览。 */
+export interface ContactImportPreview {
+  headers: string[];
+  emailColumn: number | null;
+  entries: ContactImportEntry[];
+  problems: ContactProblem[];
+  duplicateCount: number;
+  newCount: number;
+}
+
+/** 导入落库结果。 */
+export interface ContactImportOutcome {
+  imported: number;
+  skipped: number;
+  overwritten: number;
+  invalid: number;
+  groupsCreated: number;
 }
 
 /** 一个账号的签名。 */
@@ -564,6 +689,24 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const api = {
   dbStatus: () => call<DbStatus>("db_status"),
 
+  getAppSettings: () => call<AppSettings>("get_app_settings"),
+
+  saveAppSettings: (input: AppSettingsInput) =>
+    call<AppSettings>("set_app_settings", { input }),
+
+  changeDataDir: (newDir: string, confirmed: boolean) =>
+    call<ChangeDataDirResult>("change_data_dir", { newDir, confirmed }),
+
+  openDataDir: () => call<void>("open_data_dir"),
+
+  restartApp: (cleanup: boolean) => call<void>("restart_app", { cleanup }),
+
+  // ===== 开机启动 =====
+
+  autostartStatus: () => call<boolean>("autostart_status"),
+
+  setAutostart: (enabled: boolean) => call<boolean>("set_autostart", { enabled }),
+
   listAccounts: () => call<Account[]>("list_accounts"),
 
   testAccountConnection: (draft: AccountDraft, secret: string) =>
@@ -633,6 +776,13 @@ export const api = {
       limit === undefined ? { accountId, threadKey } : { accountId, threadKey, limit },
     ),
 
+  /** 切换一封邮件的已读状态；本地立即生效并刷新未读数。 */
+  setMessageRead: (messageId: number, read: boolean) =>
+    call<void>("set_message_read", { messageId, read }),
+
+  /** 切换一封邮件的红旗状态；本地立即生效，返回服务器是否已确认。 */
+  setMessageFlagged: (messageId: number, flagged: boolean) =>
+    call<{ changed: boolean; synced: boolean }>("set_message_flagged", { messageId, flagged }),
   // ===== 读信与附件（Wave 4） =====
 
   getMessageBody: (messageId: number, allowRemoteImages = false) =>
@@ -640,6 +790,41 @@ export const api = {
 
   downloadAttachment: (attachmentId: number) =>
     call<string>("download_attachment", { attachmentId }),
+
+  /** 下载正文里的外部大附件（网易超大附件）；链接由后端再校验一次域名。 */
+  downloadExternalAttachment: (url: string) =>
+    call<ExternalDownload>("download_external_attachment", { url }),
+
+  /** 用系统默认程序打开已经下载好的附件；路径必须落在下载目录里。 */
+  openDownloadedFile: (path: string) => call<void>("open_downloaded_file", { path }),
+
+  /** 打开附件所在的位置，并尽量把文件选中。 */
+  openDownloadedFileDir: (path: string) => call<void>("open_downloaded_file_dir", { path }),
+
+  /** 用系统默认浏览器打开正文里的外部链接；后端只放行 http / https / mailto。 */
+  openExternalUrl: (url: string) => call<void>("open_external_url", { url }),
+
+  // ===== 写信配图（截图 / 插入图片） =====
+
+  /** 读本地图片并校验；返回展示用 data URL 与发送时要用的路径。 */
+  readInlineImage: (path: string) => call<InlineImageInfo>("read_inline_image", { path }),
+
+  /** 存粘贴进来的图片（base64），返回路径与 data URL。 */
+  saveInlineImage: (dataBase64: string) =>
+    call<InlineImageInfo>("save_inline_image", { dataBase64 }),
+
+  /** 打开全屏截图：主窗口会先藏起来，截完自动回来。 */
+  openScreenshotOverlay: () => call<void>("open_screenshot_overlay"),
+
+  /** 取截屏预览（整屏冻结图），给截图窗当背景。 */
+  takeScreenshotPreview: () => call<string>("take_screenshot_preview"),
+
+  /** 按框选的坐标裁下截图并落盘；结果通过事件发回主窗口。坐标是物理像素。 */
+  finishScreenshot: (x: number, y: number, width: number, height: number) =>
+    call<void>("finish_screenshot", { x, y, width, height }),
+
+  /** 取消截图并把主窗口叫回来。 */
+  cancelScreenshot: () => call<void>("cancel_screenshot"),
 
   /** 记住这封邮件的发件人：以后这个发件人的邮件自动放行远程图片。 */
   rememberRemoteSender: (messageId: number) =>
@@ -675,12 +860,73 @@ export const api = {
 
   deleteOutbox: (id: number) => call<boolean>("delete_outbox", { id }),
 
-  searchContacts: (accountId: number, keyword: string, limit?: number) =>
+  /** 收件人补全：只搜没被隐藏的人。 */
+  searchContacts: (keyword: string, limit?: number) =>
     call<Contact[]>(
       "search_contacts",
-      limit === undefined ? { accountId, keyword } : { accountId, keyword, limit },
+      limit === undefined ? { keyword } : { keyword, limit },
     ),
 
+  /** 通讯录列表；`scope` 传 `hidden` 看「已隐藏」。 */
+  listContacts: (keyword?: string, limit?: number, scope?: "active" | "hidden") =>
+    call<Contact[]>("list_contacts", {
+      ...(keyword === undefined ? {} : { keyword }),
+      ...(limit === undefined ? {} : { limit }),
+      ...(scope === undefined ? {} : { scope }),
+    }),
+
+  /** 通讯录条数快照。 */
+  contactCounts: () => call<ContactCounts>("contact_counts"),
+
+  /** 新建联系人，返回新编号。 */
+  createContact: (draft: ContactDraft) => call<number>("create_contact", { draft }),
+
+  /** 修改联系人。 */
+  updateContact: (id: number, draft: ContactDraft) => call<void>("update_contact", { id, draft }),
+
+  /** 隐藏一位联系人（软删）。 */
+  hideContact: (id: number) => call<void>("hide_contact", { id }),
+
+  /** 把一位已隐藏的联系人放回来。 */
+  restoreContact: (id: number) => call<void>("restore_contact", { id }),
+
+  /** 彻底删掉一位联系人。 */
+  purgeContact: (id: number) => call<void>("purge_contact", { id }),
+
+  /** 列出全部分组。 */
+  listContactGroups: () => call<ContactGroup[]>("list_contact_groups"),
+
+  /** 新建分组，返回新编号。 */
+  createContactGroup: (name: string) => call<number>("create_contact_group", { name }),
+
+  /** 给分组改名。 */
+  renameContactGroup: (id: number, name: string) =>
+    call<void>("rename_contact_group", { id, name }),
+
+  /** 删分组；组内联系人回到未分组。 */
+  deleteContactGroup: (id: number) => call<void>("delete_contact_group", { id }),
+
+  /** 清空自动收集的联系人，返回删了几条。 */
+  clearAutoContacts: () => call<number>("clear_auto_contacts"),
+
+  /** 把通讯录导出到用户选定的文件。 */
+  exportContacts: (path: string, kind: "csv" | "vcf", scope?: "active" | "hidden") =>
+    call<ContactExport>("export_contacts", {
+      path,
+      kind,
+      ...(scope === undefined ? {} : { scope }),
+    }),
+
+  /** 读一个导入文件并解析出预览（只读文件，不写库）。 */
+  previewContactImport: (path: string, emailColumn?: number) =>
+    call<ContactImportPreview>("preview_contact_import", {
+      path,
+      ...(emailColumn === undefined ? {} : { emailColumn }),
+    }),
+
+  /** 把预览里确认过的条目落库。 */
+  applyContactImport: (entries: ContactImportEntry[], overwrite = false) =>
+    call<ContactImportOutcome>("apply_contact_import", { entries, overwrite }),
   getSignature: (accountId: number) => call<Signature>("get_signature", { accountId }),
 
   saveSignature: (accountId: number, html: string, enabled: boolean) =>
@@ -700,11 +946,12 @@ export const api = {
 
   deleteAiProvider: (id: number) => call<void>("delete_ai_provider", { id }),
 
-  testAiProvider: (kind: AiProviderKind, baseUrl: string, apiKey?: string) =>
-    call<string[]>(
-      "test_ai_provider",
-      apiKey === undefined ? { kind, baseUrl } : { kind, baseUrl, apiKey },
-    ),
+  testAiProvider: (kind: AiProviderKind, baseUrl: string, apiKey?: string, id?: number) => {
+    const args: Record<string, unknown> = { kind, baseUrl };
+    if (apiKey !== undefined) args.apiKey = apiKey;
+    if (id !== undefined) args.id = id;
+    return call<string[]>("test_ai_provider", args);
+  },
 
   refreshAiProviderModels: (id: number) =>
     call<string[]>("refresh_ai_provider_models", { id }),

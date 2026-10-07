@@ -10,6 +10,7 @@ pub mod accounts;
 pub mod ai;
 pub mod compose;
 pub mod connection;
+pub mod contacts;
 pub mod error;
 pub mod inbox;
 pub mod mcp;
@@ -23,10 +24,12 @@ pub use ai::{
     AiFunction, AiModelMapEntry, AiProviderKind, AiThinkingLevel, NewAiAudit, NewAiProvider, StoredAiAudit,
     StoredAiCache, StoredAiProvider,
 };
-pub use compose::{
-    ComposeSource, NewOutbox, OutboxKind, OutboxState, StoredContact, StoredOutbox, StoredSignature,
-};
+pub use compose::{ComposeSource, NewOutbox, OutboxKind, OutboxState, StoredOutbox, StoredSignature};
 pub use connection::Store;
+pub use contacts::{
+    ContactDraft, ContactImportRow, ContactImportStats, ContactScope, ContactSource, StoredContact,
+    StoredContactGroup, MAX_CONTACT_ROWS, MAX_GROUP_NAME_CHARS, MAX_NOTE_CHARS,
+};
 pub use error::StoreError;
 pub use inbox::{AccountInboxSummary, InboxFolder, InboxMessage, InboxQuery, InboxThread};
 pub use mcp::{McpAuditRecord, MCP_ENABLED_KEY, MCP_WRITE_TOOLS_KEY};
@@ -36,7 +39,7 @@ pub use reading::{
     AttachmentState, BodyState, MessageLocation, NewAttachment, StoredAttachment, StoredMessageBody,
 };
 pub use search::{SearchHit, SearchPage, SearchQuery, SnippetSegment};
-pub use sync::{NewMessage, StoredFolder, StoredSyncJob};
+pub use sync::{NewFolder, NewMessage, PendingFlag, StoredFolder, StoredSyncJob};
 
 /// 本 crate 的用途标识，供工作区自检与日志使用。
 pub const CRATE_PURPOSE: &str = "SQLite 存储与迁移（唯一写库者）";

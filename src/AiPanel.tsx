@@ -19,6 +19,44 @@ import {
   type AiThinkingLevel,
 } from "./api";
 
+/** 显示密钥图标：一只睁开的眼睛。 */
+function EyeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+      <g
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
+        <circle cx="12" cy="12" r="3" />
+      </g>
+    </svg>
+  );
+}
+
+/** 隐藏密钥图标：一只眼睛加斜杠。 */
+function EyeOffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+      <g
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M10.6 5.8A9.8 9.8 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16.4 16.4 0 0 1-3.2 4.2" />
+        <path d="M6.2 6.9A16 16 0 0 0 2.5 12S6 18.5 12 18.5c1.6 0 3-.5 4.2-1.2" />
+        <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+        <path d="M4.5 4.5 19.5 19.5" />
+      </g>
+    </svg>
+  );
+}
+
 const FUNCTION_LABEL: Record<AiFunction, string> = {
   translate: "翻译",
   summary: "摘要",
@@ -111,6 +149,7 @@ export default function AiPanel() {
   const [notice, setNotice] = useState("");
   const [editing, setEditing] = useState<ProviderDraftState>();
   const [apiKey, setApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
   const [modelsHint, setModelsHint] = useState("");
   const [featureDrafts, setFeatureDrafts] = useState<Record<string, FeatureDraftState>>({});
 
@@ -152,6 +191,7 @@ export default function AiPanel() {
   const startCreate = useCallback(() => {
     setEditing(emptyProvider());
     setApiKey("");
+    setShowApiKey(false);
     setModelsHint("");
     setNotice("");
     setError("");
@@ -160,6 +200,7 @@ export default function AiPanel() {
   const startEdit = useCallback((provider: AiProvider) => {
     setEditing(providerToDraft(provider));
     setApiKey("");
+    setShowApiKey(false);
     setModelsHint("");
     setNotice("");
     setError("");
@@ -210,6 +251,7 @@ export default function AiPanel() {
         editing.kind,
         editing.baseUrl,
         apiKey === "" ? undefined : apiKey,
+        editing.id,
       );
       setModelsHint(`连接成功，拉到 ${models.length} 个模型。`);
       if (models.length > 0) {
@@ -343,7 +385,7 @@ export default function AiPanel() {
   }, [refresh]);
 
   return (
-    <section className="panel ai-panel">
+    <section className="panel ai-panel" aria-busy={loading || busy}>
       <div className="panel-head">
         <div>
           <h2>AI 与翻译</h2>
@@ -361,9 +403,9 @@ export default function AiPanel() {
         </div>
       </div>
 
-      {loading && <p className="hint">正在读取 AI 设置……</p>}
-      {error && <p className="error">操作失败：{error}</p>}
-      {notice && <p className="notice">{notice}</p>}
+      {loading && <p className="hint" role="status">正在读取 AI 设置……</p>}
+      {error && <p className="error" role="alert">操作失败：{error}</p>}
+      {notice && <p className="notice" role="status">{notice}</p>}
 
       <h3>AI 站点</h3>
       <div className="ai-provider-list">
@@ -455,14 +497,26 @@ export default function AiPanel() {
           </label>
           <label className="secret-field">
             CDKey / API Key
-            <input
-              type="password"
-              aria-label="CDKey / API Key"
-              autoComplete="off"
-              value={apiKey}
-              placeholder={editing.id === undefined ? "新建时填写" : "留空表示不修改，输入后替换"}
-              onChange={(event) => setApiKey(event.target.value)}
-            />
+            <span className="secret-input-row">
+              <input
+                type={showApiKey ? "text" : "password"}
+                aria-label="CDKey / API Key"
+                autoComplete="off"
+                value={apiKey}
+                placeholder={editing.id === undefined ? "新建时填写" : "留空沿用已存密钥，输入后替换"}
+                onChange={(event) => setApiKey(event.target.value)}
+              />
+              <button
+                type="button"
+                className="secret-toggle"
+                aria-label={showApiKey ? "隐藏密钥" : "显示密钥"}
+                title={showApiKey ? "隐藏密钥" : "显示密钥"}
+                aria-pressed={showApiKey}
+                onClick={() => setShowApiKey((old) => !old)}
+              >
+                {showApiKey ? <EyeOffIcon /> : <EyeIcon />}
+              </button>
+            </span>
           </label>
           <div className="field-row">
             <label>
@@ -516,7 +570,7 @@ export default function AiPanel() {
             />
             启用这个站点
           </label>
-          {modelsHint && <p className="hint">{modelsHint}</p>}
+          {modelsHint && <p className="hint" role="status">{modelsHint}</p>}
           <div className="form-actions">
             <button type="button" className="primary" onClick={() => void saveProvider()} disabled={busy}>
               保存

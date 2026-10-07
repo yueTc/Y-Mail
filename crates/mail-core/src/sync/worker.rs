@@ -14,7 +14,7 @@ use mail_store::{Store, StoreError};
 use crate::proxies::resolve_route_with;
 use crate::secrets::SecretStore;
 
-use super::fetcher::sync_folder;
+use super::fetcher::{align_folders, sync_folder};
 use super::state::{AccountSyncStatus, CancelFlag, SyncConfig, SyncState};
 
 /// 一条命令里最多抓几封，避免单次应答太大。
@@ -164,9 +164,12 @@ async fn session(ctx: &Arc<WorkerContext>) -> Result<(), Failure> {
         .await
         .map_err(Failure::connection)?;
     let folders = client.list_folders().await.map_err(Failure::connection)?;
+    align_folders(ctx, &folders)?;
+    flush_pending(ctx, &mut client).await?;
 
+    let syncable = syncable_folders(&folders);
     let job_id = start_job(ctx);
-    let outcome = run_folders(ctx, &mut client, &folders).await;
+    let outcome = run_folders(ctx, &mut client, &syncable).await;
     if let Some(job_id) = job_id {
         match &outcome {
             Ok(()) => finish_job(ctx, job_id, true, 0, None),
@@ -201,7 +204,10 @@ pub(super) async fn sync_once(ctx: &Arc<WorkerContext>) -> Result<(), Failure> {
         .await
         .map_err(Failure::connection)?;
     let folders = client.list_folders().await.map_err(Failure::connection)?;
-    for info in &folders {
+    align_folders(ctx, &folders)?;
+    flush_pending(ctx, &mut client).await?;
+    let syncable = syncable_folders(&folders);
+    for info in &syncable {
         if ctx.cancel.is_cancelled() {
             break;
         }
@@ -210,6 +216,90 @@ pub(super) async fn sync_once(ctx: &Arc<WorkerContext>) -> Result<(), Failure> {
     client.logout().await;
     Ok(())
 }
+
+/// 把当前账号所有待同步的红旗变更回写服务器。
+///
+/// 复用已经连上的客户端：按文件夹分组 SELECT，再逐条 UID STORE。单条失败只记
+/// 日志、保留待同步状态，不打断整体同步；下次同步会自动重试。
+pub(super) async fn flush_pending(ctx: &Arc<WorkerContext>, client: &mut ImapClient) -> Result<(), Failure> {
+    let pending = {
+        let store = lock_store(&ctx.store);
+        store.list_pending_flags(ctx.account_id).map_err(Failure::store)?
+    };
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    let mut current: Option<String> = None;
+    let mut selected = false;
+    for item in &pending {
+        if ctx.cancel.is_cancelled() {
+            return Ok(());
+        }
+        if current.as_deref() != Some(item.server_path.as_str()) {
+            current = Some(item.server_path.clone());
+            selected = client.select(&item.server_path).await.is_ok();
+            if !selected {
+                tracing::warn!(
+                    account = ctx.account_id,
+                    folder = %item.server_path,
+                    "打开文件夹失败，红旗回写稍后重试"
+                );
+            }
+        }
+        if !selected {
+            continue;
+        }
+        match client.uid_store_flags(item.uid, item.flagged).await {
+            Ok(()) => {
+                let store = lock_store(&ctx.store);
+                store
+                    .clear_message_flag_pending(item.message_id)
+                    .map_err(Failure::store)?;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    account = ctx.account_id,
+                    message = item.message_id,
+                    "红旗回写失败，稍后自动重试：{}",
+                    error.message
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 单独开一次连接把待同步红旗写回服务器（界面点红旗后立刻用）。
+pub(super) async fn flush_flags(ctx: &Arc<WorkerContext>) -> Result<(), Failure> {
+    let pending = {
+        let store = lock_store(&ctx.store);
+        store.list_pending_flags(ctx.account_id).map_err(Failure::store)?
+    };
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    let account = load_account(ctx)?;
+    let secret = load_secret(ctx, &account).await?;
+    let route = resolve_route_with(&ctx.store, ctx.secrets.as_ref(), account.proxy)
+        .map_err(|error| Failure::internal(&format!("选择代理失败：{error}")))?;
+    let client_config = ClientConfig {
+        host: account.imap.host.clone(),
+        port: account.imap.port,
+        security: account.imap.security,
+        username: account.username.clone(),
+        auth: AuthMaterial::for_account(account.auth_type, secret),
+        timeout: mail_net::DEFAULT_TIMEOUT,
+    };
+    let mut client = ImapClient::connect(&client_config, route.as_ref())
+        .await
+        .map_err(Failure::connection)?;
+    let result = flush_pending(ctx, &mut client).await;
+    client.logout().await;
+    result
+}
+
 /// 先逐文件夹落一遍数据，再进入守着收件箱的循环。
 async fn run_folders(
     ctx: &Arc<WorkerContext>,
@@ -223,6 +313,23 @@ async fn run_folders(
         sync_folder(ctx, client, info).await?;
     }
     live_loop(ctx, client, folders).await
+}
+
+/// 挑出真正能打开的文件夹。
+///
+/// 带 `\NoSelect` 的只是「装子文件夹的空壳」，里面不会有邮件；部分服务器（如腾讯
+/// 企业邮）还会对它假装 SELECT 成功却不真正选中，导致随后的搜索报「先选文件夹」。
+/// 所以同步前先把这类文件夹滤掉，免得一个空壳拖垮整个账号。
+pub(super) fn syncable_folders(folders: &[FolderInfo]) -> Vec<FolderInfo> {
+    let mut kept = Vec::with_capacity(folders.len());
+    for info in folders {
+        if info.is_selectable() {
+            kept.push(info.clone());
+        } else {
+            tracing::debug!(folder = %info.full_path, "跳过不可选容器文件夹");
+        }
+    }
+    kept
 }
 
 /// 收件箱挂 IDLE；不支持 IDLE 就按固定间隔轮询。每次醒来都重跑一轮同步。
@@ -242,7 +349,7 @@ async fn live_loop(
         }
         set_status(ctx, SyncState::IdleWaiting, 0, 0, "等待新邮件");
         if idle_capable {
-            let path = inbox.map_or("INBOX", |info| info.full_path.as_str());
+            let path = inbox.map_or("INBOX", |info| info.server_path.as_str());
             client.select(path).await.map_err(Failure::connection)?;
             client
                 .idle_wait(ctx.config.idle_timeout)
@@ -254,6 +361,7 @@ async fn live_loop(
         if ctx.cancel.is_cancelled() {
             return Ok(());
         }
+        flush_pending(ctx, client).await?;
         for info in folders {
             if ctx.cancel.is_cancelled() {
                 return Ok(());

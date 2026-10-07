@@ -156,21 +156,6 @@ pub struct StoredOutbox {
     pub sent_at: Option<String>,
 }
 
-/// 一个联系人的展示信息。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StoredContact {
-    /// 主键。
-    pub id: i64,
-    /// 所属账号；None 表示全局联系人。
-    pub account_id: Option<i64>,
-    /// 显示名。
-    pub name: String,
-    /// 邮箱地址。
-    pub email: String,
-    /// 最近一次使用时间。
-    pub last_used_at: Option<String>,
-}
-
 /// 一个账号的签名。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredSignature {
@@ -470,90 +455,6 @@ impl Store {
         Ok(count)
     }
 
-    /// 在指定账号下登记一个联系人（按小写邮箱去重）；同名不同邮箱各留一条。
-    pub fn upsert_contact(&self, account_id: Option<i64>, name: &str, email: &str) -> Result<(), StoreError> {
-        let email = email.trim();
-        if email.is_empty() {
-            return Ok(());
-        }
-        // 用显式比较代替 ON CONFLICT：partial 唯一索引下 ON CONFLICT 目标不好写。
-        let existing: Option<i64> = if account_id.is_some() {
-            self.conn()
-                .query_row(
-                    "SELECT id FROM contact WHERE account_id = ?1 AND lower(email) = lower(?2)",
-                    rusqlite::params![account_id, email],
-                    |row| row.get(0),
-                )
-                .optional()?
-        } else {
-            self.conn()
-                .query_row(
-                    "SELECT id FROM contact WHERE account_id IS NULL AND lower(email) = lower(?1)",
-                    rusqlite::params![email],
-                    |row| row.get(0),
-                )
-                .optional()?
-        };
-        match existing {
-            Some(id) => {
-                self.conn().execute(
-                    "UPDATE contact SET name = CASE WHEN ?2 = '' THEN name ELSE ?2 END,
-                         last_used_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                     WHERE id = ?1",
-                    rusqlite::params![id, name],
-                )?;
-            }
-            None => {
-                self.conn().execute(
-                    "INSERT INTO contact (account_id, name, email, last_used_at) \
-                     VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
-                    rusqlite::params![account_id, name, email],
-                )?;
-            }
-        }
-        Ok(())
-    }
-
-    /// 按前缀或包含关系搜联系人；账号的联系人排在全局联系人前面。
-    pub fn search_contacts(
-        &self,
-        account_id: Option<i64>,
-        keyword: &str,
-        limit: usize,
-    ) -> Result<Vec<StoredContact>, StoreError> {
-        let keyword = keyword.trim();
-        let pattern = format!("%{keyword}%");
-        let sql = "SELECT id, account_id, name, email, last_used_at FROM contact \
-             WHERE (name LIKE ?1 OR email LIKE ?1) \
-               AND (?2 IS NULL OR account_id IS NULL OR account_id = ?2) \
-             ORDER BY CASE WHEN account_id = ?2 THEN 0 WHEN account_id IS NULL THEN 1 ELSE 2 END, \
-                      COALESCE(last_used_at, '') DESC, id ASC \
-             LIMIT ?3";
-        let mut stmt = self.conn().prepare(sql)?;
-        let rows = stmt.query_map(rusqlite::params![pattern, account_id, limit as i64], |row| {
-            Ok(StoredContact {
-                id: row.get(0)?,
-                account_id: row.get(1)?,
-                name: row.get(2)?,
-                email: row.get(3)?,
-                last_used_at: row.get(4)?,
-            })
-        })?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
-        }
-        Ok(out)
-    }
-
-    /// 从收发件人列表批量登记联系人（同步入库时顺带记一笔）。
-    pub fn upsert_contacts(&self, account_id: i64, people: &[(String, String)]) -> Result<(), StoreError> {
-        for (name, email) in people {
-            self.upsert_contact(Some(account_id), name, email)?;
-        }
-        Ok(())
-    }
-
     /// 读一个账号的签名；没有则返回默认的「未启用空签名」。
     pub fn get_signature(&self, account_id: i64) -> Result<StoredSignature, StoreError> {
         let row = self
@@ -794,58 +695,6 @@ mod tests {
         let next = store.claim_next_outbox().expect("认领").expect("有货");
         assert_eq!(next.id, second);
         assert!(store.claim_next_outbox().expect("认领").is_none());
-    }
-
-    #[test]
-    fn 联系人按前缀与包含搜索且账号优先() {
-        let store = migrated();
-        let a = account(&store, "a@example.com");
-        let b = account(&store, "b@example.com");
-        store
-            .upsert_contact(Some(a), "张三", "zhangsan@example.com")
-            .expect("写联系人");
-        store
-            .upsert_contact(Some(a), "张三丰", "zsf@example.com")
-            .expect("写联系人");
-        store
-            .upsert_contact(None, "张伟", "zhangwei@other.com")
-            .expect("写全局");
-        store
-            .upsert_contact(Some(a), "李四", "lisi@example.com")
-            .expect("写联系人");
-        // 同账号同邮箱再写一次应更新而不是新增。
-        store
-            .upsert_contact(Some(a), "张三改名", "zhangsan@example.com")
-            .expect("重复写");
-
-        let hits = store.search_contacts(Some(a), "张", 10).expect("搜联系人");
-        assert_eq!(hits.len(), 3, "账号两条 + 全局一条");
-        assert_eq!(hits[0].email, "zhangsan@example.com", "同账号优先");
-        assert_eq!(hits[0].name, "张三改名", "重复写更新了名字");
-        // b 账号只看到全局那条。
-        let for_b = store.search_contacts(Some(b), "张", 10).expect("搜联系人");
-        assert_eq!(for_b.len(), 1);
-        assert_eq!(for_b[0].account_id, None);
-        // 按邮箱片段也能搜到。
-        let by_email = store.search_contacts(Some(a), "lisi", 10).expect("搜邮箱");
-        assert_eq!(by_email.len(), 1);
-        assert_eq!(by_email[0].email, "lisi@example.com");
-    }
-
-    #[test]
-    fn 批量登记联系人把收发件人都记下() {
-        let store = migrated();
-        let a = account(&store, "a@example.com");
-        store
-            .upsert_contacts(
-                a,
-                &[
-                    ("张三".to_string(), "z@example.com".to_string()),
-                    ("李四".to_string(), "l@example.com".to_string()),
-                ],
-            )
-            .expect("批量");
-        assert_eq!(store.search_contacts(Some(a), "", 10).expect("列").len(), 2);
     }
 
     #[test]

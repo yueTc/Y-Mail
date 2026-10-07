@@ -24,6 +24,24 @@ pub enum StoreError {
     #[error("数据格式不合法：{0}")]
     InvalidData(String),
 
+    /// 数据库完整性检查没通过。
+    #[error("数据库完整性检查没通过：{0}")]
+    Integrity(String),
+
+    /// 这个邮箱已经在通讯录里了（比较时不分大小写）。
+    #[error("这个邮箱已经在通讯录里了：{email}")]
+    ContactEmailTaken {
+        /// 冲突的邮箱地址。
+        email: String,
+    },
+
+    /// 已经有同名分组（比较时不分大小写）。
+    #[error("已经有同名分组了：{name}")]
+    ContactGroupNameTaken {
+        /// 冲突的分组名。
+        name: String,
+    },
+
     /// 迁移执行失败。
     #[error("迁移 v{version} 执行失败：{reason}")]
     Migration {

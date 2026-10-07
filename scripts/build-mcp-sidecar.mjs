@@ -1,7 +1,7 @@
 //! 生成 Tauri sidecar：把 `mail-mcp` 的可执行文件按目标三元组后缀放进 `src-tauri/binaries/`。
 //!
-//! Tauri 2 约定：配置里写 `binaries/em-master-mcp`，磁盘上的文件名必须是
-//! `em-master-mcp-<目标三元组>.exe`（Windows）。本脚本负责编译并按约定命名。
+//! Tauri 2 约定：配置里写 `binaries/ymail-mcp`，磁盘上的文件名必须是
+//! `ymail-mcp-<目标三元组>.exe`（Windows）。本脚本负责编译并按约定命名。
 //!
 //! 用法：
 //!   node scripts/build-mcp-sidecar.mjs            # 给当前主机三元组出 release 版
@@ -49,7 +49,7 @@ const triple = requested || host;
 const useTargetFlag = Boolean(requested) && requested !== host;
 const profile = debug ? "debug" : "release";
 
-const cargoArgs = ["build", "-p", "mail-mcp", "--bin", "em-master-mcp"];
+const cargoArgs = ["build", "-p", "mail-mcp", "--bin", "ymail-mcp"];
 if (!debug) {
   cargoArgs.push("--release");
 }
@@ -63,7 +63,7 @@ execFileSync(resolveCargo(), cargoArgs, { cwd: rootDir, stdio: "inherit" });
 const targetRoot = process.env.CARGO_TARGET_DIR
   ? resolve(rootDir, process.env.CARGO_TARGET_DIR)
   : join(rootDir, "target");
-const exeName = triple.includes("windows") ? "em-master-mcp.exe" : "em-master-mcp";
+const exeName = triple.includes("windows") ? "ymail-mcp.exe" : "ymail-mcp";
 const builtPath = useTargetFlag
   ? join(targetRoot, triple, profile, exeName)
   : join(targetRoot, profile, exeName);
@@ -75,8 +75,8 @@ if (!existsSync(builtPath)) {
 const outDir = join(rootDir, "src-tauri", "binaries");
 mkdirSync(outDir, { recursive: true });
 const outName = triple.includes("windows")
-  ? `em-master-mcp-${triple}.exe`
-  : `em-master-mcp-${triple}`;
+  ? `ymail-mcp-${triple}.exe`
+  : `ymail-mcp-${triple}`;
 const outPath = join(outDir, outName);
 copyFileSync(builtPath, outPath);
 console.log(`[mcp-sidecar] 已生成 ${outPath}`);

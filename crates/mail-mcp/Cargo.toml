@@ -10,7 +10,7 @@ authors.workspace = true
 workspace = true
 
 [[bin]]
-name = "em-master-mcp"
+name = "ymail-mcp"
 path = "src/main.rs"
 
 [dependencies]

@@ -40,7 +40,7 @@ pub struct ProbeReport {
 }
 
 /// 自报身份时用的客户端名字，出现在 IMAP ID 命令里。
-const IMAP_CLIENT_NAME: &str = "em-master";
+const IMAP_CLIENT_NAME: &str = "ymail";
 
 /// 一条服务器命令的应答。
 struct CommandReply {
@@ -328,10 +328,10 @@ mod tests {
                 .expect("写入失败");
             let id = read_line(&mut reader).await;
             assert!(id.starts_with("a004 ID ("), "应发出 ID 命令：{id}");
-            assert!(id.contains("\"name\" \"em-master\""));
+            assert!(id.contains("\"name\" \"ymail\""));
             reader
                 .get_mut()
-                .write_all(b"* ID (\"name\" \"em-master\")\r\na004 OK ID completed\r\n")
+                .write_all(b"* ID (\"name\" \"ymail\")\r\na004 OK ID completed\r\n")
                 .await
                 .expect("写入失败");
             let list = read_line(&mut reader).await;

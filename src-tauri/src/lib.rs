@@ -6,10 +6,16 @@
 //! 启动顺序：确定应用数据目录 → 建引擎（建库 + 跑迁移）→ 起日志 → 注册状态与命令。
 
 pub mod commands;
+pub mod compose_images;
 pub mod logging;
 pub mod mcp_commands;
 pub mod notify;
+pub mod settings;
 pub mod state;
+pub mod storage_dir;
+
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use mail_core::MailEngine;
 use tauri::menu::{Menu, MenuItem};
@@ -17,6 +23,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Manager, WindowEvent};
 
 use crate::logging::Logging;
+use crate::settings::AppSettings;
 use crate::state::AppState;
 
 /// 应用启动入口。
@@ -25,9 +32,34 @@ use crate::state::AppState;
 /// 不做静默降级（例如数据库打不开却显示一个空窗口）。
 pub fn run() {
     tauri::Builder::default()
+        // 单实例必须第一个注册：插件按注册顺序初始化，第二实例得在打开数据库之前就被拦下。
+        // 托盘常驻时再点一次图标、或再跑一次启动命令，都只把已有窗口叫出来，不再开第二个进程。
+        // 两个进程同时开同一个库，是「数据库看起来坏了」的高风险来源。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
+        // 开机启动：写进启动项的那条命令会带 --autostart，程序据此静默进托盘。
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .arg("--autostart")
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             commands::db_status,
+            commands::get_app_settings,
+            commands::set_app_settings,
+            commands::change_data_dir,
+            commands::open_data_dir,
+            commands::restart_app,
+            // 开机启动：读真实状态、写 / 删启动项。
+            commands::autostart_status,
+            commands::set_autostart,
+            commands::download_external_attachment,
+            commands::open_downloaded_file,
+            commands::open_downloaded_file_dir,
+            commands::open_external_url,
             commands::list_accounts,
             commands::create_account,
             commands::update_account,
@@ -52,6 +84,8 @@ pub fn run() {
             commands::list_inbox_messages,
             commands::list_inbox_threads,
             commands::list_thread_messages,
+            commands::set_message_read,
+            commands::set_message_flagged,
             commands::get_message_body,
             commands::download_attachment,
             commands::remember_remote_sender,
@@ -66,9 +100,31 @@ pub fn run() {
             commands::get_outbox,
             commands::delete_outbox,
             commands::search_contacts,
+            commands::list_contacts,
+            commands::contact_counts,
+            commands::create_contact,
+            commands::update_contact,
+            commands::hide_contact,
+            commands::restore_contact,
+            commands::purge_contact,
+            commands::list_contact_groups,
+            commands::create_contact_group,
+            commands::rename_contact_group,
+            commands::delete_contact_group,
+            commands::clear_auto_contacts,
+            commands::export_contacts,
+            commands::preview_contact_import,
+            commands::apply_contact_import,
             commands::get_signature,
             commands::save_signature,
             commands::send_outbox,
+            // 写信配图：本地图片、粘贴图片、截屏取图。
+            compose_images::read_inline_image,
+            compose_images::save_inline_image,
+            compose_images::open_screenshot_overlay,
+            compose_images::take_screenshot_preview,
+            compose_images::finish_screenshot,
+            compose_images::cancel_screenshot,
             commands::list_ai_providers,
             commands::save_ai_provider,
             commands::delete_ai_provider,
@@ -93,19 +149,32 @@ pub fn run() {
             mcp_commands::mcp_audit,
         ])
         .setup(|app| {
-            // 1) 应用数据目录。Windows 下形如 %APPDATA%\com.emmaster.desktop。
-            let data_dir = app
+            // 1) 默认应用数据目录。Windows 下形如 %APPDATA%\com.ymail.desktop。
+            //    设置文件固定放这里，这样改过邮件目录之后下次启动还找得到。
+            let default_dir = app
                 .path()
                 .app_data_dir()
                 .map_err(|err| format!("无法确定应用数据目录：{err}"))?;
-            std::fs::create_dir_all(&data_dir)?;
+            std::fs::create_dir_all(&default_dir)?;
 
-            // 2) 日志先就绪，初始化过程本身也能留下记录。
+            // 是不是全新安装后的第一次启动。必须在引擎建库之前算：
+            // 引擎一启动就会在默认目录里建库，建完就认不出「全新」了。
+            let first_run = crate::settings::is_first_run(&default_dir);
+
+            // 2) 读设置：邮件数据目录与附件目录都允许单独配置。
+            let mut settings = AppSettings::load(&default_dir);
+            let data_dir = settings.effective_data_dir(&default_dir);
+
+            // 3) 日志先就绪，初始化过程本身也能留下记录。
             let logging = Logging::init(data_dir.join("logs"));
 
-            // 3) 引擎：建目录、开库、跑迁移。
+            // 4) 引擎：建目录、开库、跑迁移。
             let engine = MailEngine::initialize(&data_dir)
-                .map_err(|err| format!("初始化引擎失败（数据目录 {}）：{err}", data_dir.display()))?;
+            .map_err(|err| {
+                let message = format!("初始化引擎失败（数据目录 {}）：{err}", data_dir.display());
+                tracing::error!(error = %message, "应用初始化失败，启动中止");
+                message
+            })?;
 
             let summary = engine.init_summary();
             tracing::info!(
@@ -117,10 +186,35 @@ pub fn run() {
                 "外壳初始化完成"
             );
 
-            // 4) 把引擎与摘要交给命令层；日志句柄随之进入应用状态，保证写线程存活。
-            app.manage(AppState::new(engine, logging));
+            // 5) 上次迁移后用户选了清理：等新目录的引擎完全就绪，再清旧目录。
+            //    清理成功或失败都先抹掉记录，避免以后每次启动都重复处理。
+            if let Some(old_dir) = settings.pending_cleanup_dir.clone() {
+                let outcome = storage_dir::cleanup_old_data_dir(&old_dir, &data_dir);
+                tracing::info!(
+                    old_dir = %old_dir.display(),
+                    active_dir = %data_dir.display(),
+                    removed = ?outcome.removed,
+                    skipped = ?outcome.skipped,
+                    "旧数据目录清理完成"
+                );
+                settings.pending_cleanup_dir = None;
+                if let Err(error) = settings.save(&default_dir) {
+                    tracing::error!(error = %error, "抹掉待清理记录失败");
+                }
+            }
 
-            // 5) 自动启动已启用账号的后台同步；起不来只记日志，不拦应用启动。
+            // 6) 把引擎、设置与摘要交给命令层；日志句柄随之进入应用状态，保证写线程存活。
+            let notify_enabled = Arc::new(AtomicBool::new(settings.notify_new_mail));
+            app.manage(AppState::new(
+                engine,
+                logging,
+                default_dir,
+                settings,
+                notify_enabled.clone(),
+                first_run,
+            ));
+
+            // 7) 自动启动已启用账号的后台同步；起不来只记日志，不拦应用启动。
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state = handle.state::<AppState>();
@@ -134,8 +228,21 @@ pub fn run() {
             // 6) 托盘常驻：关窗只是收起来，后台继续收信。
             setup_tray(app)?;
 
-            // 7) 新邮件提醒：后台轮询本地库，发现新未读就弹通知并通知界面刷新。
-            notify::spawn(app.handle().clone());
+            // 7) 主窗口在 tauri.conf.json 里默认不显示：
+            //    被开机启动项拉起来（参数带 --autostart）就静默进托盘，
+            //    手动双击打开才把窗口亮出来。
+            if started_by_autostart() {
+                tracing::info!("检测到 --autostart，本次静默启动，只进托盘");
+            } else {
+                show_main_window(app.handle());
+            }
+
+            // 8) 新邮件提醒：后台轮询本地库，发现新未读就弹系统通知并通知界面刷新。
+            //    通知开关由设置页控制，改了立刻生效。
+            //    先把通知里的应用名登记成「Y-Mail」，否则 Windows 会写成拉起本程序的
+            //    PowerShell（开发模式、未安装场景都这样）。
+            notify::register_notification_identity(app.handle());
+            notify::spawn(app.handle().clone(), notify_enabled);
 
             Ok(())
         })
@@ -162,7 +269,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let mut builder = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("统一收件箱")
+        .tooltip("Y-Mail")
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
             "quit" => app.exit(0),
@@ -184,6 +291,11 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     builder.build(app)?;
     tracing::info!("托盘图标已就绪");
     Ok(())
+}
+
+/// 本次进程是不是被开机启动项拉起来的：启动项里带了 --autostart。
+fn started_by_autostart() -> bool {
+    std::env::args().any(|arg| arg == "--autostart")
 }
 
 /// 显示主窗口并置前。

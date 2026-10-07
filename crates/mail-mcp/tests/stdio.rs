@@ -1,4 +1,4 @@
-//! `em-master-mcp` 的端到端测试：真拉起可执行文件，走标准输入输出。
+//! `ymail-mcp` 的端到端测试：真拉起可执行文件，走标准输入输出。
 //!
 //! 覆盖规格 Scenario 12.1（默认态连接不可用）、12.2（只读搜索可用 + 审计落库）
 //! 与 12.3（越权工具被拒），以及协议版本不匹配拒绝服务。
@@ -75,6 +75,8 @@ fn seed_data_dir() -> (tempfile::TempDir, i64, i64) {
             account_id: Some(account_id),
             folder_id: Some(folder_id),
             unread_only: false,
+            flagged_only: false,
+            folder_kind: None,
             offset: 0,
             limit: 10,
         })
@@ -89,13 +91,13 @@ fn seed_data_dir() -> (tempfile::TempDir, i64, i64) {
 
 /// 拉起可执行文件。
 fn spawn(data_dir: &std::path::Path) -> std::process::Child {
-    Command::new(env!("CARGO_BIN_EXE_em-master-mcp"))
-        .env("EM_MASTER_DATA_DIR", data_dir)
+    Command::new(env!("CARGO_BIN_EXE_ymail-mcp"))
+        .env("YMAIL_DATA_DIR", data_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("拉起 em-master-mcp")
+        .expect("拉起 ymail-mcp")
 }
 
 /// 写一行 JSON-RPC 请求。
@@ -120,11 +122,11 @@ fn 默认关闭时进程直接拒绝服务() {
     MailEngine::initialize_with_secrets(dir.path(), Arc::new(mail_core::MemorySecretStore::new()))
         .expect("初始化引擎");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_em-master-mcp"))
-        .env("EM_MASTER_DATA_DIR", dir.path())
+    let output = Command::new(env!("CARGO_BIN_EXE_ymail-mcp"))
+        .env("YMAIL_DATA_DIR", dir.path())
         .stdin(Stdio::null())
         .output()
-        .expect("运行 em-master-mcp");
+        .expect("运行 ymail-mcp");
 
     assert!(!output.status.success(), "默认关闭时进程应拒绝服务");
     let stderr = String::from_utf8_lossy(&output.stderr);

@@ -79,23 +79,23 @@ export default function McpPanel() {
 
   if (loading) {
     return (
-      <section className="panel">
+      <section className="panel" aria-busy="true">
         <h2>MCP 外部接入</h2>
-        <p className="hint">正在读取……</p>
+        <p className="hint" role="status">正在读取……</p>
       </section>
     );
   }
 
   return (
-    <section className="panel">
+    <section className="panel" aria-busy={busy}>
       <div className="panel-head">
         <h2>MCP 外部接入</h2>
-        <button type="button" onClick={() => void refresh()} disabled={busy}>
+        <button type="button" aria-busy={busy} onClick={() => void refresh()} disabled={busy}>
           刷新
         </button>
       </div>
 
-      {error && <p className="error">操作失败：{error}</p>}
+      {error && <p className="error" role="alert">操作失败：{error}</p>}
 
       {status && !status.enabled && (
         <p className="hint">
@@ -120,12 +120,13 @@ export default function McpPanel() {
                 type="button"
                 className={status.enabled ? "danger" : "primary"}
                 onClick={() => void toggle("enable")}
+                aria-busy={busy}
                 disabled={busy}
               >
                 {status.enabled ? "一键关闭 MCP" : "启用 MCP"}
               </button>
             </div>
-            <span className="hint">{status.enabled ? "当前：已启用" : "当前：未启用"}</span>
+            <span className="hint" role="status">{status.enabled ? "当前：已启用" : "当前：未启用"}</span>
           </div>
 
           <h3>写工具（默认只读）</h3>
@@ -139,11 +140,12 @@ export default function McpPanel() {
               type="button"
               className={status.writeToolsEnabled ? "danger" : undefined}
               onClick={() => void toggle("write")}
+              aria-busy={busy}
               disabled={busy || !status.enabled}
             >
               {status.writeToolsEnabled ? "关闭写工具" : "打开写工具"}
             </button>
-            <span className="hint">
+            <span className="hint" role="status">
               {status.enabled
                 ? status.writeToolsEnabled
                   ? "当前：允许建草稿"
@@ -177,8 +179,8 @@ export default function McpPanel() {
             直接粘进 Agent 的配置文件即可。数据目录环境变量名是
             <code>{status.dataDirEnv}</code>，本机数据目录：<span className="path">{status.dataDir}</span>。
             支持的协议版本：{status.protocolVersions.join("、")}。常见安装位置：按用户安装是
-            <code>%LOCALAPPDATA%\em-master</code>，机器级安装是
-            <code>C:\Program Files\em-master</code>，可执行文件都在主程序同目录。
+            <code>%LOCALAPPDATA%\Y-Mail</code>，机器级安装是
+            <code>C:\Program Files\Y-Mail</code>，可执行文件都在主程序同目录。
           </p>
           <pre className="path">{status.configExample}</pre>
 

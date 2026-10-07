@@ -298,7 +298,7 @@ mod tests {
                         } else if upper.ends_with("ID") || upper.contains(" ID ") {
                             reply(
                                 &mut reader,
-                                &format!("* ID (\"name\" \"EmMaster\")\r\n{tag} OK ID completed\r\n"),
+                                &format!("* ID (\"name\" \"YMail\")\r\n{tag} OK ID completed\r\n"),
                             )
                             .await;
                         } else if upper.contains("LIST") {

@@ -338,7 +338,7 @@ impl Store {
         let row = self
             .conn()
             .query_row(
-                "SELECT m.id, m.account_id, m.folder_id, m.uid, f.full_path
+                "SELECT m.id, m.account_id, m.folder_id, m.uid, COALESCE(NULLIF(f.server_path, ''), f.full_path)
                  FROM message m JOIN folder f ON f.id = m.folder_id
                  WHERE m.id = ?1",
                 rusqlite::params![message_id],

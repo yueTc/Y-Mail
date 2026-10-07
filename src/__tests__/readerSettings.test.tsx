@@ -15,6 +15,7 @@ vi.mock("../api", () => ({
 }));
 
 beforeEach(() => {
+  window.localStorage.clear();
   vi.mocked(api.listTrustedRemoteSenders).mockResolvedValue(["a@example.com", "b@example.com"]);
   vi.mocked(api.forgetRemoteSender).mockResolvedValue(["b@example.com"]);
 });
@@ -22,6 +23,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  window.localStorage.clear();
 });
 
 describe("读信设置的记住发件人", () => {
@@ -45,5 +47,11 @@ describe("读信设置的记住发件人", () => {
     vi.mocked(api.listTrustedRemoteSenders).mockResolvedValue([]);
     render(<ReaderSettingsPanel />);
     await screen.findByText(/还没有记住的发件人/);
+  });
+
+  it("深色模式开关不在这里，已经搬到外观分组", async () => {
+    render(<ReaderSettingsPanel />);
+    await screen.findByText("a@example.com");
+    expect(screen.queryByLabelText("深色模式")).toBeNull();
   });
 });

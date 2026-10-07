@@ -118,7 +118,7 @@ pub(crate) async fn authenticate(
 }
 
 pub(crate) async fn send_ehlo(stream: &mut Stream) -> Result<Reply, ConnectionError> {
-    let reply = send_command(stream, "EHLO em-master.local").await?;
+    let reply = send_command(stream, "EHLO ymail.local").await?;
     if reply.code != 250 {
         return Err(ConnectionError::protocol(format!(
             "服务器不接受 EHLO 问候（返回码 {}）",

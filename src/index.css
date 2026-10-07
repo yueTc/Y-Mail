@@ -1,16 +1,63 @@
 /* Wave 1 界面样式：账号与代理配置。只求可读、无远程资源。 */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
   font-size: 15px;
   line-height: 1.6;
-  --line: rgba(128, 128, 128, 0.35);
+  /* 颜色令牌：背景、面板、边框、正文、次要文字、强调色、成功、警告、危险、遮罩。 */
+  --bg: #f5f6f8;
+  --surface: #ffffff;
   --panel-bg: rgba(255, 255, 255, 0.72);
+  --panel-solid: #ffffff;
   --field-bg: rgba(255, 255, 255, 0.9);
+  --line: rgba(128, 128, 128, 0.35);
+  --border: var(--line);
+  --text: #1f2328;
+  --text-muted: #5b6470;
   --accent: #2f6fed;
+  --accent-fg: #ffffff;
   --ok: #1a7f4b;
+  --warn: #9a6700;
+  --warn-border: color-mix(in srgb, var(--warn) 45%, transparent);
+  --warn-bg: color-mix(in srgb, var(--warn) 12%, transparent);
   --danger: #b42318;
+  --danger-border: color-mix(in srgb, var(--danger) 45%, transparent);
+  --danger-bg: color-mix(in srgb, var(--danger) 10%, transparent);
+  --overlay: rgba(15, 23, 42, 0.45);
+  --shadow: 0 16px 40px rgba(15, 23, 42, 0.28);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
+  --reader-frame-bg: #ffffff;
+  /* 尺寸令牌：圆角、间距、输入高度、按钮高度、拖动条宽度。 */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --input-height: 32px;
+  --button-height: 32px;
+  --resizer-width: 8px;
+  /* 字体令牌：标题、正文、辅助文字、等宽、未读强调。 */
+  --font-title: 1.7rem;
+  --font-heading: 1.05rem;
+  --font-body: 15px;
+  --font-small: 0.85rem;
+  --font-tiny: 0.78rem;
+  --font-mono: Consolas, "Cascadia Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-unread-weight: 700;
+  /* 状态令牌：hover、focus、active、disabled、loading、error。 */
+  --state-hover-bg: color-mix(in srgb, var(--accent) 7%, transparent);
+  --state-focus-ring: color-mix(in srgb, var(--accent) 55%, transparent);
+  --state-active-bg: color-mix(in srgb, var(--accent) 16%, transparent);
+  --state-disabled-opacity: 0.5;
+  --state-loading-bg: color-mix(in srgb, var(--text) 8%, transparent);
+  --state-error-fg: var(--danger);
+  --state-error-bg: var(--danger-bg);
 }
 
 * {
@@ -20,21 +67,70 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: #f5f6f8;
-  color: #1f2328;
+  background: var(--bg);
+  color: var(--text);
 }
 
+/*
+ * 深色令牌。两种情况都算深色，下面两块内容必须保持一致：
+ * 1. 设置里明确选了「深色」——<html data-theme="dark">；
+ * 2. 设置是「跟随系统」且系统是深色——浏览器媒体查询。
+ * 明确选「浅色」时属性是 data-theme="light"，第一块会被排除掉，压住系统深色。
+ */
 @media (prefers-color-scheme: dark) {
-  body {
-    background: #1c1f23;
-    color: #e6e8ea;
-  }
-  :root {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #1c1f23;
+    --surface: #23272c;
     --panel-bg: rgba(255, 255, 255, 0.04);
+    --panel-solid: #23272c;
     --field-bg: rgba(255, 255, 255, 0.06);
+    --line: rgba(160, 170, 185, 0.28);
+    --border: var(--line);
+    --text: #e6e8ea;
+    --text-muted: #a9b1ba;
+    --accent: #6b9dff;
+    --accent-fg: #10131a;
     --ok: #6fd39b;
+    --warn: #e2b04a;
     --danger: #ff9c92;
+    --overlay: rgba(6, 8, 12, 0.66);
+    --shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --reader-frame-bg: #1b1f2a;
+    --state-hover-bg: color-mix(in srgb, var(--accent) 14%, transparent);
+    --state-focus-ring: color-mix(in srgb, var(--accent) 70%, transparent);
+    --state-active-bg: color-mix(in srgb, var(--accent) 22%, transparent);
+    --state-disabled-opacity: 0.45;
+    --state-loading-bg: color-mix(in srgb, var(--text) 12%, transparent);
   }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1c1f23;
+  --surface: #23272c;
+  --panel-bg: rgba(255, 255, 255, 0.04);
+  --panel-solid: #23272c;
+  --field-bg: rgba(255, 255, 255, 0.06);
+  --line: rgba(160, 170, 185, 0.28);
+  --border: var(--line);
+  --text: #e6e8ea;
+  --text-muted: #a9b1ba;
+  --accent: #6b9dff;
+  --accent-fg: #10131a;
+  --ok: #6fd39b;
+  --warn: #e2b04a;
+  --danger: #ff9c92;
+  --overlay: rgba(6, 8, 12, 0.66);
+  --shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --reader-frame-bg: #1b1f2a;
+  --state-hover-bg: color-mix(in srgb, var(--accent) 14%, transparent);
+  --state-focus-ring: color-mix(in srgb, var(--accent) 70%, transparent);
+  --state-active-bg: color-mix(in srgb, var(--accent) 22%, transparent);
+  --state-disabled-opacity: 0.45;
+  --state-loading-bg: color-mix(in srgb, var(--text) 12%, transparent);
 }
 
 .shell {
@@ -96,14 +192,14 @@ button:hover:not(:disabled) {
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: var(--state-disabled-opacity);
   cursor: not-allowed;
 }
 
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   font-weight: 600;
 }
 
@@ -113,7 +209,8 @@ button.danger {
 }
 
 input,
-select {
+select,
+textarea {
   font: inherit;
   padding: 5px 8px;
   border: 1px solid var(--line);
@@ -124,8 +221,9 @@ select {
 }
 
 input:focus,
-select:focus {
-  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+select:focus,
+textarea:focus {
+  outline: 2px solid var(--state-focus-ring);
   outline-offset: 1px;
 }
 
@@ -144,7 +242,7 @@ select:focus {
 
 .error {
   margin: 6px 0;
-  color: var(--danger);
+  color: var(--state-error-fg);
 }
 
 .path {
@@ -274,6 +372,32 @@ select:focus {
   margin-bottom: 6px;
 }
 
+/* 密钥输入一行：输入框占满，眼睛按钮固定在右边。 */
+.secret-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.secret-input-row input {
+  flex: 1;
+}
+
+/* 眼睛按钮：沿用图标按钮的尺寸，只露出眼睛图标。 */
+.secret-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 30px;
+  padding: 2px 6px;
+}
+
+.secret-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
 .form-actions {
   display: flex;
   gap: 8px;
@@ -348,17 +472,17 @@ select:focus {
 .tab.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   font-weight: 600;
 }
 
 .inbox-layout {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) minmax(320px, 460px);
-  gap: 14px;
+  /* 列宽由 InboxPanel 内联样式给出：邮箱栏 / 拖动条 / 列表 / 拖动条 / 内容栏。 */
+  gap: 0;
   align-items: stretch;
-  height: calc(100vh - 190px);
-  min-height: 420px;
+  height: 100%;
+  min-height: 0;
 }
 
 .inbox-sidebar,
@@ -395,7 +519,7 @@ select:focus {
 }
 
 .sidebar-item.active {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: var(--state-active-bg);
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
@@ -431,10 +555,10 @@ select:focus {
   flex: none;
   min-width: 20px;
   padding: 0 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent);
-  color: #fff;
-  font-size: 0.76rem;
+  color: var(--accent-fg);
+  font-size: var(--font-tiny);
   font-weight: 600;
   text-align: center;
   line-height: 1.6;
@@ -492,7 +616,7 @@ select:focus {
 }
 
 .inbox-row:hover {
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  background: var(--state-hover-bg);
 }
 
 .inbox-row[data-read="false"] .inbox-row-sender,
@@ -549,6 +673,33 @@ select:focus {
   font-size: 0.85rem;
 }
 
+/* 红旗按钮：列表行与读信页共用；空星按当前文字色淡显，标红用红色实心。 */
+.flag-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.flag-button:hover,
+.flag-button:focus-visible {
+  background: var(--state-hover-bg);
+}
+
+.flag-button.flagged {
+  color: #d93a3a;
+}
+
 .inbox-row-sub {
   font-size: 0.8rem;
   opacity: 0.7;
@@ -568,20 +719,6 @@ select:focus {
   opacity: 0.65;
 }
 
-@media (max-width: 900px) {
-  .inbox-layout {
-    grid-template-columns: 190px minmax(0, 1fr);
-    height: auto;
-  }
-
-  .inbox-scroll {
-    height: 60vh;
-  }
-
-  .inbox-reader {
-    display: none;
-  }
-}
 /* ===== 读信窗格（Wave 4） ===== */
 
 .inbox-row-selected {
@@ -629,18 +766,26 @@ select:focus {
   word-break: break-word;
 }
 
-.reader-theme {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.78rem;
-  opacity: 0.85;
+.reader-flag {
+  margin-left: auto;
 }
 
-.reader-theme select {
-  font-size: 0.78rem;
-  padding: 1px 4px;
+/* 外观设置：深色模式作用于整个界面，这里是设置页里的选择行。 */
+.appearance-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 280px;
+  font-size: 0.88rem;
+}
+
+.appearance-setting > span {
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.appearance-setting .hint {
+  margin: 0;
 }
 
 .reader-meta {
@@ -656,7 +801,17 @@ select:focus {
   word-break: break-all;
 }
 
+.reader-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 正文区自己排成竖向弹性容器：正文框吃掉剩余高度，横幅之类的小块按内容高。 */
 .reader-content {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -670,9 +825,9 @@ select:focus {
   gap: 8px;
   margin-bottom: 10px;
   padding: 8px 10px;
-  border: 1px solid #d9a441;
-  border-radius: 8px;
-  background: rgba(217, 164, 65, 0.12);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-md);
+  background: var(--warn-bg);
   font-size: 0.84rem;
   line-height: 1.5;
 }
@@ -708,17 +863,23 @@ select:focus {
   justify-content: space-between;
   gap: 12px;
   padding: 6px 10px;
-  border: 1px solid rgba(128, 128, 128, 0.3);
+  border: 1px solid var(--line);
   border-radius: 6px;
 }
 
+/*
+ * 正文框高度跟着读信区剩余空间走：有附件时让开附件栏（含拖动条），
+ * 没附件时直接占满整块。高度不再写死，窗口越大正文越舒展。
+ * 最小 120px 是兜底：附件栏已经保证正文区不低于 180px（含内边距），
+ * 所以正常情况不会撑出外层滚动条。
+ */
 .reader-frame {
   width: 100%;
-  min-height: 260px;
-  height: 46vh;
+  flex: 1 1 auto;
+  min-height: 120px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fff;
+  border-radius: var(--radius-md);
+  background: var(--reader-frame-bg);
 }
 
 .reader-dark .reader-frame {
@@ -726,8 +887,57 @@ select:focus {
   border-color: rgba(255, 255, 255, 0.14);
 }
 
+.reader-resizer {
+  position: relative;
+  display: flex;
+  flex: 0 0 8px;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 8px;
+  cursor: row-resize;
+  touch-action: none;
+  background: transparent;
+}
+
+.reader-resizer:hover,
+.reader-resizer:focus-visible {
+  background: var(--state-hover-bg);
+}
+
+.reader-resizer:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.reader-resizer-grip {
+  width: 48px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.reader-resizer:hover .reader-resizer-grip,
+.reader-resizer:focus-visible .reader-resizer-grip {
+  background: var(--accent);
+}
+
 .reader-attachments {
   margin-top: 14px;
+}
+
+.reader-attachments-docked {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  min-height: 0;
+  margin-top: 0;
+  padding: 10px 14px 14px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+}
+
+.reader-dark .reader-attachments-docked {
+  border-top-color: rgba(255, 255, 255, 0.14);
 }
 
 .reader-attachments h4 {
@@ -758,8 +968,8 @@ select:focus {
 }
 
 .attachment-danger {
-  border-color: #d64545;
-  background: rgba(214, 69, 69, 0.1);
+  border-color: var(--danger);
+  background: var(--danger-bg);
 }
 
 .attachment-info {
@@ -782,13 +992,35 @@ select:focus {
 }
 
 .attachment-warning {
-  color: #d64545;
+  color: var(--danger);
   font-weight: 600;
 }
 
 .attachment-download {
   flex: none;
   font-size: 0.8rem;
+}
+
+/* 附件行右侧的动作区：下载、打开文件、打开所在位置横着排，挤了就换行。 */
+.attachment-actions {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 62%;
+}
+
+.attachment-actions button {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+/* 正文里写着到期时间已经过去的超大附件。 */
+.attachment-expired {
+  margin-left: 6px;
+  color: var(--danger);
+  font-weight: 600;
 }
 /* ===== 内嵌图片（cid:）加载面板 ===== */
 .reader-inline-images {
@@ -979,30 +1211,49 @@ select:focus {
   align-self: flex-start;
 }
 
-.compose-attachments {
+/* 已添加的附件：夹在工具栏与正文之间，一眼能看出挂了哪些文件。 */
+.rte-attachments {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: 6px;
-}
-
-.compose-attachment-list {
-  list-style: none;
   margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  padding: 6px 8px;
+  list-style: none;
+  background: var(--field-bg);
+  border-right: 1px solid var(--line);
+  border-left: 1px solid var(--line);
 }
 
-.compose-attachment-list li {
+.rte-attachments li {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 8px;
+  gap: 6px;
+  padding: 2px 4px 2px 8px;
+  font-size: 0.85rem;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  font-size: 0.9rem;
+  border-radius: 999px;
+}
+
+.rte-attachment-name {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rte-attachments button {
+  min-height: 20px;
+  padding: 0 6px;
+  font-size: 0.78rem;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.rte-attachments button:hover:not(:disabled) {
+  border-color: var(--line);
 }
 
 .compose-actions {
@@ -1072,12 +1323,6 @@ select:focus {
   font-size: 0.82rem;
 }
 
-@media (max-width: 900px) {
-  .inbox-reader {
-    display: block;
-    grid-column: 1 / -1;
-  }
-}
 
 /* OAuth2 高级设置：默认折叠，普通用户不用管客户端编号。 */
 .advanced-settings {
@@ -1096,4 +1341,1099 @@ select:focus {
 .advanced-settings label {
   display: block;
   margin-top: 10px;
+}
+
+/* ===== 双模式工作区外壳（最左设置栏 + 收件箱/设置切换） ===== */
+
+.workspace {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.workspace-rail {
+  flex: 0 0 60px;
+  width: 60px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px;
+  border-right: 1px solid var(--line);
+  background: var(--panel-bg);
+}
+
+.rail-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 8px 2px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+}
+
+.rail-button:hover:not(.active) {
+  background: var(--state-hover-bg);
+}
+
+.rail-button.active {
+  background: var(--state-active-bg);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+}
+
+.rail-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.rail-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.rail-label {
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+.workspace-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-pane {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-pane[hidden] {
+  display: none;
+}
+
+/* ===== 可拖动分栏 ===== */
+
+.pane-resizer {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;
+}
+
+.pane-resizer:hover,
+.pane-resizer:focus-visible {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.pane-resizer:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.pane-resizer-grip {
+  width: 2px;
+  height: 44px;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.pane-resizer:hover .pane-resizer-grip,
+.pane-resizer:focus-visible .pane-resizer-grip {
+  background: var(--accent);
+}
+
+/* ===== 单栏设置页 ===== */
+
+.settings-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  height: 100%;
+  padding: 24px 28px 48px;
+  overflow-y: auto;
+}
+
+.settings-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-head .subtitle {
+  margin: 4px 0 0;
+}
+
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-group-title {
+  margin: 0;
+  font-size: 1.05rem;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-group .panel {
+  margin-bottom: 0;
+}
+
+/* 设置页表单：一个字段一行，标签在上、说明在下。 */
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.88rem;
+}
+
+.settings-form .field > span {
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.settings-form .field input {
+  width: 100%;
+  font-family: Consolas, "Cascadia Mono", monospace;
+}
+
+.settings-form .field .hint {
+  margin: 0;
+}
+
+.settings-form .status {
+  margin-top: 4px;
+}
+
+/* ===== 通讯录页（三栏：分组栏 / 列表栏 / 详情栏） ===== */
+
+.contacts-workspace {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.contacts-groups,
+.contacts-list-pane,
+.contacts-detail {
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  background: var(--panel-bg);
+}
+
+.contacts-groups {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.contacts-groups-head {
+  padding: 12px 12px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.contacts-search {
+  width: 100%;
+}
+
+.contacts-group-list {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.contacts-group-list li {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.contacts-group {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.contacts-group:hover:not(.active) {
+  background: var(--state-hover-bg);
+}
+
+.contacts-group.active {
+  background: var(--state-active-bg);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.contacts-group-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.contacts-group-count {
+  flex: 0 0 auto;
+  font-size: 0.82rem;
+  opacity: 0.7;
+}
+
+.contacts-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-bg);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.2);
+}
+
+.contacts-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.contacts-menu-item:hover {
+  background: var(--state-hover-bg);
+}
+
+.contacts-menu-item.danger {
+  color: var(--danger);
+}
+
+.contacts-menu-parent {
+  position: relative;
+  cursor: default;
+}
+
+.contacts-submenu {
+  position: absolute;
+  top: -4px;
+  left: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 150px;
+  max-height: 240px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-bg);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.2);
+  overflow-y: auto;
+}
+
+.contacts-menu-empty {
+  display: block;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  opacity: 0.6;
+}
+
+.contacts-groups-foot {
+  position: relative;
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.contacts-groups-foot button {
+  flex: 1 1 auto;
+}
+
+.contacts-export-menu {
+  position: absolute;
+  bottom: 48px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-bg);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+  z-index: 5;
+}
+
+.contacts-list-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.contacts-list-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.contacts-list-title {
+  flex: 1 1 auto;
+  font-weight: 600;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.contacts-batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--state-hover-bg);
+  font-size: 0.88rem;
+}
+
+.contacts-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.contacts-list-inner {
+  position: relative;
+  width: 100%;
+}
+
+.contacts-section {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--line);
+}
+
+.contacts-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.contacts-row:hover {
+  background: var(--state-hover-bg);
+}
+
+.contacts-row.selected {
+  background: var(--state-active-bg);
+}
+
+.contacts-row-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.contacts-row-name {
+  max-width: 100%;
+  font-weight: 600;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.contacts-row-email {
+  max-width: 100%;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 0.82rem;
+  opacity: 0.72;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.contacts-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px 32px;
+  border-right: 0;
+  overflow-y: auto;
+}
+
+.contacts-card h2 {
+  margin: 0 0 4px;
+}
+
+.contacts-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.contacts-meta dt {
+  opacity: 0.6;
+}
+
+.contacts-meta dd {
+  margin: 0;
+}
+
+.contacts-note {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field-bg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.contacts-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.contacts-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.88rem;
+}
+
+.contacts-form .field > span {
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.contacts-form textarea {
+  resize: vertical;
+}
+
+.contacts-problems {
+  max-height: 160px;
+  margin: 0;
+  padding-left: 18px;
+  overflow-y: auto;
+  font-size: 0.86rem;
+  opacity: 0.85;
+}
+
+/* ===== 简单弹窗外壳（导入预览用） ===== */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--overlay);
+  z-index: 40;
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(520px, 100%);
+  max-height: 80vh;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-bg);
+  overflow-y: auto;
+}
+
+.modal h2 {
+  margin: 0;
+}
+/* ===== 键盘焦点与深色补齐 ===== */
+
+button:focus-visible,
+.inbox-row:focus-visible,
+.sidebar-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* 深色令牌统一放在文件顶部的 :root 里，这里不再重复覆盖。 */
+
+/* ===== R13 / R14：深色与组件纪律补齐 ===== */
+
+/* 只给读屏用：视觉上藏起来，辅助技术仍然读得到。 */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 写信标题旁的「草稿」标记：低调，深色下也看得清。 */
+.compose-draft-badge {
+  margin-left: var(--space-2);
+  padding: 1px 8px;
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-pill);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: var(--font-tiny);
+  font-weight: 600;
+  line-height: 1.5;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+/* 通用小标签：跟随文字色和边框令牌，深色下不发白。 */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--field-bg);
+  color: var(--text-muted);
+  font-size: var(--font-tiny);
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.badge.danger {
+  color: var(--danger);
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+
+/* 工具栏同步状态：进行中 / 暂停 / 出错三种状态颜色区分开。 */
+.sync-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--field-bg);
+  color: var(--text-muted);
+  font-size: var(--font-tiny);
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.sync-badge.syncing {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.sync-badge.paused {
+  color: var(--text-muted);
+  border-color: color-mix(in srgb, var(--text-muted) 45%, transparent);
+  background: var(--state-loading-bg);
+}
+
+.sync-badge.danger {
+  color: var(--danger);
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+
+/* 同步面板：每行一张小卡片，信息和按钮分开排。 */
+.sync-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
+}
+
+.sync-row + .sync-row {
+  margin-top: var(--space-2);
+}
+
+.sync-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.sync-line strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-small);
+}
+
+/* 小工具栏：一排按钮不要挤在一起。 */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* 按钮和输入框用尺寸令牌兜底，深浅主题下高度一致。 */
+button {
+  min-height: var(--button-height);
+}
+
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  min-height: var(--input-height);
+}
+
+/* 禁用态与占位文字：深浅两套主题都看得清。 */
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: var(--state-disabled-opacity);
+  cursor: not-allowed;
+}
+
+/* 拖动条：hover / focus 走状态令牌，深色下不会发亮。 */
+.pane-resizer:hover,
+.pane-resizer:focus-visible {
+  background: var(--state-hover-bg);
+}
+
+/* 筛选器与工具栏：底色和分隔线跟随令牌。 */
+.inbox-search,
+.inbox-toolbar {
+  border-bottom-color: var(--line);
+}
+
+.inbox-search select,
+.inbox-toolbar select {
+  background: var(--field-bg);
+  border-color: var(--line);
+}
+
+/* 附件区：普通和危险两种状态在深色下都有清晰底色。 */
+.attachment-item {
+  background: var(--field-bg);
+  border-color: var(--line);
+}
+
+.attachment-danger {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.rte-attachments li,
+.compose-outbox-item {
+  background: var(--field-bg);
+}
+
+/* 空状态：用次要文字色，深色下不发灰。 */
+.inbox-empty,
+.reader-empty {
+  color: var(--text-muted);
+}
+
+/* ===== 写信富文本编辑器（TipTap）：工具栏 + 正文区 ===== */
+
+.rte {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.rte-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: var(--field-bg);
+}
+
+.rte-toolbar button {
+  min-height: 26px;
+  padding: 2px 8px;
+  font-size: 0.85rem;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.rte-toolbar button:hover:not(:disabled) {
+  border-color: var(--line);
+}
+
+.rte-toolbar button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.rte-menu-wrap {
+  position: relative;
+}
+
+/* 工具栏里的分组竖线。 */
+.rte-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--line);
+}
+
+/* 当前生效的格式按钮（比如已经加粗了）。 */
+.rte-toolbar button.is-active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: var(--accent);
+}
+
+/* 背景色按钮上的字母：底色就是当前背景色。 */
+.rte-highlight-letter {
+  padding: 0 3px;
+  font-weight: 600;
+  line-height: 1.1;
+  border-radius: 2px;
+}
+
+/* 图标按钮（格式刷 / 清除格式）：名字靠 title 在鼠标悬停时显示。 */
+.rte-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  padding: 2px 6px;
+}
+
+.rte-icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* 格式刷开着的时候，正文区光标换成「复制格式」的样子。 */
+.rte-editor.brush-active .rte-content {
+  cursor: copy;
+}
+
+.rte-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 120px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.rte-menu button {
+  text-align: left;
+  white-space: nowrap;
+}
+
+.rte-color-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.rte-color-letter {
+  padding-bottom: 1px;
+  font-weight: 600;
+  line-height: 1;
+  border-bottom: 3px solid currentColor;
+}
+
+.rte-caret {
+  font-size: 0.7rem;
+}
+
+.rte-colors {
+  gap: 4px;
+  min-width: 0;
+  padding: 8px;
+}
+
+.rte-color-row {
+  display: flex;
+  gap: 4px;
+}
+
+.rte-swatch {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.rte-swatch.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.rte-swatch:disabled {
+  border-style: dashed;
+  cursor: default;
+}
+
+.rte-recent-title {
+  margin: 6px 0 0;
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+/* 有文件拖在写信窗格上：正文区亮起来当落点提示。 */
+.rte-editor.drop-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.rte-editor {
+  max-height: 460px;
+  overflow-y: auto;
+  background: var(--field-bg);
+  border: 1px solid var(--line);
+  border-radius: 0 0 8px 8px;
+}
+
+.rte-content {
+  min-height: 180px;
+  padding: 8px 10px;
+  outline: none;
+}
+
+.rte-content p {
+  margin: 0 0 8px;
+}
+
+.rte-content img {
+  max-width: 100%;
+  height: auto;
+}
+
+.rte-content a {
+  color: var(--accent);
+}
+
+.rte-content table {
+  width: 100%;
+  margin: 8px 0;
+  border-collapse: collapse;
+}
+
+.rte-content th,
+.rte-content td {
+  min-width: 40px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+}
+
+.rte-content blockquote {
+  margin: 8px 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--line);
+}
+
+.rte-content ul,
+.rte-content ol {
+  padding-left: 22px;
+}
+
+.rte-error {
+  margin: 4px 0 0;
+}
+
+/* ===== 截图叠加窗：铺满整块屏，背景是拍下来的冻结图 ===== */
+
+body.screenshot-body {
+  background: transparent;
+}
+
+.screenshot-overlay {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  cursor: crosshair;
+  background-color: #111;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  user-select: none;
+}
+
+.screenshot-mask {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+.screenshot-rect {
+  position: absolute;
+  border: 1px solid #4da3ff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+.screenshot-size {
+  position: absolute;
+  padding: 1px 6px;
+  color: #fff;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  background: rgba(0, 0, 0, 0.65);
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.screenshot-hint {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  margin: 0;
+  padding: 4px 10px;
+  color: #fff;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  background: rgba(0, 0, 0, 0.65);
+  border-radius: 999px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.screenshot-error {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  margin: 0;
+  padding: 4px 10px;
+  color: #fff;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  background: rgba(180, 35, 24, 0.9);
+  border-radius: 6px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+/* ===== 首次启动向导：让用户先定邮件数据放哪 ===== */
+
+.first-run {
+  width: min(560px, 100%);
+}
+
+.first-run p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.first-run-default {
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.first-run-default code {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  font-size: var(--font-tiny);
+}
+
+.first-run-error {
+  color: var(--danger);
 }

@@ -33,7 +33,7 @@ const GLOBAL_MODE_LABELS: Record<GlobalProxyMode, string> = {
   custom: "自定义代理",
 };
 
-const DEFAULT_TARGET = "www.baidu.com:443";
+const DEFAULT_TARGET = "www.google.com:443";
 
 function emptyForm(): FormState {
   return {
@@ -229,7 +229,7 @@ export default function ProxyPanel({ onChanged }: Props) {
   }
 
   return (
-    <section className="panel">
+    <section className="panel" aria-busy={proxies === null || busy !== null}>
       <div className="panel-head">
         <h2>代理设置</h2>
         {form === null && (
@@ -239,8 +239,8 @@ export default function ProxyPanel({ onChanged }: Props) {
         )}
       </div>
 
-      {error && <p className="error">{error}</p>}
-      {notice && <p className="notice">{notice}</p>}
+      {error && <p className="error" role="alert">{error}</p>}
+      {notice && <p className="notice" role="status">{notice}</p>}
 
       <div className="global-row">
         <label>
@@ -272,11 +272,11 @@ export default function ProxyPanel({ onChanged }: Props) {
             </select>
           </label>
         )}
-        <button type="button" onClick={() => void handleSaveGlobal()} disabled={busy !== null}>
+        <button type="button" aria-busy={busy === "global"} onClick={() => void handleSaveGlobal()} disabled={busy !== null}>
           {busy === "global" ? "保存中……" : "保存全局策略"}
         </button>
         {global && (
-          <span className="hint">
+          <span className="hint" role="status">
             当前生效：{GLOBAL_MODE_LABELS[global.mode]}
             {global.mode === "custom" ? `（#${global.proxyId ?? "?"}）` : ""}
           </span>
@@ -296,7 +296,7 @@ export default function ProxyPanel({ onChanged }: Props) {
       </div>
 
       {proxies === null ? (
-        <p className="hint">正在读取代理……</p>
+        <p className="hint" role="status">正在读取代理……</p>
       ) : proxies.length === 0 ? (
         <p className="hint">还没有自定义代理。全局策略可以先选「跟随系统」或「直连」。</p>
       ) : (
@@ -323,6 +323,7 @@ export default function ProxyPanel({ onChanged }: Props) {
                 <button
                   type="button"
                   onClick={() => void handleTest(proxy)}
+                  aria-busy={busy === `test-${proxy.id}`}
                   disabled={busy !== null}
                 >
                   {busy === `test-${proxy.id}` ? "测试中……" : "测试"}
@@ -331,6 +332,7 @@ export default function ProxyPanel({ onChanged }: Props) {
                   type="button"
                   className="danger"
                   onClick={() => void handleDelete(proxy)}
+                  aria-busy={busy === `delete-${proxy.id}`}
                   disabled={busy !== null}
                 >
                   {busy === `delete-${proxy.id}` ? "删除中……" : "删除"}
@@ -429,7 +431,7 @@ export default function ProxyPanel({ onChanged }: Props) {
           )}
 
           <div className="form-actions">
-            <button type="submit" className="primary" disabled={busy !== null}>
+            <button type="submit" className="primary" aria-busy={busy === "save"} disabled={busy !== null}>
               {busy === "save" ? "保存中……" : "保存"}
             </button>
             <button

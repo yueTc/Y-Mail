@@ -1,4 +1,4 @@
-# em-master 用户手册（0.1.0）
+# Y-Mail 用户手册（0.1.0）
 
 本地优先的多邮箱统一收件箱客户端。邮件、附件和密钥都留在你自己电脑上；AI 与翻译默认关闭，每次外发都要你点头。
 
@@ -10,8 +10,8 @@
 
 | 安装包 | 适合谁 | 说明 |
 |---|---|---|
-| `em-master_0.1.0_x64-setup.exe`（NSIS） | 大多数个人用户 | 默认装到当前用户目录，不需要管理员权限；安装时会自带 `em-master-mcp.exe` |
-| `em-master_0.1.0_x64_en-US.msi`（MSI） | 需要统一部署的机器 | 走标准 Windows 安装程序，便于批量分发 |
+| `ymail_0.1.0_x64-setup.exe`（NSIS） | 大多数个人用户 | 默认装到当前用户目录，不需要管理员权限；安装时会自带 `ymail-mcp.exe` |
+| `ymail_0.1.0_x64_en-US.msi`（MSI） | 需要统一部署的机器 | 走标准 Windows 安装程序，便于批量分发 |
 
 安装前请确认：
 
@@ -24,9 +24,9 @@
 
 | 内容 | 位置 |
 |---|---|
-| 数据库（含邮件、附件元数据） | `%APPDATA%\com.emmaster.desktop\em-master.db` |
-| 日志 | `%APPDATA%\com.emmaster.desktop\logs\em-master.log.<日期>` |
-| 下载的附件 | `%APPDATA%\com.emmaster.desktop\downloads\` |
+| 数据库（含邮件、附件元数据） | `%APPDATA%\com.ymail.desktop\ymail.db` |
+| 日志 | `%APPDATA%\com.ymail.desktop\logs\ymail.log.<日期>` |
+| 下载的附件 | `%APPDATA%\com.ymail.desktop\downloads\` |
 | 凭据（授权码 / OAuth 令牌 / AI 密钥） | Windows 凭据管理器（不是文件，谁也不许拷出来） |
 
 日志只写本机，不上传任何地方。
@@ -161,8 +161,8 @@ OAuth2 需要你自己在服务商后台注册一个「桌面应用」，拿到*
 MCP 是让外部 Agent（Codex / Claude Desktop / Cursor 等）只读地查你本机邮件的一种本地协议。它**默认关闭**，只走标准输入输出，**不监听任何网络端口**。
 
 1. 在「账号与代理」页签找到「MCP 外部接入」，先点「启用 MCP」。
-2. 界面会生成一段配置示例，`command` 指向安装目录里的 `em-master-mcp.exe`，`env.EM_MASTER_DATA_DIR` 指向应用数据目录。把这段填进对应 Agent 的配置文件。
-   - 典型安装位置：当前用户安装是 `%LOCALAPPDATA%\em-master`，机器级安装是 `C:\Program Files\em-master`。以界面给出的实际路径为准。
+2. 界面会生成一段配置示例，`command` 指向安装目录里的 `ymail-mcp.exe`，`env.YMAIL_DATA_DIR` 指向应用数据目录。把这段填进对应 Agent 的配置文件。
+   - 典型安装位置：当前用户安装是 `%LOCALAPPDATA%\Y-Mail`，机器级安装是 `C:\Program Files\Y-Mail`。以界面给出的实际路径为准。
 3. 只读工具（一直可用）：`list_accounts`、`list_folders`、`search_messages`、`get_message`、`get_thread`。
 4. 写工具（`create_draft`，只能建草稿，绝不发送）默认关闭，需要单独点「打开写工具」。**发送类工具不存在**，直接调用会被拒绝。
 5. 每次调用都会在本机 `mcp_audit` 表留一条审计（工具名、账号范围、参数哈希、状态），**不含正文与凭据**。
@@ -189,10 +189,10 @@ MCP 是让外部 Agent（Codex / Claude Desktop / Cursor 等）只读地查你�
 | OAuth2 授权失败 | 客户端编号与回调地址 | 检查服务商后台的回环地址登记；确认应用类型是桌面 / 公共客户端 |
 | 同步卡住或没新邮件 | 同步面板的状态 | 点「同步这个账号」重试；看日志里的错误码 |
 | 搜索搜不到老邮件 | 历史还没补齐 | 等后台补齐，或直接搜（会触发按需深拉） |
-| 想彻底重来 | — | 退出应用，备份后删除 `%APPDATA%\com.emmaster.desktop\em-master.db*`；凭据要在 Windows 凭据管理器里手工删（名称前缀 `com.emmaster.desktop`） |
+| 想彻底重来 | — | 退出应用，备份后删除 `%APPDATA%\com.ymail.desktop\ymail.db*`；凭据要在 Windows 凭据管理器里手工删（名称前缀 `com.ymail.desktop`） |
 | AI 调用报错 | 站点地址 / 密钥 / 模型 | 在设置里点「测试连接」和「拉取模型」；非本机站点必须 HTTPS |
 
-日志在 `%APPDATA%\com.emmaster.desktop\logs\`，只在本机，不会上传。
+日志在 `%APPDATA%\com.ymail.desktop\logs\`，只在本机，不会上传。
 
 ---
 

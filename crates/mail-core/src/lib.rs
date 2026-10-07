@@ -9,6 +9,8 @@ pub mod accounts;
 pub mod ai;
 pub mod checks;
 pub mod compose;
+pub mod contacts;
+pub mod download;
 pub mod engine;
 pub mod inbox;
 pub mod mcp;
@@ -25,6 +27,12 @@ pub use ai::{
 };
 pub use checks::ConnectionReport;
 pub use compose::{ComposeAttachment, ComposeParticipant, DraftSeed, OutboxItem, SendOutcome};
+pub use contacts::{
+    ContactCounts, ContactExport, ContactExportKind, ContactImportEntry, ContactImportMode,
+    ContactImportOutcome, ContactImportPreview, ContactProblem, CONTACT_IMPORT_MAX_BYTES,
+    CONTACT_IMPORT_MAX_ENTRIES, CONTACT_IMPORT_MAX_PROBLEMS,
+};
+pub use download::SavedExternalAttachment;
 pub use engine::{EngineError, EngineInit, MailEngine, KEYRING_SERVICE};
 pub use inbox::{InboxMessagePage, InboxThreadPage};
 pub use mcp::{
@@ -42,13 +50,14 @@ pub use search::DeepSearchPage;
 pub use mail_mime::decode_encoded_words;
 pub use mail_store::{
     AccountInboxSummary, AiFunction, AiModelMapEntry, AiProviderKind, AiThinkingLevel, AttachmentState,
-    BodyState, InboxFolder, InboxMessage, InboxQuery, InboxThread, McpAuditRecord, MessageLocation,
-    NewAiAudit, NewAiProvider, NewOutbox, OutboxKind, OutboxState, SearchHit, SearchPage, SearchQuery,
-    SnippetSegment, StoredAiAudit, StoredAiCache, StoredAiProvider, StoredAttachment, StoredContact,
+    BodyState, ContactDraft, ContactImportRow, ContactImportStats, ContactScope, ContactSource, InboxFolder,
+    InboxMessage, InboxQuery, InboxThread, McpAuditRecord, MessageLocation, NewAiAudit, NewAiProvider,
+    NewOutbox, OutboxKind, OutboxState, SearchHit, SearchPage, SearchQuery, SnippetSegment, Store,
+    StoredAiAudit, StoredAiCache, StoredAiProvider, StoredAttachment, StoredContact, StoredContactGroup,
     StoredOutbox, StoredSignature,
 };
 pub use paths::SqlitePaths;
-pub use secrets::{KeyringSecretStore, MemorySecretStore, SecretStore, SecretStoreError};
+pub use secrets::{ChunkedSecretStore, KeyringSecretStore, MemorySecretStore, SecretStore, SecretStoreError};
 pub use sync::{AccountSyncStatus, SyncConfig, SyncService, SyncState};
 
 /// 本 crate 的用途标识，供工作区自检与日志使用。

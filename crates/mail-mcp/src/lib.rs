@@ -16,14 +16,14 @@ use mail_core::{MailEngine, McpDraftInput, McpError, McpRecipient, MCP_READ_TOOL
 use serde_json::{json, Value};
 
 /// 数据目录环境变量名：外部 Agent 的配置里把它指到应用的数据库目录。
-pub const DATA_DIR_ENV: &str = "EM_MASTER_DATA_DIR";
+pub const DATA_DIR_ENV: &str = "YMAIL_DATA_DIR";
 /// Windows 上 Tauri 的应用标识（与 src-tauri 的 tauri.conf.json 保持一致）。
-pub const APP_IDENTIFIER: &str = "com.emmaster.desktop";
+pub const APP_IDENTIFIER: &str = "com.ymail.desktop";
 
 /// JSON-RPC 2.0 版本串。
 const JSONRPC: &str = "2.0";
 /// 本服务端名（回给 Agent 的 serverInfo）。
-pub const SERVER_NAME: &str = "em-master-mcp";
+pub const SERVER_NAME: &str = "ymail-mcp";
 /// 本服务端版本。
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -396,7 +396,7 @@ impl McpServer {
     }
 }
 
-/// 解析数据目录：优先环境变量；Windows 上回退到 `%APPDATA%\com.emmaster.desktop`。
+/// 解析数据目录：优先环境变量；Windows 上回退到 `%APPDATA%\com.ymail.desktop`。
 pub fn resolve_data_dir() -> Result<std::path::PathBuf, String> {
     if let Ok(value) = std::env::var(DATA_DIR_ENV) {
         if !value.trim().is_empty() {

@@ -6,9 +6,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import ComposePanel from "../ComposePanel";
+import ComposePanel, { mergeRecipients } from "../ComposePanel";
 import type { AccountInboxSummary, OutboxItem, Signature } from "../api";
 import { api } from "../api";
+
+vi.mock("../RichTextEditor");
 
 vi.mock("../api", () => ({
   describeError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
@@ -167,5 +169,44 @@ describe("写信窗格的发送闸门", () => {
     expect(row?.textContent).toContain("发送失败");
     expect(row?.textContent).toContain("已尝试 3 次");
     expect(screen.getAllByText(/网络超时/).length).toBeGreaterThan(0);
+  });
+});
+
+describe("通讯录带过来的预填收件人", () => {
+  beforeEach(() => {
+    // 这个窗格会从本地备份恢复上次没发完的草稿，先清干净再测。
+    window.localStorage.clear();
+  });
+
+  it("并进收件人输入框，重复地址不再加一遍", () => {
+    expect(mergeRecipients("", [{ name: "张三", address: "z@example.com" }])).toBe(
+      "张三 <z@example.com>",
+    );
+    expect(
+      mergeRecipients("李四 <l@example.com>", [
+        { name: "张三", address: "z@example.com" },
+        { name: "", address: "L@example.com" },
+      ]),
+    ).toBe("李四 <l@example.com>, 张三 <z@example.com>");
+  });
+
+  it("没有名字的联系人只写地址", () => {
+    expect(mergeRecipients("", [{ name: "  ", address: " a@b.com " }])).toBe("a@b.com");
+  });
+
+  it("打开写信窗格时收件人已经填好", async () => {
+    render(
+      <ComposePanel
+        request={{ kind: "new", to: [{ name: "张三", address: "z@example.com" }] }}
+        accounts={ACCOUNTS}
+        onClose={() => {}}
+      />,
+    );
+    await waitForReady();
+    await waitFor(() => {
+      expect((screen.getByLabelText("收件人") as HTMLInputElement).value).toBe(
+        "张三 <z@example.com>",
+      );
+    });
   });
 });

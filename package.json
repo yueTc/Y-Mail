@@ -1,5 +1,5 @@
 {
-  "name": "em-master",
+  "name": "ymail",
   "private": true,
   "version": "0.1.0",
   "description": "多邮箱统一收件箱客户端（Tauri 2 + React + TypeScript）",
@@ -15,6 +15,15 @@
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.13",
     "@tauri-apps/api": "^2.12.1",
+    "@tauri-apps/plugin-dialog": "^2.8.1",
+    "@tiptap/extension-image": "^3.31.4",
+    "@tiptap/extension-link": "^3.31.4",
+    "@tiptap/extension-table": "^3.31.4",
+    "@tiptap/extension-text-align": "^3.31.4",
+    "@tiptap/extension-text-style": "^3.31.4",
+    "@tiptap/pm": "^3.31.4",
+    "@tiptap/react": "^3.31.4",
+    "@tiptap/starter-kit": "^3.31.4",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },

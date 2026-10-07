@@ -490,7 +490,7 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
 
     use super::*;
-    use crate::secrets::MemorySecretStore;
+    use crate::secrets::{ChunkedSecretStore, MemorySecretStore};
 
     fn oauth_draft(imap_port: u16, smtp_port: u16) -> AccountDraft {
         AccountDraft {
@@ -578,6 +578,41 @@ mod tests {
         assert!(!bundle.is_expired(), "没有到期时间就保守地当没过期");
     }
 
+    #[tokio::test]
+    async fn 超长令牌包经分片保险箱也能存能读() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        // 走真实装配方式：分片保险箱包住底层实现。
+        let engine = MailEngine::initialize_with_secrets(
+            dir.path(),
+            Arc::new(ChunkedSecretStore::new(MemorySecretStore::new())),
+        )
+        .expect("初始化引擎");
+
+        // 微软个人账号的实际量级：光访问令牌就一千多字符，刷新令牌还要更长。
+        let expires_at = now_unix() + 3600;
+        let bundle = TokenBundle {
+            access_token: "a".repeat(1600),
+            refresh_token: Some("r".repeat(2200)),
+            expires_at: Some(expires_at),
+            scope: Some("https://outlook.office.com/IMAP.AccessAsUser.All offline_access".to_string()),
+        };
+        let key = "account/long-bundle";
+        let id = {
+            let store = engine.store();
+            store
+                .insert_account(&oauth_draft(1, 1), Some(key))
+                .expect("插入账号")
+        };
+        engine
+            .secrets()
+            .set(key, &Secret::new(bundle.encode()))
+            .expect("长令牌包该能写进保险箱");
+
+        let status = engine.oauth_status(id).expect("查状态");
+        assert!(status.authorized, "该能读回令牌");
+        assert!(status.has_refresh_token, "刷新令牌也该读回");
+        assert_eq!(status.expires_at, Some(expires_at));
+    }
     #[tokio::test]
     async fn 没授权过的账号状态是未授权() {
         let dir = tempfile::tempdir().expect("临时目录");

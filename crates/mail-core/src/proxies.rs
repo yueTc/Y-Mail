@@ -190,13 +190,13 @@ impl MailEngine {
         }
     }
 
-    /// 测试一个代理是否能连到目标服务器（默认 `www.baidu.com:443`）。
+    /// 测试一个代理是否能连到目标服务器（默认 `www.google.com:443`）。
     ///
     /// 只要代理按要求完成了到目标的隧道建立，就算测试通过。
     pub async fn test_proxy(&self, id: ProxyId, target: Option<(String, u16)>) -> Result<(), EngineError> {
         let stored = self.get_proxy(id)?;
         let route = route_from_stored(&stored, self.secrets())?;
-        let (host, port) = target.unwrap_or_else(|| ("www.baidu.com".to_string(), 443));
+        let (host, port) = target.unwrap_or_else(|| ("www.google.com".to_string(), 443));
         if host.trim().is_empty() || port == 0 {
             return Err(EngineError::BadRequest(
                 "测试目标必须填写主机名和 1-65535 之间的端口".to_string(),
@@ -359,7 +359,7 @@ mod tests {
 
         // 数据库文件里搜不到明文密码。
         drop(engine);
-        let bytes = std::fs::read(dir.path().join("em-master.db")).expect("读库文件");
+        let bytes = std::fs::read(dir.path().join("ymail.db")).expect("读库文件");
         let text = String::from_utf8_lossy(&bytes);
         assert!(!text.contains("proxy-pw"), "数据库文件不应出现明文密码");
     }

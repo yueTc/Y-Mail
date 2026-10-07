@@ -11,9 +11,9 @@ use crate::commands::CommandError;
 use crate::state::AppState;
 
 /// MCP 服务端可执行文件名（安装包自带，放在应用安装目录）。
-const MCP_BINARY_NAME: &str = "em-master-mcp";
+const MCP_BINARY_NAME: &str = "ymail-mcp";
 /// 外部 Agent 配置里用的数据目录环境变量名（与 mail-mcp 保持同一约定）。
-const MCP_DATA_DIR_ENV: &str = "EM_MASTER_DATA_DIR";
+const MCP_DATA_DIR_ENV: &str = "YMAIL_DATA_DIR";
 
 /// 当前 MCP 状态与配置说明（给设置页显示）。
 #[derive(Debug, Clone, Serialize)]
@@ -133,12 +133,12 @@ fn status_dto(engine: &MailEngine) -> Result<McpStatusDto, CommandError> {
 
 /// 生成外部 Agent 的配置示例。
 ///
-/// 安装包把 `em-master-mcp.exe` 与主程序放在同一个安装目录，所以 `command` 直接写
+/// 安装包把 `ymail-mcp.exe` 与主程序放在同一个安装目录，所以 `command` 直接写
 /// 安装目录里的完整路径（从本机正在运行的主程序位置推导），不用用户手填。
 fn config_example(binary_path: &str, data_dir: &str) -> String {
     let example = serde_json::json!({
         "mcpServers": {
-            "em-master": {
+            "ymail": {
                 "command": binary_path,
                 "env": { MCP_DATA_DIR_ENV: data_dir }
             }
@@ -147,7 +147,7 @@ fn config_example(binary_path: &str, data_dir: &str) -> String {
     let mut text = serde_json::to_string_pretty(&example).unwrap_or_else(|_| "{}".to_string());
     if !sidecar_installed() {
         text.push_str(
-            "\n\n注意：当前运行的目录里还没找到 em-master-mcp.exe。\
+            "\n\n注意：当前运行的目录里还没找到 ymail-mcp.exe。\
              如果你是从源码直接跑（开发模式），请先执行 npm run build:mcp-sidecar 生成它，\
              或改用安装包安装后的版本。",
         );

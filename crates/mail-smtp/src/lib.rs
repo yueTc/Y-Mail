@@ -13,7 +13,8 @@ pub mod probe;
 pub mod send;
 
 pub use message::{
-    build_message, guess_mime_type, BuiltMessage, Mailbox, MessageError, OutgoingAttachment, OutgoingMessage,
+    build_message, guess_mime_type, BuiltMessage, Mailbox, MessageError, OutgoingAttachment,
+    OutgoingInlineImage, OutgoingMessage,
 };
 pub use probe::{probe, ProbeReport, ProbeRequest};
 pub use send::{send, SendError, SendErrorKind, SendReport, SendRequest};

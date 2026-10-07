@@ -8,18 +8,18 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mail_domain::{ConnectionError, ValidationError};
 use mail_store::{MigrationOutcome, Store, StoreError};
 
 use crate::paths::SqlitePaths;
-use crate::secrets::{KeyringSecretStore, SecretStore, SecretStoreError};
+use crate::secrets::{ChunkedSecretStore, KeyringSecretStore, SecretStore, SecretStoreError};
 use crate::sync::{SyncConfig, SyncService};
 
 /// Windows 凭据管理器里，本应用使用的服务名。
-pub const KEYRING_SERVICE: &str = "com.emmaster.desktop";
+pub const KEYRING_SERVICE: &str = "com.ymail.desktop";
 
 /// 引擎初始化的结果摘要，供外壳显示与日志记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +28,8 @@ pub struct EngineInit {
     pub root_dir: String,
     /// 数据库文件路径。
     pub database_file: String,
+    /// 附件下载目录；可在设置里单独指定，默认在数据根目录下的 `downloads`。
+    pub attachment_dir: String,
     /// 本次新应用的迁移（按版本升序）。
     pub applied_migrations: Vec<MigrationOutcome>,
     /// 数据库结构版本。
@@ -169,7 +171,26 @@ impl MailEngine {
     /// 凭据走系统凭据管理器（Windows 凭据管理器）。测试要注入内存保险箱时，
     /// 用 [`MailEngine::initialize_with_secrets`]。
     pub fn initialize(data_dir: impl AsRef<Path>) -> Result<Self, EngineError> {
-        Self::initialize_with_secrets(data_dir, Arc::new(KeyringSecretStore::new(KEYRING_SERVICE)))
+        Self::initialize_with_secrets(data_dir, Self::default_secrets())
+    }
+
+    /// 默认保险箱：系统凭据管理器，外面再套一层「超长凭据自动分片」。
+    ///
+    /// 分片这层是必需的：微软 OAuth 的令牌包远超单条系统凭据上限，
+    /// 不拆片就会被系统直接拒写（真实报错：Attribute 'password encoded as UTF-16'
+    /// is longer than platform limit of 2560 chars）。
+    fn default_secrets() -> Arc<dyn SecretStore> {
+        Arc::new(ChunkedSecretStore::new(KeyringSecretStore::new(KEYRING_SERVICE)))
+    }
+
+    /// 同 [`MailEngine::initialize`]，但允许单独指定附件下载目录。
+    ///
+    /// `attachment_dir` 传 `None` 表示沿用默认的「数据根目录 / downloads」。
+    pub fn initialize_with_attachment_dir(
+        data_dir: impl AsRef<Path>,
+        attachment_dir: Option<PathBuf>,
+    ) -> Result<Self, EngineError> {
+        Self::initialize_full(data_dir, attachment_dir, Self::default_secrets())
     }
 
     /// 同 [`MailEngine::initialize`]，但由调用方指定凭据保险箱实现。
@@ -177,13 +198,23 @@ impl MailEngine {
         data_dir: impl AsRef<Path>,
         secrets: Arc<dyn SecretStore>,
     ) -> Result<Self, EngineError> {
+        Self::initialize_full(data_dir, None, secrets)
+    }
+
+    /// 完整初始化入口：数据目录 + 可选附件目录 + 凭据保险箱。
+    pub fn initialize_full(
+        data_dir: impl AsRef<Path>,
+        attachment_dir: Option<PathBuf>,
+        secrets: Arc<dyn SecretStore>,
+    ) -> Result<Self, EngineError> {
         let data_dir = data_dir.as_ref();
         if data_dir.as_os_str().is_empty() {
             return Err(EngineError::InvalidDataDir("路径为空".to_string()));
         }
-        let paths = SqlitePaths::from_root(data_dir);
+        let paths = SqlitePaths::from_root_with_attachment(data_dir, attachment_dir);
         fs::create_dir_all(paths.root())?;
         fs::create_dir_all(&paths.log_dir)?;
+        fs::create_dir_all(&paths.attachment_dir)?;
 
         let mut store = Store::open(&paths.database_file)?;
         let report = store.run_migrations()?;
@@ -192,6 +223,7 @@ impl MailEngine {
         let init = EngineInit {
             root_dir: paths.root().to_string_lossy().to_string(),
             database_file: paths.database_file.to_string_lossy().to_string(),
+            attachment_dir: paths.attachment_dir.to_string_lossy().to_string(),
             applied_migrations: report.applied,
             schema_version: report.current_version,
             fts5_available,

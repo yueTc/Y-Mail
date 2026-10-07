@@ -7,7 +7,7 @@ use std::time::Duration;
 use mail_domain::account::{AccountDraft, AccountProxyMode, AuthType, Security, ServerConfig};
 use mail_domain::proxy::Secret;
 use mail_domain::FolderKind;
-use mail_imap::{ClientConfig, ImapClient};
+use mail_imap::{ClientConfig, FolderInfo, ImapClient};
 use mail_store::NewMessage;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -17,7 +17,7 @@ use crate::secrets::{MemorySecretStore, SecretStore};
 
 use super::fetcher::sync_folder;
 use super::state::{AccountSyncStatus, CancelFlag, SyncConfig, SyncService, SyncState};
-use super::worker::{run, WorkerContext};
+use super::worker::{run, sync_once, syncable_folders, WorkerContext};
 
 /// 假服务器每连接一次的参数。
 struct Script {
@@ -652,4 +652,137 @@ async fn 取消让等待立刻返回并留下已停止状态() {
         .expect("取消后应退出")
         .expect("工作线程");
     assert_eq!(ctx.status.lock().expect("状态").state, SyncState::Stopped);
+}
+
+#[test]
+fn 容器文件夹会被过滤掉() {
+    let folders = vec![
+        FolderInfo {
+            full_path: "其他文件夹".to_string(),
+            server_path: "&UXZO1mWHTvZZOQ-".to_string(),
+            delimiter: "/".to_string(),
+            attributes: vec!["\\NoSelect".to_string(), "\\HasChildren".to_string()],
+        },
+        FolderInfo {
+            full_path: "INBOX".to_string(),
+            server_path: "INBOX".to_string(),
+            delimiter: "/".to_string(),
+            attributes: vec!["\\HasNoChildren".to_string()],
+        },
+    ];
+    let kept = syncable_folders(&folders);
+    assert_eq!(kept.len(), 1, "只应保留能打开的文件夹");
+    assert_eq!(kept[0].full_path, "INBOX");
+}
+
+#[tokio::test]
+async fn 不可选容器文件夹不会拖垮整个账号同步() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+    let addr = listener.local_addr().expect("地址");
+    // 记录服务器收到过哪些 SELECT，用来确认容器文件夹根本没被打开。
+    let selected_folders = Arc::new(Mutex::new(Vec::<String>::new()));
+    let recorder = selected_folders.clone();
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            let recorder = recorder.clone();
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(socket);
+                write(&mut reader, "* OK ready\r\n").await;
+                let mut current = String::new();
+                loop {
+                    let line = read_line(&mut reader).await;
+                    if line.is_empty() {
+                        return;
+                    }
+                    let (tag, rest) = line.split_once(' ').unwrap_or((line.as_str(), ""));
+                    let rest = rest.to_string();
+                    let upper = rest.to_ascii_uppercase();
+                    if upper.starts_with("LOGIN") {
+                        write(&mut reader, &format!("{tag} OK LOGIN completed\r\n")).await;
+                    } else if upper.starts_with("CAPABILITY") {
+                        write(
+                            &mut reader,
+                            &format!("* CAPABILITY IMAP4rev1\r\n{tag} OK completed\r\n"),
+                        )
+                        .await;
+                    } else if upper.starts_with("ID ") {
+                        write(&mut reader, &format!("{tag} OK\r\n")).await;
+                    } else if upper.starts_with("LIST") {
+                        write(
+                            &mut reader,
+                            &format!(
+                                "* LIST (\\NoSelect \\HasChildren) \"/\" \"&UXZO1mWHTvZZOQ-\"\r\n\
+                                 * LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n{tag} OK completed\r\n"
+                            ),
+                        )
+                        .await;
+                    } else if upper.starts_with("SELECT") {
+                        let name = rest
+                            .split_whitespace()
+                            .nth(1)
+                            .unwrap_or_default()
+                            .trim_matches('"')
+                            .to_string();
+                        current = name.clone();
+                        recorder.lock().expect("锁").push(name);
+                        write(
+                            &mut reader,
+                            &format!(
+                                "* 2 EXISTS\r\n* OK [UIDVALIDITY 42] ok\r\n* OK [UIDNEXT 100] ok\r\n\
+                                 {tag} OK completed\r\n"
+                            ),
+                        )
+                        .await;
+                    } else if upper.starts_with("UID SEARCH SINCE") {
+                        // 容器文件夹：SELECT 假装成功但没真正选中，搜索被服务器拒绝。
+                        if current.contains("UXZO") {
+                            write(&mut reader, &format!("{tag} NO Need to SELECT first!\r\n")).await;
+                        } else {
+                            write(&mut reader, &format!("* SEARCH 1 2\r\n{tag} OK completed\r\n")).await;
+                        }
+                    } else if upper.starts_with("UID SEARCH UID") {
+                        write(&mut reader, &format!("* SEARCH\r\n{tag} OK completed\r\n")).await;
+                    } else if upper.starts_with("UID FETCH") {
+                        let set = rest.split_whitespace().nth(2).unwrap_or_default().to_string();
+                        let mut out = String::new();
+                        for uid in expand(&set) {
+                            out.push_str(&fetch_line(uid));
+                        }
+                        out.push_str(&format!("{tag} OK completed\r\n"));
+                        write(&mut reader, &out).await;
+                    } else {
+                        write(&mut reader, &format!("{tag} OK completed\r\n")).await;
+                    }
+                }
+            });
+        }
+    });
+
+    let (engine, secrets, account_id) = engine_with_account("other@example.com", addr.port(), Some("acct"));
+    let ctx = worker_ctx(&engine, account_id, secrets, SyncConfig::default());
+
+    sync_once(&ctx)
+        .await
+        .expect("同步应顺利完成，不该被容器文件夹拖垮");
+
+    let store = engine.store();
+    let folder = store
+        .get_folder(account_id, "INBOX")
+        .expect("查询")
+        .expect("收件箱应存在");
+    assert_eq!(
+        store.count_folder_messages(folder.id).expect("计数"),
+        2,
+        "收件箱应正常入库"
+    );
+
+    let selected = selected_folders.lock().expect("锁").clone();
+    assert!(
+        !selected.iter().any(|name| name.contains("UXZO")),
+        "不应尝试打开不可选容器：{selected:?}"
+    );
+    assert!(
+        selected.iter().any(|name| name == "INBOX"),
+        "应正常打开收件箱：{selected:?}"
+    );
 }

@@ -1,4 +1,4 @@
-# em-master 发布检查清单与回滚方案（0.1.0）
+# Y-Mail 发布检查清单与回滚方案（0.1.0）
 
 发布 = 版本号冻结 → 五关全绿 → 打安装包 → 核对产物 → 标记版本 → 交付。任何一步不过，就不发。
 
@@ -46,29 +46,29 @@ $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 
 | 产物 | 路径（相对 bundle 目录） | 说明 |
 |---|---|---|
-| NSIS 安装包 | `nsis/em-master_0.1.0_x64-setup.exe` | 当前用户安装 |
-| MSI 安装包 | `msi/em-master_0.1.0_x64_en-US.msi` | 标准 Windows 安装程序 |
-| 主程序 | `../em-master.exe` | 由安装包装进安装目录 |
-| **MCP sidecar** | `../em-master-mcp.exe` | 由 `src-tauri/binaries/em-master-mcp-x86_64-pc-windows-msvc.exe` 改名装入；两个安装包都必须包含它 |
+| NSIS 安装包 | `nsis/ymail_0.1.0_x64-setup.exe` | 当前用户安装 |
+| MSI 安装包 | `msi/ymail_0.1.0_x64_en-US.msi` | 标准 Windows 安装程序 |
+| 主程序 | `../ymail.exe` | 由安装包装进安装目录 |
+| **MCP sidecar** | `../ymail-mcp.exe` | 由 `src-tauri/binaries/ymail-mcp-x86_64-pc-windows-msvc.exe` 改名装入；两个安装包都必须包含它 |
 
 核对方法（照做一遍，别只看日志）：
 
 ```powershell
 # 1) sidecar 是否被生成
-Test-Path src-tauri\binaries\em-master-mcp-x86_64-pc-windows-msvc.exe
+Test-Path src-tauri\binaries\ymail-mcp-x86_64-pc-windows-msvc.exe
 
 # 2) 两个安装包是否都存在
 Get-ChildItem src-tauri\target\release\bundle\nsis,src-tauri\target\release\bundle\msi
 
 # 3) sidecar 能跑（未启用 MCP 时应打印「MCP 未启用」并退出）
-& src-tauri\binaries\em-master-mcp-x86_64-pc-windows-msvc.exe
+& src-tauri\binaries\ymail-mcp-x86_64-pc-windows-msvc.exe
 ```
 
 **不许入库的产物**：`target/`、`dist/`、`src-tauri/binaries/`、`src-tauri/target/`、`src-tauri/gen/`、`*.db`、`.env`、密钥文件。发布前跑一次：
 
 ```powershell
 git status --short
-git check-ignore -v src-tauri\binaries\em-master-mcp-x86_64-pc-windows-msvc.exe
+git check-ignore -v src-tauri\binaries\ymail-mcp-x86_64-pc-windows-msvc.exe
 ```
 
 第二条有输出 = 已被忽略，正确。
@@ -78,7 +78,7 @@ git check-ignore -v src-tauri\binaries\em-master-mcp-x86_64-pc-windows-msvc.exe
 ## 四、打标签
 
 ```powershell
-git tag -a v0.1.0 -m "em-master 0.1.0"
+git tag -a v0.1.0 -m "Y-Mail 0.1.0"
 git show --stat v0.1.0
 ```
 
@@ -90,18 +90,18 @@ git show --stat v0.1.0
 
 ### 5.1 升级前备份（必须做）
 
-数据库在 `%APPDATA%\com.emmaster.desktop\`。升级前先退出应用，再备份：
+数据库在 `%APPDATA%\com.ymail.desktop\`。升级前先退出应用，再备份：
 
 ```powershell
-$data = "$env:APPDATA\com.emmaster.desktop"
-$backup = "$env:USERPROFILE\Documents\em-master-backup-$(Get-Date -Format yyyyMMdd-HHmmss)"
+$data = "$env:APPDATA\com.ymail.desktop"
+$backup = "$env:USERPROFILE\Documents\ymail-backup-$(Get-Date -Format yyyyMMdd-HHmmss)"
 New-Item -ItemType Directory -Force -Path $backup | Out-Null
-Copy-Item "$data\em-master.db" $backup
+Copy-Item "$data\ymail.db" $backup
 Copy-Item "$data\logs" $backup -Recurse -ErrorAction SilentlyContinue
 Write-Output "已备份到 $backup"
 ```
 
-> 数据库开了 WAL 模式，建议先退出应用再拷；如果没退出，把 `em-master.db-wal` 和 `em-master.db-shm` 一起拷走。
+> 数据库开了 WAL 模式，建议先退出应用再拷；如果没退出，把 `ymail.db-wal` 和 `ymail.db-shm` 一起拷走。
 
 ### 5.2 升级过程
 
@@ -118,7 +118,7 @@ Write-Output "已备份到 $backup"
 迁移是向前的，**降级前必须用备份把数据库换回去**：
 
 1. 卸载新版本。
-2. 删掉 `%APPDATA%\com.emmaster.desktop\em-master.db*`（先确认备份可用）。
+2. 删掉 `%APPDATA%\com.ymail.desktop\ymail.db*`（先确认备份可用）。
 3. 把 5.1 的备份拷回去。
 4. 安装旧版本并启动，确认账号、邮件、搜索正常。
 
@@ -128,9 +128,9 @@ Write-Output "已备份到 $backup"
 
 | 操作 | 步骤 |
 |---|---|
-| 卸载（NSIS / MSI） | 「设置 → 应用 → 已安装的应用」里找到 em-master，点卸载 |
+| 卸载（NSIS / MSI） | 「设置 → 应用 → 已安装的应用」里找到 Y-Mail，点卸载 |
 | 卸载后会留下什么 | 程序目录清空；**数据目录默认保留**（便于回滚与重装保留数据） |
-| 彻底清理 | 卸载后再手工删 `%APPDATA%\com.emmaster.desktop`；凭据要到「Windows 凭据管理器 → Windows 凭据」里删掉 `com.emmaster.desktop` 前缀的条目 |
+| 彻底清理 | 卸载后再手工删 `%APPDATA%\com.ymail.desktop`；凭据要到「Windows 凭据管理器 → Windows 凭据」里删掉 `com.ymail.desktop` 前缀的条目 |
 | 版本回退 | 见 5.3：先恢复数据库备份，再装旧版本 |
 
 ---
@@ -140,7 +140,7 @@ Write-Output "已备份到 $backup"
 - [ ] 三个版本号一致
 - [ ] 五关全绿，日志已存档
 - [ ] `npm run tauri build` 退出码 0
-- [ ] NSIS 与 MSI 都存在，且安装目录里有 `em-master-mcp.exe`
+- [ ] NSIS 与 MSI 都存在，且安装目录里有 `ymail-mcp.exe`
 - [ ] `git status --short` 没有数据库、密钥、构建产物
 - [ ] 已打版本标签
 - [ ] 已写升级前备份说明

@@ -106,7 +106,7 @@
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: rgba(20, 20, 24, 0.45);
+  background: var(--overlay);
 }
 
 .ai-modal {
@@ -114,11 +114,11 @@
   max-height: 90vh;
   overflow-y: auto;
   padding: 20px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--field-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--panel-solid);
   color: inherit;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow);
 }
 
 .ai-modal h3 {
@@ -172,7 +172,7 @@
 .reader-translation-modes button.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
 }
 
 .reader-ai-disabled,
@@ -199,17 +199,21 @@
   word-break: break-word;
 }
 
-.reader-translation p:last-child {
+.reader-translation > p:last-child {
   margin-bottom: 0;
 }
 
+/* 行内翻译：一段原文下面紧跟它的译文，逐段往下排。 */
 .reader-translation-pair {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
   padding-bottom: 8px;
   margin-bottom: 8px;
   border-bottom: 1px dashed var(--line);
+}
+
+.reader-translation-pair:last-child {
+  padding-bottom: 0;
+  margin-bottom: 0;
+  border-bottom: none;
 }
 
 .reader-translation-pair .reader-translation-original {
@@ -217,19 +221,30 @@
 }
 
 .reader-translation-pair .reader-translation-translated {
+  margin-bottom: 0;
   border-left: 2px solid var(--accent);
   padding-left: 8px;
 }
 
+/* 对照翻译：左栏原邮件（iframe 原样渲染），右栏完整译文。 */
 .reader-translation-columns {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-.reader-translation-column h4 {
-  margin: 0 0 6px;
-  font-size: 0.9rem;
+.reader-translation-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.reader-translation-column > .reader-frame {
+  flex: 1 1 auto;
+  min-height: 240px;
 }
 
 .reader-summary {
@@ -279,8 +294,22 @@
 }
 
 @media (max-width: 720px) {
-  .reader-translation-pair,
   .reader-translation-columns {
     grid-template-columns: 1fr;
   }
+}
+
+/* ===== R13：深色下对话框、输入与滚动条不用浏览器默认值 ===== */
+
+.ai-modal ::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+.ai-modal input,
+.ai-modal select,
+.ai-modal textarea {
+  background: var(--field-bg);
+  border-color: var(--border);
+  color: var(--text);
 }

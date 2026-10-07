@@ -1,4 +1,4 @@
-# em-master 安全审计报告（Wave 9）
+# Y-Mail 安全审计报告（Wave 9）
 
 | 项 | 值 |
 |---|---|
@@ -17,7 +17,7 @@
 
 **结论：通过。**
 
-- 保险箱实现：`crates/mail-core/src/secrets.rs` 的 `KeyringSecretStore`，底层用 `keyring` 的 `windows-native`（即 Windows 凭据管理器）；引擎默认走它（`crates/mail-core/src/engine.rs`：`KEYRING_SERVICE = "com.emmaster.desktop"`）。
+- 保险箱实现：`crates/mail-core/src/secrets.rs` 的 `KeyringSecretStore`，底层用 `keyring` 的 `windows-native`（即 Windows 凭据管理器）；引擎默认走它（`crates/mail-core/src/engine.rs`：`KEYRING_SERVICE = "com.ymail.desktop"`）。
 - 数据库只存「引用键」：账号、代理、AI 站点、OAuth 应用都只落 `credential_key` / `api_key_ref` 这类键名，键名由邮箱或名称加哈希生成（`crates/mail-core/src/proxies.rs::new_credential_key`），不含密码原文。
 - 数据库结构里没有密码 / 令牌列：`crates/mail-store/src/migrations/sql/*.sql` 里 `account`、`proxy`、`ai_provider`、`oauth_app` 均无明文凭据列。
 - 自动化证据：

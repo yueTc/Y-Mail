@@ -13,15 +13,26 @@ pub struct SqlitePaths {
     pub database_file: PathBuf,
     /// 日志目录。
     pub log_dir: PathBuf,
+    /// 附件下载目录；可以在设置里单独指定，默认落在数据根目录下的 `downloads`。
+    pub attachment_dir: PathBuf,
 }
 
 impl SqlitePaths {
     /// 按约定的文件名，从数据根目录推导全部路径。
     pub fn from_root(root_dir: impl Into<PathBuf>) -> Self {
+        Self::from_root_with_attachment(root_dir, None)
+    }
+
+    /// 同 [`SqlitePaths::from_root`]，但附件目录可以单独指定。
+    ///
+    /// 传 `None` 表示沿用默认的「数据根目录 / downloads」。
+    pub fn from_root_with_attachment(root_dir: impl Into<PathBuf>, attachment_dir: Option<PathBuf>) -> Self {
         let root_dir = root_dir.into();
+        let attachment_dir = attachment_dir.unwrap_or_else(|| root_dir.join("downloads"));
         Self {
-            database_file: root_dir.join("em-master.db"),
+            database_file: root_dir.join("ymail.db"),
             log_dir: root_dir.join("logs"),
+            attachment_dir,
             root_dir,
         }
     }
@@ -38,11 +49,25 @@ mod tests {
 
     #[test]
     fn paths_are_derived_from_root() {
-        let paths = SqlitePaths::from_root("C:/data/em-master");
+        let paths = SqlitePaths::from_root("C:/data/ymail");
         assert_eq!(
             paths.database_file,
-            std::path::PathBuf::from("C:/data/em-master/em-master.db")
+            std::path::PathBuf::from("C:/data/ymail/ymail.db")
         );
-        assert_eq!(paths.log_dir, std::path::PathBuf::from("C:/data/em-master/logs"));
+        assert_eq!(paths.log_dir, std::path::PathBuf::from("C:/data/ymail/logs"));
+        assert_eq!(
+            paths.attachment_dir,
+            std::path::PathBuf::from("C:/data/ymail/downloads")
+        );
+    }
+
+    #[test]
+    fn attachment_dir_can_be_overridden() {
+        let paths = SqlitePaths::from_root_with_attachment(
+            "C:/data/ymail",
+            Some(std::path::PathBuf::from("D:/MailFiles")),
+        );
+        assert_eq!(paths.attachment_dir, std::path::PathBuf::from("D:/MailFiles"));
+        assert_eq!(paths.root(), std::path::Path::new("C:/data/ymail"));
     }
 }

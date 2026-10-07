@@ -6,7 +6,7 @@
 //! - 线程聚合按（账号, 线程键）折叠：不同账号的同名主题不合并，避免把无关邮件揉在一起；
 //! - 线程键为空时用 Message-ID 兜底，再为空就用行号兜底，保证每封邮件都有键。
 //!
-//! 本模块只读，不做任何写入；写入口仍然在 `sync.rs` 等模块。
+//! 本模块以只读查询为主；唯一写入口是按主键切换邮件已读状态（`set_message_read`）。
 
 use rusqlite::OptionalExtension;
 
@@ -97,6 +97,10 @@ pub struct InboxQuery {
     pub folder_id: Option<i64>,
     /// 只看未读。
     pub unread_only: bool,
+    /// 只看标了红旗的邮件（左侧「红旗邮件」入口用）。
+    pub flagged_only: bool,
+    /// 只看某一类文件夹（`inbox` / `draft` / `sent` 等）；None 表示按下面的默认范围。
+    pub folder_kind: Option<String>,
     /// 跳过条数。
     pub offset: i64,
     /// 最多返回条数。
@@ -109,6 +113,8 @@ impl Default for InboxQuery {
             account_id: None,
             folder_id: None,
             unread_only: false,
+            flagged_only: false,
+            folder_kind: None,
             offset: 0,
             limit: 200,
         }
@@ -121,9 +127,14 @@ pub(crate) const INBOX_COLUMNS: &str = "m.id, m.account_id, m.folder_id, m.uid, 
     m.has_attachments, m.is_read, m.is_flagged, m.snippet, m.message_id_header, \
     a.email, a.display_name, a.color, f.full_path";
 
-/// 作用范围过滤：?1 账号编号，?2 文件夹编号。
+/// 作用范围过滤：?1 账号编号，?2 文件夹编号，?3 文件夹类型，?5 是否只看红旗。
+///
+/// 优先级：指定了文件夹就只看它；否则指定了类型就只看这一类（「所有草稿」「所有已发送」）；
+/// 否则红旗视图（?5 = 1）看这个账号的全部文件夹，剩下的默认只看收件箱。
 const SCOPE_FILTER: &str = "((?1 IS NULL OR m.account_id = ?1) \
-    AND ((?2 IS NOT NULL AND m.folder_id = ?2) OR (?2 IS NULL AND f.kind = 'inbox')))";
+    AND ((?2 IS NOT NULL AND m.folder_id = ?2) \
+        OR (?2 IS NULL AND ((?3 IS NOT NULL AND f.kind = ?3) \
+            OR (?3 IS NULL AND (?5 = 1 OR f.kind = 'inbox'))))))";
 
 /// 线程聚合的基础查询（含有效线程键 tkey）。
 const THREAD_BASE: &str = "SELECT m.id, m.account_id, m.folder_id, m.uid, m.thread_key, \
@@ -144,7 +155,7 @@ const THREAD_RANKED: &str = "SELECT base.*, \
     FROM base";
 
 /// 线程模式的行过滤：每个线程只留最新一封；未读过滤看线程整体。
-const THREAD_ROW_FILTER: &str = "rn = 1 AND (?3 = 0 OR unread_count > 0)";
+const THREAD_ROW_FILTER: &str = "rn = 1 AND (?4 = 0 OR unread_count > 0)";
 
 /// 线程键兜底规则：空串 / NULL 时用 Message-ID，再为空用 `#行号`。
 ///
@@ -215,14 +226,17 @@ impl Store {
             "SELECT {INBOX_COLUMNS} FROM message m \
              JOIN folder f ON f.id = m.folder_id \
              JOIN account a ON a.id = m.account_id \
-             WHERE {SCOPE_FILTER} AND (?3 = 0 OR m.is_read = 0) \
-             ORDER BY m.date_utc DESC, m.id DESC LIMIT ?4 OFFSET ?5"
+             WHERE {SCOPE_FILTER} AND (?4 = 0 OR m.is_read = 0) \
+             AND (?5 = 0 OR m.is_flagged = 1) \
+             ORDER BY m.date_utc DESC, m.id DESC LIMIT ?6 OFFSET ?7"
         );
         let mut stmt = self.conn().prepare(&sql)?;
         let mut rows = stmt.query(rusqlite::params![
             query.account_id,
             query.folder_id,
+            query.folder_kind,
             i64::from(query.unread_only),
+            i64::from(query.flagged_only),
             query.limit,
             query.offset,
         ])?;
@@ -238,11 +252,18 @@ impl Store {
         let sql = format!(
             "SELECT COUNT(*) FROM message m \
              JOIN folder f ON f.id = m.folder_id \
-             WHERE {SCOPE_FILTER} AND (?3 = 0 OR m.is_read = 0)"
+             WHERE {SCOPE_FILTER} AND (?4 = 0 OR m.is_read = 0) \
+             AND (?5 = 0 OR m.is_flagged = 1)"
         );
         let count: i64 = self.conn().query_row(
             &sql,
-            rusqlite::params![query.account_id, query.folder_id, i64::from(query.unread_only)],
+            rusqlite::params![
+                query.account_id,
+                query.folder_id,
+                query.folder_kind,
+                i64::from(query.unread_only),
+                i64::from(query.flagged_only)
+            ],
             |row| row.get(0),
         )?;
         Ok(count)
@@ -251,16 +272,18 @@ impl Store {
     /// 会话线程聚合分页查询（每个账号的同名主题折叠成一行，取最新一封）。
     pub fn list_inbox_threads(&self, query: &InboxQuery) -> Result<Vec<InboxThread>, StoreError> {
         let sql = format!(
-            "WITH base AS ({THREAD_BASE} WHERE {SCOPE_FILTER}), \
+            "WITH base AS ({THREAD_BASE} WHERE {SCOPE_FILTER} AND (?5 = 0 OR m.is_flagged = 1)), \
              ranked AS ({THREAD_RANKED}) \
              SELECT * FROM ranked WHERE {THREAD_ROW_FILTER} \
-             ORDER BY date_utc DESC, id DESC LIMIT ?4 OFFSET ?5"
+             ORDER BY date_utc DESC, id DESC LIMIT ?6 OFFSET ?7"
         );
         let mut stmt = self.conn().prepare(&sql)?;
         let mut rows = stmt.query(rusqlite::params![
             query.account_id,
             query.folder_id,
+            query.folder_kind,
             i64::from(query.unread_only),
+            i64::from(query.flagged_only),
             query.limit,
             query.offset,
         ])?;
@@ -274,13 +297,19 @@ impl Store {
     /// 线程模式下的总行数（配合分页使用）。
     pub fn count_inbox_threads(&self, query: &InboxQuery) -> Result<i64, StoreError> {
         let sql = format!(
-            "WITH base AS ({THREAD_BASE} WHERE {SCOPE_FILTER}), \
+            "WITH base AS ({THREAD_BASE} WHERE {SCOPE_FILTER} AND (?5 = 0 OR m.is_flagged = 1)), \
              ranked AS ({THREAD_RANKED}) \
              SELECT COUNT(*) FROM ranked WHERE {THREAD_ROW_FILTER}"
         );
         let count: i64 = self.conn().query_row(
             &sql,
-            rusqlite::params![query.account_id, query.folder_id, i64::from(query.unread_only)],
+            rusqlite::params![
+                query.account_id,
+                query.folder_id,
+                query.folder_kind,
+                i64::from(query.unread_only),
+                i64::from(query.flagged_only)
+            ],
             |row| row.get(0),
         )?;
         Ok(count)
@@ -298,6 +327,46 @@ impl Store {
             .query_row(&sql, [message_id], row_to_message)
             .optional()
             .map_err(StoreError::from)
+    }
+
+    /// 按主键切换一封邮件的已读状态，并同步维护所在文件夹的未读数。
+    ///
+    /// 返回值表示状态是否真的发生变化：邮件不存在或已经是目标状态时返回 `false`。
+    /// 这样调用方只有在 `true` 时才需要发起后续同步，重复调用不会重复扣减。
+    pub fn set_message_read(&self, message_id: i64, read: bool) -> Result<bool, StoreError> {
+        let tx = self.conn().unchecked_transaction()?;
+        let current: Option<(i64, i64)> = tx
+            .query_row(
+                "SELECT folder_id, is_read FROM message WHERE id = ?1",
+                [message_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((folder_id, current_read)) = current else {
+            return Ok(false);
+        };
+        let target = i64::from(read);
+        if current_read == target {
+            return Ok(false);
+        }
+
+        tx.execute(
+            "UPDATE message SET is_read = ?2,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE id = ?1",
+            rusqlite::params![message_id, target],
+        )?;
+
+        // 未读数不能减到负数；反向标未读时补回 1。
+        let delta = if read { -1 } else { 1 };
+        tx.execute(
+            "UPDATE folder SET unread_count = MAX(0, unread_count + ?2),
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE id = ?1",
+            rusqlite::params![folder_id, delta],
+        )?;
+        tx.commit()?;
+        Ok(true)
     }
 
     /// 展开一条会话：取该账号该线程在收件箱范围内的全部邮件（新的在前）。
@@ -527,6 +596,123 @@ mod tests {
     }
 
     #[test]
+    fn 只看标红只返回红旗邮件并跨文件夹计入总数() {
+        let store = migrated();
+        let a = account(&store, "a@example.com", "#111111");
+        let fa = inbox(&store, a);
+        let fs = store
+            .upsert_folder(a, "已发送", "/", FolderKind::Sent)
+            .expect("插入已发送");
+
+        store
+            .insert_messages(&[
+                message(a, fa, 1, "t1", "<a1@x>", "2026-10-04T10:00:00Z", true),
+                message(a, fa, 2, "t2", "<a2@x>", "2026-10-04T12:00:00Z", false),
+                message(a, fa, 3, "t3", "<a3@x>", "2026-10-04T11:00:00Z", false),
+                message(a, fs, 1, "t4", "<s1@x>", "2026-10-04T09:00:00Z", true),
+            ])
+            .expect("插入邮件");
+
+        // 默认范围只看收件箱：已发送那封不在里面。
+        let inbox_ids: Vec<i64> = store
+            .list_inbox_messages(&InboxQuery::default())
+            .expect("查询")
+            .iter()
+            .map(|item| item.id)
+            .collect();
+        assert_eq!(inbox_ids.len(), 3, "默认只看收件箱");
+        for id in &inbox_ids {
+            assert!(store.set_message_flagged(*id, true).expect("标红"));
+        }
+        // 只标红其中两封，留一封没标的当反例。
+        let unflagged_id = store
+            .set_message_flagged(*inbox_ids.last().expect("有邮件"), false)
+            .expect("取消标红");
+        assert!(unflagged_id, "取消标红要真的改到");
+        let sent_id = store
+            .list_inbox_messages(&InboxQuery {
+                account_id: Some(a),
+                folder_id: Some(fs),
+                ..InboxQuery::default()
+            })
+            .expect("查已发送")
+            .first()
+            .expect("已发送有一封")
+            .id;
+        assert!(store.set_message_flagged(sent_id, true).expect("标红"));
+
+        let flagged = InboxQuery {
+            account_id: Some(a),
+            flagged_only: true,
+            ..InboxQuery::default()
+        };
+        assert_eq!(store.count_inbox_messages(&flagged).expect("计数"), 3);
+        let rows = store.list_inbox_messages(&flagged).expect("查询");
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|item| item.is_flagged));
+        // 已发送里的红旗邮也要算进来：红旗视图不按文件夹收窄。
+        assert!(rows.iter().any(|item| item.id == sent_id));
+
+        // 线程模式同样按红旗收窄，而且跨文件夹。
+        assert_eq!(store.count_inbox_threads(&flagged).expect("线程计数"), 3);
+        assert_eq!(store.list_inbox_threads(&flagged).expect("线程查询").len(), 3);
+    }
+
+    #[test]
+    fn 按文件夹类型收窄能跨账号看草稿和已发送() {
+        let store = migrated();
+        let a = account(&store, "a@example.com", "#111111");
+        let b = account(&store, "b@example.com", "#222222");
+        let da = store
+            .upsert_folder(a, "草稿箱", "/", FolderKind::Draft)
+            .expect("A 草稿箱");
+        let db = store
+            .upsert_folder(b, "草稿箱", "/", FolderKind::Draft)
+            .expect("B 草稿箱");
+        let sa = store
+            .upsert_folder(a, "已发送", "/", FolderKind::Sent)
+            .expect("A 已发送");
+        let fa = inbox(&store, a);
+
+        store
+            .insert_messages(&[
+                message(a, da, 1, "t1", "<d1@x>", "2026-10-04T10:00:00Z", true),
+                message(b, db, 1, "t2", "<d2@x>", "2026-10-04T11:00:00Z", true),
+                message(a, sa, 1, "t3", "<s1@x>", "2026-10-04T12:00:00Z", true),
+                message(a, fa, 1, "t4", "<i1@x>", "2026-10-04T13:00:00Z", true),
+            ])
+            .expect("插入邮件");
+
+        // 默认范围没变：不带条件还是只看收件箱。
+        assert_eq!(
+            store
+                .count_inbox_messages(&InboxQuery::default())
+                .expect("默认计数"),
+            1
+        );
+
+        let drafts = InboxQuery {
+            folder_kind: Some("draft".to_string()),
+            ..InboxQuery::default()
+        };
+        assert_eq!(store.count_inbox_messages(&drafts).expect("草稿计数"), 2);
+        let draft_rows = store.list_inbox_messages(&drafts).expect("草稿查询");
+        assert_eq!(draft_rows.len(), 2);
+        assert!(draft_rows.iter().all(|item| item.folder_path.contains("草稿箱")));
+
+        let sent = InboxQuery {
+            folder_kind: Some("sent".to_string()),
+            ..InboxQuery::default()
+        };
+        assert_eq!(store.count_inbox_messages(&sent).expect("已发送计数"), 1);
+        assert_eq!(store.list_inbox_messages(&sent).expect("已发送查询").len(), 1);
+
+        // 线程模式也认这个类型范围。
+        assert_eq!(store.count_inbox_threads(&drafts).expect("草稿线程计数"), 2);
+        assert_eq!(store.list_inbox_threads(&drafts).expect("草稿线程").len(), 2);
+    }
+
+    #[test]
     fn 按主键取一封邮件会带上账号展示字段() {
         let store = migrated();
         let a = account(&store, "a@example.com", "#123456");
@@ -664,5 +850,90 @@ mod tests {
             row2.thread_key
         );
         assert_eq!(row2.thread_key, format!("#{}", row2.id));
+    }
+
+    #[test]
+    fn 标已读后邮件与文件夹未读数同步变化() {
+        let store = migrated();
+        let a = account(&store, "a@example.com", "#111111");
+        let fa = inbox(&store, a);
+        store.update_folder_select(fa, None, None, 3).expect("设置未读数");
+        store
+            .insert_messages(&[message(a, fa, 1, "t1", "<a1@x>", "2026-10-04T10:00:00Z", false)])
+            .expect("插入邮件");
+        let id = store.list_inbox_messages(&InboxQuery::default()).expect("查询")[0].id;
+
+        assert!(store.set_message_read(id, true).expect("标已读"));
+
+        let m = store.get_inbox_message(id).expect("查询邮件").expect("邮件存在");
+        assert!(m.is_read, "邮件应标记为已读");
+        let folder = store
+            .get_folder_by_id(fa)
+            .expect("查询文件夹")
+            .expect("文件夹存在");
+        assert_eq!(folder.unread_count, 2, "未读数应减一");
+        let summary = store.account_inbox_summary().expect("汇总");
+        assert_eq!(summary[0].unread_count, 0, "账号未读数按邮件实时算出");
+    }
+
+    #[test]
+    fn 重复标已读不会重复扣减未读数() {
+        let store = migrated();
+        let a = account(&store, "a@example.com", "#111111");
+        let fa = inbox(&store, a);
+        store.update_folder_select(fa, None, None, 2).expect("设置未读数");
+        store
+            .insert_messages(&[message(a, fa, 1, "t1", "<a1@x>", "2026-10-04T10:00:00Z", false)])
+            .expect("插入邮件");
+        let id = store.list_inbox_messages(&InboxQuery::default()).expect("查询")[0].id;
+
+        assert!(store.set_message_read(id, true).expect("首次标已读"));
+        assert!(!store.set_message_read(id, true).expect("重复标已读"));
+        let folder = store
+            .get_folder_by_id(fa)
+            .expect("查询文件夹")
+            .expect("文件夹存在");
+        assert_eq!(folder.unread_count, 1, "只应扣一次");
+    }
+
+    #[test]
+    fn 反向标未读会把未读数加回来() {
+        let store = migrated();
+        let a = account(&store, "a@example.com", "#111111");
+        let fa = inbox(&store, a);
+        store
+            .insert_messages(&[message(a, fa, 1, "t1", "<a1@x>", "2026-10-04T10:00:00Z", true)])
+            .expect("插入邮件");
+        let id = store.list_inbox_messages(&InboxQuery::default()).expect("查询")[0].id;
+
+        assert!(store.set_message_read(id, false).expect("标未读"));
+
+        let m = store.get_inbox_message(id).expect("查询邮件").expect("邮件存在");
+        assert!(!m.is_read, "邮件应标记为未读");
+        let folder = store
+            .get_folder_by_id(fa)
+            .expect("查询文件夹")
+            .expect("文件夹存在");
+        assert_eq!(folder.unread_count, 1, "未读数应加一");
+        let summary = store.account_inbox_summary().expect("汇总");
+        assert_eq!(summary[0].unread_count, 1);
+    }
+
+    #[test]
+    fn 未读数不会被减到负数() {
+        let store = migrated();
+        let a = account(&store, "a@example.com", "#111111");
+        let fa = inbox(&store, a);
+        store
+            .insert_messages(&[message(a, fa, 1, "t1", "<a1@x>", "2026-10-04T10:00:00Z", false)])
+            .expect("插入邮件");
+        let id = store.list_inbox_messages(&InboxQuery::default()).expect("查询")[0].id;
+
+        assert!(store.set_message_read(id, true).expect("标已读"));
+        let folder = store
+            .get_folder_by_id(fa)
+            .expect("查询文件夹")
+            .expect("文件夹存在");
+        assert_eq!(folder.unread_count, 0, "未读数不应为负");
     }
 }

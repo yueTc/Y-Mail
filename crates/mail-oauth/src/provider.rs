@@ -1,7 +1,8 @@
 //! 内置授权服务商元数据：Gmail 与 Microsoft。
 //!
 //! 桌面端走 PKCE 公共客户端流程，客户端编号不是秘密，可以随程序一起发给用户。
-//! 编号来源有两处：编译时写死的值（发布打包用）、运行时环境变量（本机调试用）。
+//! 编号来源有三处：源码里写死的常量（发布版随包带走）、编译时注入的环境变量
+//! （打包脚本用）、运行时环境变量（本机调试用）。
 
 use crate::error::OAuthError;
 
@@ -76,31 +77,52 @@ pub fn provider_meta(kind: ProviderKind) -> ProviderMeta {
     }
 }
 
+/// 随源码写死的内置客户端编号（发布版带着走，普通用户零配置）。
+///
+/// 桌面端走 PKCE 公共客户端，编号按 OAuth 规范不是秘密，可以随程序一起分发。
+/// 留空字符串表示这一类没内置。
+const BUILTIN_GMAIL_CLIENT_ID: &str =
+    "199049238202-5j8kdrdoguhsf1h8jnmnuh3anrvip3t6.apps.googleusercontent.com";
+/// 微软 Outlook 的内置编号；对应在 Microsoft Entra 里注册的桌面应用。
+const BUILTIN_MICROSOFT_CLIENT_ID: &str = "09746a15-e75b-4eee-a361-d82a3e9d8c0d";
+
 /// 软件内置的开发者应用编号（客户端编号）。
 ///
-/// 优先取编译时写死的值，其次取运行时环境变量：
-/// - 谷歌：`EM_MASTER_GMAIL_CLIENT_ID`
-/// - 微软：`EM_MASTER_MICROSOFT_CLIENT_ID`
+/// 取值顺序：编译时注入 > 运行时环境变量 > 源码常量。
+/// - 谷歌：`YMAIL_GMAIL_CLIENT_ID`
+/// - 微软：`YMAIL_MICROSOFT_CLIENT_ID`
 ///
-/// 两处都没配就返回 `None`，界面会提示用户去「高级设置」里自己填。
+/// 三处都没配就返回 `None`，界面会提示用户去「高级设置」里自己填。
 pub fn default_client_id(kind: ProviderKind) -> Option<String> {
-    let (built_in, runtime_key) = match kind {
+    let (compile_time, runtime_key, embedded) = match kind {
         ProviderKind::Gmail => (
-            option_env!("EM_MASTER_GMAIL_CLIENT_ID"),
-            "EM_MASTER_GMAIL_CLIENT_ID",
+            option_env!("YMAIL_GMAIL_CLIENT_ID"),
+            "YMAIL_GMAIL_CLIENT_ID",
+            BUILTIN_GMAIL_CLIENT_ID,
         ),
         ProviderKind::Microsoft => (
-            option_env!("EM_MASTER_MICROSOFT_CLIENT_ID"),
-            "EM_MASTER_MICROSOFT_CLIENT_ID",
+            option_env!("YMAIL_MICROSOFT_CLIENT_ID"),
+            "YMAIL_MICROSOFT_CLIENT_ID",
+            BUILTIN_MICROSOFT_CLIENT_ID,
         ),
     };
-    if let Some(value) = built_in.map(str::trim).filter(|value| !value.is_empty()) {
-        return Some(value.to_string());
-    }
-    std::env::var(runtime_key)
-        .ok()
-        .map(|value| value.trim().to_string())
+    let runtime = std::env::var(runtime_key).ok();
+    pick_client_id(compile_time, runtime.as_deref(), embedded)
+}
+
+/// 按优先级挑一个非空编号：编译期 > 运行期 > 源码内置。
+fn pick_client_id(compile_time: Option<&str>, runtime: Option<&str>, embedded: &str) -> Option<String> {
+    clean_client_id(compile_time)
+        .or_else(|| clean_client_id(runtime))
+        .or_else(|| clean_client_id(Some(embedded)))
+}
+
+/// 去掉首尾空白；空串和纯空白都当「没配」。
+fn clean_client_id(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
         .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 /// 决定这次授权用哪个客户端编号：用户填了就用用户的，没填就用内置的。
@@ -122,6 +144,45 @@ pub fn resolve_client_id(kind: ProviderKind, provided: &str) -> Result<String, O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 编号取值顺序是编译期优先运行期次之内置兜底() {
+        let compile = pick_client_id(Some(" compile "), Some("runtime"), "embedded");
+        assert_eq!(compile.as_deref(), Some("compile"));
+        let runtime = pick_client_id(None, Some(" runtime "), "embedded");
+        assert_eq!(runtime.as_deref(), Some("runtime"));
+        let embedded = pick_client_id(None, None, "embedded");
+        assert_eq!(embedded.as_deref(), Some("embedded"));
+        let blank = pick_client_id(Some("  "), Some(""), "  ");
+        assert_eq!(blank, None);
+    }
+
+    #[test]
+    fn 谷歌编号已经写进源码() {
+        let id = BUILTIN_GMAIL_CLIENT_ID.trim();
+        assert!(
+            id.ends_with(".apps.googleusercontent.com"),
+            "谷歌应用编号应以 .apps.googleusercontent.com 结尾：{id}"
+        );
+        assert!(id.contains("-"), "谷歌应用编号应带项目号前缀：{id}");
+    }
+
+    #[test]
+    fn 微软编号已经写进源码() {
+        let id = BUILTIN_MICROSOFT_CLIENT_ID.trim();
+        assert_eq!(id.len(), 36, "微软应用编号是 36 位：{id}");
+        assert_eq!(id.matches('-').count(), 4, "微软应用编号带 4 个连字号：{id}");
+        assert!(id.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-'));
+    }
+
+    #[test]
+    fn 内置编号能直接支撑授权() {
+        for kind in [ProviderKind::Gmail, ProviderKind::Microsoft] {
+            let resolved = resolve_client_id(kind, "")
+                .unwrap_or_else(|_| panic!("源码里已经内置了{}编号", kind.display_name()));
+            assert!(!resolved.trim().is_empty());
+        }
+    }
 
     #[test]
     fn 标识可往返且兼容常见别名() {

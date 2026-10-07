@@ -6,10 +6,13 @@
 //! 安全约定：授权码与代理密码只从界面传入、写进系统凭据管理器；出参一律不含凭据本体，
 //! 已保存的账号只回一个 `hasCredential` 布尔值。命令入参不写日志。
 
+use std::path::{Path, PathBuf};
+
 use mail_core::{
     decode_encoded_words, AccountInboxSummary, AiAuthorizationPreview, AiFunction, AiModelMapEntry,
     AiProviderInput, AiProviderKind, AiProviderView, AiTextOutcome, AiThinkingLevel, AiTranslation,
-    ConnectionReport, EngineError, InboxFolder, InboxMessage, InboxQuery, InboxThread, NewOutbox, OutboxKind,
+    ConnectionReport, ContactDraft, ContactExportKind, ContactImportEntry, ContactImportMode, ContactScope,
+    EngineError, InboxFolder, InboxMessage, InboxQuery, InboxThread, MailEngine, NewOutbox, OutboxKind,
     SearchHit, SearchQuery, SnippetSegment, StoredAiAudit, StoredAttachment, StoredContact, StoredOutbox,
     StoredSignature,
 };
@@ -18,8 +21,11 @@ use mail_domain::account::{
 };
 use mail_domain::proxy::{GlobalProxyMode, ProxyConfig, ProxyId, ProxyKind, Secret};
 use serde::{Deserialize, Serialize};
+use tauri_plugin_autostart::ManagerExt;
 
+use crate::settings::AppSettings;
 use crate::state::AppState;
+use crate::storage_dir::{self, ChangeDataDirResult, MigrationStart};
 
 // ============================ 错误 ============================
 
@@ -43,7 +49,7 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
             kind: None,
@@ -52,7 +58,7 @@ impl CommandError {
         }
     }
 
-    fn input(message: impl Into<String>) -> Self {
+    pub(crate) fn input(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
             kind: Some("输入有误".to_string()),
@@ -543,6 +549,8 @@ pub struct DbStatus {
     pub database_file: String,
     /// 日志目录。
     pub log_dir: String,
+    /// 附件下载目录。
+    pub attachment_dir: String,
     /// 当前结构版本。
     pub schema_version: i64,
     /// 本次启动新应用的迁移条数。
@@ -559,6 +567,7 @@ impl DbStatus {
         Self {
             database_file: init.database_file.clone(),
             log_dir,
+            attachment_dir: init.attachment_dir.clone(),
             schema_version: init.schema_version,
             applied_count: init.applied_count(),
             applied_versions,
@@ -571,6 +580,359 @@ impl DbStatus {
 #[tauri::command]
 pub async fn db_status(state: tauri::State<'_, AppState>) -> Result<DbStatus, CommandError> {
     state.db_status().await.map_err(CommandError::new)
+}
+
+// ============================ 存储目录与通知设置 ============================
+
+/// 存储目录与通知开关快照，字段名与前端 TypeScript 类型保持一致。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettingsDto {
+    /// 已保存的邮件数据目录；空字符串表示用默认。
+    pub data_dir: String,
+    /// 已保存的附件下载目录；空字符串表示用默认。
+    pub attachment_dir: String,
+    /// 新邮件是否弹系统通知。
+    pub notify_new_mail: bool,
+    /// 默认邮件数据目录（界面上做提示）。
+    pub default_data_dir: String,
+    /// 附件目录留空时会用的默认位置。
+    pub default_attachment_dir: String,
+    /// 当前引擎实际在用的邮件数据目录。
+    pub active_data_dir: String,
+    /// 当前引擎实际在用的附件目录。
+    pub active_attachment_dir: String,
+    /// 是不是全新安装后的第一次启动；界面据此弹「数据放哪」向导。
+    pub first_run: bool,
+}
+
+/// 保存设置时前端传进来的内容。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettingsInputDto {
+    /// 邮件数据目录；留空表示用默认。
+    pub data_dir: String,
+    /// 旧版附件下载目录；只保留兼容，保存时一律置空。
+    #[serde(default)]
+    pub attachment_dir: String,
+    /// 新邮件是否弹系统通知。
+    pub notify_new_mail: bool,
+}
+
+/// 把界面上的路径文本转成 `Option<PathBuf>` 并做校验。
+///
+/// 规则：留空 = 用默认；非空必须是绝对路径，并且真的能建出来（顺手验证权限）。
+fn normalize_dir(raw: &str, label: &str) -> Result<Option<PathBuf>, CommandError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let path = PathBuf::from(trimmed);
+    if !path.is_absolute() {
+        return Err(CommandError::input(format!("{label}要填完整路径，例如 D:\\邮件")));
+    }
+    std::fs::create_dir_all(&path)
+        .map_err(|error| CommandError::new(format!("{label}没法使用（{}）：{error}", path.display())))?;
+    Ok(Some(path))
+}
+
+/// 读取已保存的存储目录与通知开关。
+#[tauri::command]
+pub async fn get_app_settings(state: tauri::State<'_, AppState>) -> Result<AppSettingsDto, CommandError> {
+    Ok(build_settings_dto(state.inner()))
+}
+
+/// 保存数据目录与通知开关。
+///
+/// 数据目录下次启动生效（引擎已经开在旧目录上，不能中途搬家）；
+/// 通知开关立刻生效。旧附件目录字段只做兼容，保存时一律置空。
+#[tauri::command]
+pub async fn set_app_settings(
+    state: tauri::State<'_, AppState>,
+    input: AppSettingsInputDto,
+) -> Result<AppSettingsDto, CommandError> {
+    let data_dir = normalize_dir(&input.data_dir, "邮件数据目录")?;
+    // 待清理记录只由迁移流程和后端重启命令写，界面传不进来，这里原样保留。
+    let mut previous = state.settings_snapshot();
+    let settings = AppSettings {
+        data_dir,
+        attachment_dir: None,
+        notify_new_mail: input.notify_new_mail,
+        pending_cleanup_dir: previous.pending_cleanup_dir.take(),
+    };
+    state
+        .save_settings(settings)
+        .map_err(|error| CommandError::new(format!("保存设置失败：{error}")))?;
+    Ok(build_settings_dto(state.inner()))
+}
+
+/// 更改数据目录：复制旧数据、校验通过后才写设置。
+#[tauri::command]
+pub async fn change_data_dir(
+    state: tauri::State<'_, AppState>,
+    new_dir: String,
+    confirmed: bool,
+) -> Result<ChangeDataDirResult, CommandError> {
+    if !state.try_begin_data_dir_migration() {
+        return Err(CommandError::new("目录迁移正在进行，请等这次完成后再试"));
+    }
+    let result = change_data_dir_inner(state.inner(), &new_dir, confirmed).await;
+    state.finish_data_dir_migration();
+    result
+}
+
+async fn change_data_dir_inner(
+    state: &AppState,
+    new_dir: &str,
+    confirmed: bool,
+) -> Result<ChangeDataDirResult, CommandError> {
+    let settings = state.settings_snapshot();
+    let active_dir = PathBuf::from(state.active_data_dir());
+    let legacy_attachment = settings.attachment_dir.clone();
+    let target = PathBuf::from(new_dir.trim());
+
+    let plan =
+        match storage_dir::prepare_migration(&active_dir, legacy_attachment.as_deref(), &target, confirmed)
+            .map_err(CommandError::new)?
+        {
+            MigrationStart::NeedsConfirmation => {
+                return Ok(ChangeDataDirResult {
+                    needs_confirmation: true,
+                    message: "目标目录已有数据。继续会复制到该目录，但不会覆盖任何同名文件；请确认后再继续。"
+                        .to_string(),
+                });
+            }
+            MigrationStart::Ready(plan) => plan,
+        };
+
+    {
+        let engine = state.engine().await;
+        engine
+            .store()
+            .backup_to(plan.database_file())
+            .map_err(|error| CommandError::new(format!("复制数据库失败：{error}")))?;
+    }
+
+    storage_dir::copy_planned_files(&plan).map_err(CommandError::new)?;
+    storage_dir::verify_database_file(plan.database_file()).map_err(CommandError::new)?;
+
+    let mut updated = settings;
+    updated.data_dir = Some(plan.new_dir().to_path_buf());
+    updated.attachment_dir = None;
+    state
+        .save_settings(updated)
+        .map_err(|error| CommandError::new(format!("保存设置失败：{error}")))?;
+
+    // 迁移成功：旧目录只暂存在内存里。重启命令据此决定清不清，界面拿不到路径，
+    // 也传不进来，避免界面传错路径导致误删。
+    state.set_pending_cleanup_dir(Some(active_dir));
+
+    Ok(ChangeDataDirResult {
+        needs_confirmation: false,
+        message: "目录已切换，请选择是否清理旧文件并重启".to_string(),
+    })
+}
+
+/// 打开当前引擎正在使用的数据目录，只接受后端自己确定的路径。
+#[tauri::command]
+pub async fn open_data_dir(state: tauri::State<'_, AppState>) -> Result<(), CommandError> {
+    let path = PathBuf::from(state.active_data_dir());
+    std::fs::create_dir_all(&path)
+        .map_err(|error| CommandError::new(format!("数据目录没法创建（{}）：{error}", path.display())))?;
+    open_directory(&path).map_err(|error| CommandError::new(format!("打开数据目录失败：{error}")))?;
+    Ok(())
+}
+
+// ============================ 开机启动 ============================
+
+/// 读开机启动的真实状态：直接问系统启动项，不看本地缓存。
+///
+/// 用户在「任务管理器 → 启动」里手动禁用后，这里读到的也是真实值。
+#[tauri::command]
+pub async fn autostart_status(app: tauri::AppHandle) -> Result<bool, CommandError> {
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|error| CommandError::new(format!("读取开机启动状态失败：{error}")))
+}
+
+/// 打开 / 关闭开机启动，返回改完之后的真实状态。
+#[tauri::command]
+pub async fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool, CommandError> {
+    let manager = app.autolaunch();
+    if enabled {
+        manager
+            .enable()
+            .map_err(|error| CommandError::new(format!("开启开机启动失败：{error}")))?;
+    } else {
+        manager
+            .disable()
+            .map_err(|error| CommandError::new(format!("关闭开机启动失败：{error}")))?;
+    }
+    manager
+        .is_enabled()
+        .map_err(|error| CommandError::new(format!("确认开机启动状态失败：{error}")))
+}
+
+/// 重启应用：迁移完成后由界面明确选择要不要清理旧目录。
+///
+/// 待清理路径只从后端内存里取，界面只能传“清不清”，不能传路径。
+#[tauri::command]
+pub async fn restart_app(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    cleanup: bool,
+) -> Result<(), CommandError> {
+    if cleanup {
+        let Some(pending_dir) = state.pending_cleanup_dir() else {
+            return Err(CommandError::new("没有找到待清理的旧数据目录，请重新选择目录"));
+        };
+        let mut settings = state.settings_snapshot();
+        settings.pending_cleanup_dir = Some(pending_dir);
+        state
+            .save_settings(settings)
+            .map_err(|error| CommandError::new(format!("保存待清理目录失败：{error}")))?;
+    } else {
+        let mut settings = state.settings_snapshot();
+        settings.pending_cleanup_dir = None;
+        state
+            .save_settings(settings)
+            .map_err(|error| CommandError::new(format!("清掉待清理记录失败：{error}")))?;
+        state.clear_pending_cleanup_dir();
+    }
+    app.restart()
+}
+
+fn open_directory(path: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer").arg(path).spawn()?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(path).spawn()?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open").arg(path).spawn()?;
+    }
+    Ok(())
+}
+
+/// 外部大附件下载结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalDownloadDto {
+    /// 本地绝对路径。
+    pub path: String,
+    /// 文件名。
+    pub filename: String,
+    /// 字节数。
+    pub size: u64,
+}
+
+/// 下载正文里的外部大附件（网易超大附件）。
+///
+/// 链接直接来自正文，所以后端会再校验一次域名；过期这种状态由网易接口给出，
+/// 这里原样翻成中文交给界面显示。
+#[tauri::command]
+pub async fn download_external_attachment(
+    state: tauri::State<'_, AppState>,
+    url: String,
+) -> Result<ExternalDownloadDto, CommandError> {
+    let engine = state.engine().await;
+    let saved = engine.download_external_attachment(url.trim()).await?;
+    Ok(ExternalDownloadDto {
+        path: saved.path,
+        filename: saved.filename,
+        size: saved.size,
+    })
+}
+
+/// 用系统默认程序打开一个已经下载好的附件。
+///
+/// 路径由后端校验：只接受下载目录里真实存在的文件，界面指定不了任意路径。
+#[tauri::command]
+pub async fn open_downloaded_file(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<(), CommandError> {
+    let engine = state.engine().await;
+    let target = engine.resolve_download_path(path.trim())?;
+    open_with_default(&target).map_err(|error| CommandError::new(format!("打开文件失败：{error}")))?;
+    Ok(())
+}
+
+/// 打开附件所在的目录，并尽量把文件本身选中。
+#[tauri::command]
+pub async fn open_downloaded_file_dir(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<(), CommandError> {
+    let engine = state.engine().await;
+    let target = engine.resolve_download_path(path.trim())?;
+    reveal_file(&target).map_err(|error| CommandError::new(format!("打开所在位置失败：{error}")))?;
+    Ok(())
+}
+
+fn open_with_default(path: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        // 交给系统外壳，不经过 cmd，路径不会被当成命令解析。
+        std::process::Command::new("explorer").arg(path).spawn()?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(path).spawn()?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open").arg(path).spawn()?;
+    }
+    Ok(())
+}
+
+fn reveal_file(path: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(format!("/select,{}", path.display()))
+            .spawn()?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg("-R").arg(path).spawn()?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let dir = path.parent().unwrap_or(path);
+        std::process::Command::new("xdg-open").arg(dir).spawn()?;
+    }
+    Ok(())
+}
+
+/// 组装返回给界面的设置快照。
+fn build_settings_dto(state: &AppState) -> AppSettingsDto {
+    let settings = state.settings_snapshot();
+    let default_dir = state.default_data_dir();
+    AppSettingsDto {
+        data_dir: path_text(settings.data_dir.as_deref()),
+        attachment_dir: path_text(settings.attachment_dir.as_deref()),
+        notify_new_mail: settings.notify_new_mail,
+        default_data_dir: default_dir.to_string_lossy().to_string(),
+        default_attachment_dir: settings
+            .effective_attachment_dir(default_dir)
+            .to_string_lossy()
+            .to_string(),
+        active_data_dir: state.active_data_dir().to_string(),
+        active_attachment_dir: state.active_attachment_dir().to_string(),
+        first_run: state.first_run(),
+    }
+}
+
+/// `Option<&Path>` 转成界面用的字符串：没有就是空串。
+fn path_text(path: Option<&Path>) -> String {
+    path.map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_default()
 }
 
 // ============================ 账号命令 ============================
@@ -598,7 +960,21 @@ pub async fn test_account_connection(
     Ok(ConnectionReportDto::from_report(&report))
 }
 
-/// 新建账号：引擎会先连接自检，通过后才落库。
+/// 账号保存后立刻起同步；已在跑或账号停用时不重复处理。
+fn ensure_sync_started(engine: &MailEngine, account: &Account) {
+    if !account.enabled {
+        return;
+    }
+    match engine.start_sync(Some(account.id.0)) {
+        Ok(started) if started > 0 => tracing::info!(account_id = account.id.0, "账号已自动开始同步"),
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(account_id = account.id.0, error = %error, "账号自动同步启动失败");
+        }
+    }
+}
+
+/// 新建账号：引擎会先连接自检，通过后才落库；保存成功后立即开始收邮件。
 #[tauri::command]
 pub async fn create_account(
     state: tauri::State<'_, AppState>,
@@ -608,6 +984,7 @@ pub async fn create_account(
     let draft = draft.to_domain()?;
     let engine = state.engine().await;
     let account = engine.create_account(&draft, &Secret::new(secret)).await?;
+    ensure_sync_started(&engine, &account);
     Ok(AccountDto::from_domain(&account))
 }
 
@@ -716,6 +1093,7 @@ pub async fn complete_oauth_authorize(
 ) -> Result<OAuthOutcomeDto, CommandError> {
     let engine = state.engine().await;
     let outcome = engine.complete_oauth_authorize(&state_key).await?;
+    ensure_sync_started(&engine, &outcome.account);
     Ok(OAuthOutcomeDto {
         account: AccountDto::from_domain(&outcome.account),
         report: ConnectionReportDto::from_report(&outcome.report),
@@ -773,6 +1151,30 @@ fn open_in_browser(url: &str) -> std::io::Result<()> {
         .arg(url)
         .spawn()
         .map(|_| ())
+}
+
+/// 用系统默认浏览器打开正文里的一个外部链接。
+///
+/// 正文是不可信内容，所以这里只放行绝对的 `http` / `https` / `mailto`：
+/// `file:`、`javascript:` 和第三方自定义协议都可能被系统协议处理器拿去干别的，
+/// 一律拒绝。`open_in_browser` 走的是系统打开器、不经过 shell，
+/// 地址只当参数，不会被当成命令解析。
+#[tauri::command]
+pub async fn open_external_url(url: String) -> Result<(), CommandError> {
+    let target = url.trim();
+    if !is_external_link(target) {
+        return Err(CommandError::new("这个链接的地址不支持打开".to_string()));
+    }
+    open_in_browser(target).map_err(|error| CommandError::new(format!("打开链接失败：{error}")))?;
+    Ok(())
+}
+
+/// 只认绝对 `http` / `https` / `mailto` 链接，大小写不敏感。
+fn is_external_link(url: &str) -> bool {
+    let lowered = url.to_ascii_lowercase();
+    ["http://", "https://", "mailto:"]
+        .iter()
+        .any(|prefix| lowered.len() > prefix.len() && lowered.starts_with(prefix))
 }
 
 // ============================ 代理命令 ============================
@@ -837,7 +1239,7 @@ pub async fn set_proxy_settings(
 
 /// 测试一个代理能不能连到目标服务器。
 ///
-/// `target` 省略或为空时用默认目标 `www.baidu.com:443`。
+/// `target` 省略或为空时用默认目标 `www.google.com:443`。
 #[tauri::command]
 pub async fn test_proxy(
     state: tauri::State<'_, AppState>,
@@ -853,15 +1255,15 @@ pub async fn test_proxy(
 /// 解析「主机:端口」形式的测试目标；空值回退到默认目标。
 fn parse_target(target: Option<String>) -> Result<(String, u16), CommandError> {
     let Some(raw) = target else {
-        return Ok(("www.baidu.com".to_string(), 443));
+        return Ok(("www.google.com".to_string(), 443));
     };
     let value = raw.trim();
     if value.is_empty() {
-        return Ok(("www.baidu.com".to_string(), 443));
+        return Ok(("www.google.com".to_string(), 443));
     }
     let (host, port) = value
         .rsplit_once(':')
-        .ok_or_else(|| CommandError::input("测试目标要写成「主机:端口」，例如 www.baidu.com:443"))?;
+        .ok_or_else(|| CommandError::input("测试目标要写成「主机:端口」，例如 www.google.com:443"))?;
     let host = host.trim();
     if host.is_empty() {
         return Err(CommandError::input("测试目标的主机名不能为空"));
@@ -954,6 +1356,8 @@ pub async fn stop_sync(
 const INBOX_DEFAULT_LIMIT: i64 = 200;
 /// 收件箱每页条数上限（列表与线程展开共用）。
 const INBOX_MAX_LIMIT: i64 = 500;
+/// 允许前端指定的文件夹类型，取值与 folder 表的 kind 一致。
+const INBOX_FOLDER_KINDS: [&str; 6] = ["inbox", "draft", "sent", "trash", "junk", "custom"];
 
 /// 统一收件箱查询条件（前端传入，全部字段可选）。
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -965,6 +1369,10 @@ pub struct InboxQueryDto {
     pub folder_id: Option<i64>,
     /// 只看未读。
     pub unread_only: bool,
+    /// 只看标红旗的邮件（左侧「红旗邮件」入口用）。
+    pub flagged_only: bool,
+    /// 只看某一类文件夹（「所有草稿」「所有已发送」用）；省略按默认范围。
+    pub folder_kind: Option<String>,
     /// 跳过条数。
     pub offset: i64,
     /// 最多返回条数；省略用默认值。
@@ -984,10 +1392,24 @@ impl InboxQueryDto {
         if limit > INBOX_MAX_LIMIT {
             return Err(CommandError::input(format!("每页最多 {INBOX_MAX_LIMIT} 条")));
         }
+        let folder_kind = match self.folder_kind.as_deref() {
+            None => None,
+            Some(value) => {
+                let normalized = value.trim().to_ascii_lowercase();
+                if !INBOX_FOLDER_KINDS.contains(&normalized.as_str()) {
+                    return Err(CommandError::input(
+                        "文件夹类型只能是 inbox、draft、sent、trash、junk 或 custom",
+                    ));
+                }
+                Some(normalized)
+            }
+        };
         Ok(InboxQuery {
             account_id: self.account_id,
             folder_id: self.folder_id,
             unread_only: self.unread_only,
+            flagged_only: self.flagged_only,
+            folder_kind,
             offset: self.offset,
             limit,
         })
@@ -1274,6 +1696,62 @@ pub async fn list_thread_messages(
     let engine = state.engine().await;
     let messages = engine.thread_messages(account_id, thread_key.trim(), limit)?;
     Ok(messages.iter().map(InboxMessageDto::from_message).collect())
+}
+
+/// 切换一封邮件的已读状态。
+///
+/// 本地立即生效并维护所在文件夹的未读数。
+/// 服务器 Seen 回写依赖现有同步能力，这里先只做本地闭环。
+#[tauri::command]
+pub async fn set_message_read(
+    state: tauri::State<'_, AppState>,
+    message_id: i64,
+    read: bool,
+) -> Result<(), String> {
+    if message_id <= 0 {
+        return Err("邮件编号不合法".to_string());
+    }
+    let engine = state.engine().await;
+    engine
+        .set_message_read(message_id, read)
+        .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+/// 切换一封邮件的红旗本地状态，然后尝试回写服务器。
+///
+/// 本地写库先完成并立即返回状态；服务器这次没确认就保留「待同步」，
+/// 后台同步会自动重试，界面据此提示用户。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlagToggleResult {
+    /// 本地状态是否真的变了。
+    pub changed: bool,
+    /// 服务器是否已确认（本地不再有待同步）。
+    pub synced: bool,
+}
+
+#[tauri::command]
+pub async fn set_message_flagged(
+    state: tauri::State<'_, AppState>,
+    message_id: i64,
+    flagged: bool,
+) -> Result<FlagToggleResult, String> {
+    if message_id <= 0 {
+        return Err("邮件编号不合法".to_string());
+    }
+    let engine = state.engine().await;
+    let changed = engine
+        .set_message_flagged(message_id, flagged)
+        .map_err(|err| err.to_string())?;
+    let synced = match engine.sync_message_flag(message_id).await {
+        Ok(synced) => synced,
+        Err(error) => {
+            tracing::warn!(message_id, %error, "红旗回写失败，已留在待同步队列");
+            false
+        }
+    };
+    Ok(FlagToggleResult { changed, synced })
 }
 
 // ============================ 读信与附件（Wave 4） ============================
@@ -1609,6 +2087,9 @@ pub struct ComposeAttachmentDto {
     pub path: String,
     /// 展示文件名。
     pub filename: String,
+    /// 正文内嵌图片的编号；普通附件为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_id: Option<String>,
 }
 
 /// 把收件人列表转成库里存的 JSON 数组。
@@ -1642,10 +2123,14 @@ fn attachments_to_json(items: &[ComposeAttachmentDto]) -> String {
     let value: Vec<serde_json::Value> = items
         .iter()
         .map(|item| {
-            serde_json::json!({
+            let mut entry = serde_json::json!({
                 "path": item.path,
                 "filename": item.filename,
-            })
+            });
+            if let Some(content_id) = item.content_id.as_deref() {
+                entry["content_id"] = serde_json::Value::String(content_id.to_string());
+            }
+            entry
         })
         .collect();
     serde_json::Value::Array(value).to_string()
@@ -1659,6 +2144,7 @@ fn attachments_from_json(raw: &str) -> Vec<ComposeAttachmentDto> {
         .map(|item| ComposeAttachmentDto {
             path: item.path,
             filename: item.filename,
+            content_id: item.content_id,
         })
         .collect()
 }
@@ -1956,25 +2442,242 @@ pub async fn delete_outbox(state: tauri::State<'_, AppState>, id: i64) -> Result
     Ok(engine.delete_outbox(id)?)
 }
 
-/// 联系人自动补全：按名字或邮箱片段搜。
+/// 联系人自动补全：按名字或邮箱片段搜；已隐藏的人不出现。
 #[tauri::command]
 pub async fn search_contacts(
     state: tauri::State<'_, AppState>,
-    account_id: i64,
     keyword: String,
     limit: Option<usize>,
 ) -> Result<Vec<ContactDto>, CommandError> {
-    if account_id <= 0 {
-        return Err(CommandError::input("请先选择发信账号"));
-    }
     let keyword = keyword.trim();
     if keyword.is_empty() {
         return Ok(Vec::new());
     }
     let limit = limit.unwrap_or(10);
     let engine = state.engine().await;
-    let contacts = engine.search_contacts(account_id, keyword, limit)?;
+    let contacts = engine.search_contacts(keyword, limit)?;
     Ok(contacts.iter().map(ContactDto::from_contact).collect())
+}
+
+/// 通讯录列表；`scope` 传 `hidden` 时看「已隐藏」。
+#[tauri::command]
+pub async fn list_contacts(
+    state: tauri::State<'_, AppState>,
+    keyword: Option<String>,
+    limit: Option<usize>,
+    scope: Option<String>,
+) -> Result<Vec<ContactDto>, CommandError> {
+    let keyword = keyword.unwrap_or_default();
+    let limit = limit.unwrap_or(500);
+    let scope = parse_contact_scope(scope.as_deref())?;
+    let engine = state.engine().await;
+    let contacts = engine.list_contacts(keyword.trim(), limit, scope)?;
+    Ok(contacts.iter().map(ContactDto::from_contact).collect())
+}
+
+/// 通讯录条数快照（正常 / 已隐藏 / 未分组）。
+#[tauri::command]
+pub async fn contact_counts(state: tauri::State<'_, AppState>) -> Result<ContactCountsDto, CommandError> {
+    let engine = state.engine().await;
+    let counts = engine.contact_counts()?;
+    Ok(ContactCountsDto {
+        active: counts.active,
+        hidden: counts.hidden,
+        ungrouped: counts.ungrouped,
+    })
+}
+
+/// 新建联系人。
+#[tauri::command]
+pub async fn create_contact(
+    state: tauri::State<'_, AppState>,
+    draft: ContactDraftDto,
+) -> Result<i64, CommandError> {
+    let engine = state.engine().await;
+    Ok(engine.create_contact(&draft.to_draft())?)
+}
+
+/// 修改联系人。
+#[tauri::command]
+pub async fn update_contact(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+    draft: ContactDraftDto,
+) -> Result<(), CommandError> {
+    let engine = state.engine().await;
+    engine.update_contact(id, &draft.to_draft())?;
+    Ok(())
+}
+
+/// 隐藏一位联系人（软删）。
+#[tauri::command]
+pub async fn hide_contact(state: tauri::State<'_, AppState>, id: i64) -> Result<(), CommandError> {
+    let engine = state.engine().await;
+    engine.hide_contact(id)?;
+    Ok(())
+}
+
+/// 把一位已隐藏的联系人放回来。
+#[tauri::command]
+pub async fn restore_contact(state: tauri::State<'_, AppState>, id: i64) -> Result<(), CommandError> {
+    let engine = state.engine().await;
+    engine.restore_contact(id)?;
+    Ok(())
+}
+
+/// 彻底删掉一位联系人。
+#[tauri::command]
+pub async fn purge_contact(state: tauri::State<'_, AppState>, id: i64) -> Result<(), CommandError> {
+    let engine = state.engine().await;
+    engine.purge_contact(id)?;
+    Ok(())
+}
+
+/// 列出全部分组。
+#[tauri::command]
+pub async fn list_contact_groups(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ContactGroupDto>, CommandError> {
+    let engine = state.engine().await;
+    let groups = engine.list_contact_groups()?;
+    Ok(groups
+        .iter()
+        .map(|group| ContactGroupDto {
+            id: group.id,
+            name: group.name.clone(),
+            member_count: group.member_count,
+        })
+        .collect())
+}
+
+/// 新建分组。
+#[tauri::command]
+pub async fn create_contact_group(
+    state: tauri::State<'_, AppState>,
+    name: String,
+) -> Result<i64, CommandError> {
+    let engine = state.engine().await;
+    Ok(engine.create_contact_group(&name)?)
+}
+
+/// 给分组改名。
+#[tauri::command]
+pub async fn rename_contact_group(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+    name: String,
+) -> Result<(), CommandError> {
+    let engine = state.engine().await;
+    engine.rename_contact_group(id, &name)?;
+    Ok(())
+}
+
+/// 删分组；组内联系人回到未分组。
+#[tauri::command]
+pub async fn delete_contact_group(state: tauri::State<'_, AppState>, id: i64) -> Result<(), CommandError> {
+    let engine = state.engine().await;
+    engine.delete_contact_group(id)?;
+    Ok(())
+}
+
+/// 清空自动收集的联系人（手动的和已隐藏的都不动）。
+#[tauri::command]
+pub async fn clear_auto_contacts(state: tauri::State<'_, AppState>) -> Result<usize, CommandError> {
+    let engine = state.engine().await;
+    Ok(engine.clear_auto_contacts()?)
+}
+
+/// 把通讯录导出到用户选定的文件。
+#[tauri::command]
+pub async fn export_contacts(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    kind: String,
+    scope: Option<String>,
+) -> Result<ContactExportDto, CommandError> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err(CommandError::input("没有选保存位置"));
+    }
+    let kind = match kind.trim().to_ascii_lowercase().as_str() {
+        "csv" => ContactExportKind::Csv,
+        "vcf" | "vcard" => ContactExportKind::Vcf,
+        other => return Err(CommandError::input(format!("不认识的导出格式：{other}"))),
+    };
+    let scope = parse_contact_scope(scope.as_deref())?;
+    let engine = state.engine().await;
+    let exported = engine.export_contacts(kind, scope)?;
+    std::fs::write(path, exported.text.as_bytes())
+        .map_err(|error| CommandError::input(format!("写不了这个文件：{error}")))?;
+    Ok(ContactExportDto {
+        count: exported.count,
+        path: path.to_string(),
+    })
+}
+
+/// 读一个导入文件并解析出预览；这一步只读文件，不写库。
+#[tauri::command]
+pub async fn preview_contact_import(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    email_column: Option<usize>,
+) -> Result<ContactImportPreviewDto, CommandError> {
+    let engine = state.engine().await;
+    let preview = engine.preview_contact_import(&path, email_column)?;
+    Ok(ContactImportPreviewDto {
+        headers: preview.headers,
+        email_column: preview.email_column,
+        entries: preview
+            .entries
+            .iter()
+            .map(ContactImportEntryDto::from_entry)
+            .collect(),
+        problems: preview
+            .problems
+            .iter()
+            .map(|item| ContactProblemDto {
+                line: item.line,
+                reason: item.reason.clone(),
+            })
+            .collect(),
+        duplicate_count: preview.duplicate_count,
+        new_count: preview.new_count,
+    })
+}
+
+/// 把预览里确认过的条目落库。
+#[tauri::command]
+pub async fn apply_contact_import(
+    state: tauri::State<'_, AppState>,
+    entries: Vec<ContactImportEntryDto>,
+    overwrite: Option<bool>,
+) -> Result<ContactImportOutcomeDto, CommandError> {
+    let mode = if overwrite.unwrap_or(false) {
+        ContactImportMode::Overwrite
+    } else {
+        ContactImportMode::Skip
+    };
+    let engine = state.engine().await;
+    let outcome = engine.apply_contact_import(
+        entries.iter().map(ContactImportEntryDto::to_entry).collect(),
+        mode,
+    )?;
+    Ok(ContactImportOutcomeDto {
+        imported: outcome.imported,
+        skipped: outcome.skipped,
+        overwritten: outcome.overwritten,
+        invalid: outcome.invalid,
+        groups_created: outcome.groups_created,
+    })
+}
+
+/// 解析联系人范围参数。
+fn parse_contact_scope(value: Option<&str>) -> Result<ContactScope, CommandError> {
+    match value.unwrap_or("active").trim().to_ascii_lowercase().as_str() {
+        "" | "active" => Ok(ContactScope::Active),
+        "hidden" => Ok(ContactScope::Hidden),
+        other => Err(CommandError::input(format!("不认识的联系人范围：{other}"))),
+    }
 }
 
 /// 联系人展示信息。
@@ -1983,26 +2686,181 @@ pub async fn search_contacts(
 pub struct ContactDto {
     /// 联系人编号。
     pub id: i64,
-    /// 所属账号；None 表示全局联系人。
-    pub account_id: Option<i64>,
-    /// 显示名。
+    /// 显示名，可能为空。
     pub name: String,
     /// 邮箱地址。
     pub email: String,
-    /// 最近一次使用时间。
+    /// 本地备注。
+    pub note: String,
+    /// 所属分组。
+    pub group_id: Option<i64>,
+    /// 分组名。
+    pub group_name: Option<String>,
+    /// `auto`（同步收集）/ `manual`（用户建或改过）。
+    pub source: String,
+    /// 是否已隐藏。
+    pub hidden: bool,
+    /// 最近一次收发信时间。
     pub last_used_at: Option<String>,
+    /// 建库时间。
+    pub created_at: String,
+    /// 最近修改时间。
+    pub updated_at: String,
 }
 
 impl ContactDto {
     fn from_contact(contact: &StoredContact) -> Self {
         Self {
             id: contact.id,
-            account_id: contact.account_id,
             name: contact.name.clone(),
             email: contact.email.clone(),
+            note: contact.note.clone(),
+            group_id: contact.group_id,
+            group_name: contact.group_name.clone(),
+            source: contact.source.as_str().to_string(),
+            hidden: contact.hidden,
             last_used_at: contact.last_used_at.clone(),
+            created_at: contact.created_at.clone(),
+            updated_at: contact.updated_at.clone(),
         }
     }
+}
+
+/// 新建 / 修改联系人时提交的字段。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactDraftDto {
+    /// 显示名，可空。
+    pub name: String,
+    /// 邮箱地址。
+    pub email: String,
+    /// 备注。
+    pub note: String,
+    /// 所属分组。
+    pub group_id: Option<i64>,
+}
+
+impl ContactDraftDto {
+    fn to_draft(&self) -> ContactDraft {
+        ContactDraft {
+            name: self.name.clone(),
+            email: self.email.clone(),
+            note: self.note.clone(),
+            group_id: self.group_id,
+        }
+    }
+}
+
+/// 一个分组的展示信息。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactGroupDto {
+    /// 分组编号。
+    pub id: i64,
+    /// 分组名。
+    pub name: String,
+    /// 组内没被隐藏的成员数。
+    pub member_count: i64,
+}
+
+/// 通讯录条数快照。
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactCountsDto {
+    /// 正常列表里的条数。
+    pub active: i64,
+    /// 已隐藏的条数。
+    pub hidden: i64,
+    /// 未分组的条数。
+    pub ungrouped: i64,
+}
+
+/// 导出结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactExportDto {
+    /// 导出了几条。
+    pub count: usize,
+    /// 写到哪个文件。
+    pub path: String,
+}
+
+/// 一条读不出来的行。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactProblemDto {
+    /// 行号，从 1 开始。
+    pub line: usize,
+    /// 原因。
+    pub reason: String,
+}
+
+/// 导入里的一条联系人。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactImportEntryDto {
+    /// 显示名。
+    pub name: String,
+    /// 邮箱。
+    pub email: String,
+    /// 备注。
+    pub note: String,
+    /// 分组名。
+    pub group: String,
+}
+
+impl ContactImportEntryDto {
+    fn from_entry(entry: &ContactImportEntry) -> Self {
+        Self {
+            name: entry.name.clone(),
+            email: entry.email.clone(),
+            note: entry.note.clone(),
+            group: entry.group.clone(),
+        }
+    }
+
+    fn to_entry(&self) -> ContactImportEntry {
+        ContactImportEntry {
+            name: self.name.clone(),
+            email: self.email.clone(),
+            note: self.note.clone(),
+            group: self.group.clone(),
+        }
+    }
+}
+
+/// 导入预览。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactImportPreviewDto {
+    /// CSV 表头。
+    pub headers: Vec<String>,
+    /// 认出来的邮箱列。
+    pub email_column: Option<usize>,
+    /// 解析出来的条目。
+    pub entries: Vec<ContactImportEntryDto>,
+    /// 坏行。
+    pub problems: Vec<ContactProblemDto>,
+    /// 几个邮箱库里已经有了。
+    pub duplicate_count: usize,
+    /// 几个是新的。
+    pub new_count: usize,
+}
+
+/// 导入落库结果。
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactImportOutcomeDto {
+    /// 新建几条。
+    pub imported: usize,
+    /// 跳过几条。
+    pub skipped: usize,
+    /// 覆盖几条。
+    pub overwritten: usize,
+    /// 坏行几条。
+    pub invalid: usize,
+    /// 顺手建了几个分组。
+    pub groups_created: usize,
 }
 
 /// 一个账号的签名。
@@ -2405,18 +3263,23 @@ pub async fn delete_ai_provider(state: tauri::State<'_, AppState>, id: i64) -> R
 }
 
 /// 用尚未保存的配置测试连接并拉取模型列表；不写库、不写保险箱。
+///
+/// `apiKey` 留空且带上了 `id`（正在编辑的站点）时，回退使用该站点已存的密钥。
 #[tauri::command]
 pub async fn test_ai_provider(
     state: tauri::State<'_, AppState>,
     kind: String,
     base_url: String,
     api_key: Option<String>,
+    id: Option<i64>,
 ) -> Result<Vec<String>, CommandError> {
     let kind = AiProviderKind::parse(&kind)
         .ok_or_else(|| CommandError::input("AI 站点类型只能是 openai_compatible、deepl 或 ollama"))?;
     let secret = api_key.map(Secret::new);
     let engine = state.engine().await;
-    let models = engine.test_ai_provider(kind, &base_url, secret.as_ref()).await?;
+    let models = engine
+        .test_ai_provider(kind, &base_url, secret.as_ref(), id)
+        .await?;
     Ok(models)
 }
 
@@ -2591,4 +3454,28 @@ pub async fn disable_all_ai(state: tauri::State<'_, AppState>) -> Result<usize, 
 pub async fn clear_ai_cache(state: tauri::State<'_, AppState>) -> Result<usize, CommandError> {
     let engine = state.engine().await;
     Ok(engine.clear_ai_cache()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_external_link;
+
+    #[test]
+    fn only_absolute_http_https_mailto_links_are_opened() {
+        assert!(is_external_link("http://example.com"));
+        assert!(is_external_link("https://example.com/a?b=c"));
+        assert!(is_external_link("HTTPS://Example.com/A"));
+        assert!(is_external_link("mailto:someone@example.com"));
+
+        // 正文是不可信内容：别的协议一律不放行。
+        assert!(!is_external_link("file:///C:/Windows/System32"));
+        assert!(!is_external_link("javascript:alert(1)"));
+        assert!(!is_external_link("ms-msdt:/id"));
+        assert!(!is_external_link("/relative/path"));
+        assert!(!is_external_link("#anchor"));
+        assert!(!is_external_link("http://"));
+        assert!(!is_external_link("https://"));
+        assert!(!is_external_link("mailto:"));
+        assert!(!is_external_link(""));
+    }
 }

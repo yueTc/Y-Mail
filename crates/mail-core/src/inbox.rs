@@ -79,6 +79,21 @@ impl MailEngine {
     pub fn inbox_folders(&self) -> Result<Vec<InboxFolder>, EngineError> {
         Ok(self.store().list_inbox_folders()?)
     }
+
+    /// 切换一封邮件的已读状态，并同步维护所在文件夹的未读数。
+    ///
+    /// 返回 `true` 表示状态确实变了（调用方据此决定是否回写服务器）；
+    /// 邮件不存在或已经是目标状态时返回 `false`。
+    pub fn set_message_read(&self, message_id: i64, read: bool) -> Result<bool, EngineError> {
+        Ok(self.store().set_message_read(message_id, read)?)
+    }
+
+    /// 本地切换一封邮件的红旗；返回 `true` 表示状态确实变了。
+    ///
+    /// 换了状态的同时会记下「待同步」，由后台回写服务器。
+    pub fn set_message_flagged(&self, message_id: i64, flagged: bool) -> Result<bool, EngineError> {
+        Ok(self.store().set_message_flagged(message_id, flagged)?)
+    }
 }
 
 #[cfg(test)]

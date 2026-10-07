@@ -1,4 +1,4 @@
-// 生成 em-master 的占位应用图标（Wave 0 构建所需：tauri-build 在 Windows 上需要一个 .ico）。
+// 生成 Y-Mail 的占位应用图标（Wave 0 构建所需：tauri-build 在 Windows 上需要一个 .ico）。
 // 纯 Node 实现：手写 PNG 编码，不引入任何图像库，离线可重复生成。
 // 后续做正式品牌图标时，用 `npm run tauri icon <源图>` 覆盖 src-tauri/icons/ 即可。
 import { deflateSync } from "node:zlib";

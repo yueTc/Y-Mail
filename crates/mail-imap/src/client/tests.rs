@@ -9,7 +9,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::parse::{format_uid_set, parse_fetch_line, parse_list_line, parse_select_line, quote_imap_string};
-use super::{ClientConfig, IdleOutcome, ImapClient};
+use super::{ClientConfig, FolderInfo, IdleOutcome, ImapClient};
 
 fn config(port: u16) -> ClientConfig {
     ClientConfig {
@@ -54,6 +54,7 @@ fn 引号串转义且拒绝换行() {
 fn 解析文件夹与选择事件() {
     let parsed = parse_list_line(b"* LIST (\\HasNoChildren) \"/\" \"INBOX\"").expect("应解析");
     assert_eq!(parsed.full_path, "INBOX");
+    assert_eq!(parsed.server_path, "INBOX");
     assert_eq!(parsed.delimiter, "/");
     assert_eq!(parsed.attributes, vec!["\\HasNoChildren"]);
 
@@ -68,6 +69,39 @@ fn 解析文件夹与选择事件() {
 }
 
 #[test]
+fn 容器文件夹不可选其余可选() {
+    let container = FolderInfo {
+        full_path: "其他文件夹".to_string(),
+        server_path: "&UXZO1mWHTvZZOQ-".to_string(),
+        delimiter: "/".to_string(),
+        attributes: vec!["\\NoSelect".to_string(), "\\HasChildren".to_string()],
+    };
+    assert!(!container.is_selectable(), "带 \\NoSelect 的容器不应被选中");
+
+    // 大小写不敏感，且普通文件夹照样可选。
+    let lowered = FolderInfo {
+        attributes: vec!["\\noselect".to_string()],
+        ..container.clone()
+    };
+    assert!(!lowered.is_selectable());
+
+    let inbox = FolderInfo {
+        full_path: "INBOX".to_string(),
+        server_path: "INBOX".to_string(),
+        delimiter: "/".to_string(),
+        attributes: vec!["\\HasNoChildren".to_string()],
+    };
+    assert!(inbox.is_selectable());
+}
+
+#[test]
+fn 文件夹乱码会解码但保留服务器原始名() {
+    let parsed = parse_list_line(b"* LIST (\\HasNoChildren) \"/\" \"&Xn9USpCuTvY-\"").expect("应解析");
+    assert_eq!(parsed.full_path, "广告邮件");
+    assert_eq!(parsed.server_path, "&Xn9USpCuTvY-");
+}
+
+#[test]
 fn 解析带字面量的抓取结果() {
     let line = "{seq} 1 FETCH (UID 9 FLAGS (\\Seen) INTERNALDATE \"04-Oct-2026 08:00:00 +0800\" RFC822.SIZE 321 ENVELOPE (\"date\" \"主题\" ((\"张三\" NIL \"z\" \"example.com\")) NIL NIL ((\"李四\" NIL \"l\" \"example.com\")) NIL NIL NIL \"<m@x>\"))";
     let line = line.replace("{seq}", "*");
@@ -76,6 +110,29 @@ fn 解析带字面量的抓取结果() {
     assert_eq!(parsed.flags, vec!["\\Seen"]);
     assert_eq!(parsed.size, Some(321));
     assert_eq!(parsed.envelope.as_ref().map(Vec::len), Some(10));
+}
+
+#[test]
+fn 从抓取结果判断有没有附件() {
+    let with_attachment = concat!(
+        "* 1 FETCH (UID 7 BODYSTRUCTURE (",
+        "(\"TEXT\" \"PLAIN\" (\"CHARSET\" \"utf-8\") NIL NIL \"7BIT\" 10 1)",
+        "(\"APPLICATION\" \"PDF\" (\"NAME\" \"报告.pdf\") NIL NIL \"BASE64\" 100 NIL NIL (\"ATTACHMENT\" (\"FILENAME\" \"报告.pdf\")) NIL NIL)",
+        " \"MIXED\"))"
+    );
+    let parsed = parse_fetch_line(with_attachment.as_bytes()).expect("应解析");
+    let structure = parsed.body_structure.as_ref().expect("应有结构");
+    assert!(super::parse::body_structure_has_attachments(structure));
+
+    let plain = concat!(
+        "* 1 FETCH (UID 8 BODYSTRUCTURE (",
+        "(\"TEXT\" \"PLAIN\" (\"CHARSET\" \"utf-8\") NIL NIL \"7BIT\" 10 1)",
+        "(\"TEXT\" \"HTML\" (\"CHARSET\" \"utf-8\") NIL NIL \"7BIT\" 20 1)",
+        " \"ALTERNATIVE\"))"
+    );
+    let parsed = parse_fetch_line(plain.as_bytes()).expect("应解析");
+    let structure = parsed.body_structure.as_ref().expect("应有结构");
+    assert!(!super::parse::body_structure_has_attachments(structure));
 }
 
 #[tokio::test]
@@ -128,6 +185,7 @@ async fn 能登录并列文件夹选收件箱() {
     let folders = client.list_folders().await.expect("列文件夹");
     assert_eq!(folders.len(), 2);
     assert_eq!(folders[0].full_path, "INBOX");
+    assert_eq!(folders[0].server_path, "INBOX");
     let status = client.select("INBOX").await.expect("选择");
     assert_eq!(status.uidvalidity, Some(42));
     assert_eq!(status.uidnext, Some(10));
@@ -173,7 +231,7 @@ async fn 抓取带字面量的邮件元数据() {
             .expect("写");
         assert_eq!(
             read_line(&mut reader).await,
-            "a003 UID FETCH 5 (UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE)"
+            "a003 UID FETCH 5 (UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODYSTRUCTURE)"
         );
         reader
             .get_mut()
@@ -445,6 +503,81 @@ async fn 追加邮件被服务器拒绝时报错() {
         .await
         .expect_err("应失败");
     assert_eq!(err.kind, ConnectionErrorKind::Protocol);
+}
+
+#[tokio::test]
+async fn flag_round_trip_uses_uid_store() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+    let addr = listener.local_addr().expect("地址");
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("接受");
+        let mut reader = greeting(socket).await;
+        let _ = read_line(&mut reader).await;
+        reader.get_mut().write_all(b"a001 OK\r\n").await.expect("写");
+        let _ = read_line(&mut reader).await;
+        reader
+            .get_mut()
+            .write_all(b"* CAPABILITY IMAP4rev1\r\na002 OK\r\n")
+            .await
+            .expect("写");
+        assert_eq!(
+            read_line(&mut reader).await,
+            "a003 UID STORE 42 +FLAGS.SILENT (\\Flagged)"
+        );
+        reader
+            .get_mut()
+            .write_all(b"a003 OK STORE completed\r\n")
+            .await
+            .expect("写");
+        assert_eq!(
+            read_line(&mut reader).await,
+            "a004 UID STORE 42 -FLAGS.SILENT (\\Flagged)"
+        );
+        reader
+            .get_mut()
+            .write_all(b"a004 OK STORE completed\r\n")
+            .await
+            .expect("写");
+    });
+
+    let mut client = ImapClient::connect(&config(addr.port()), None)
+        .await
+        .expect("连接");
+    client.uid_store_flags(42, true).await.expect("标红");
+    client.uid_store_flags(42, false).await.expect("取消");
+}
+
+#[tokio::test]
+async fn 回写红旗被服务器拒绝时报错() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+    let addr = listener.local_addr().expect("地址");
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("接受");
+        let mut reader = greeting(socket).await;
+        let _ = read_line(&mut reader).await;
+        reader.get_mut().write_all(b"a001 OK\r\n").await.expect("写");
+        let _ = read_line(&mut reader).await;
+        reader
+            .get_mut()
+            .write_all(b"* CAPABILITY IMAP4rev1\r\na002 OK\r\n")
+            .await
+            .expect("写");
+        assert_eq!(
+            read_line(&mut reader).await,
+            "a003 UID STORE 7 +FLAGS.SILENT (\\Flagged)"
+        );
+        reader
+            .get_mut()
+            .write_all(b"a003 NO not allowed\r\n")
+            .await
+            .expect("写");
+    });
+
+    let mut client = ImapClient::connect(&config(addr.port()), None)
+        .await
+        .expect("连接");
+    let err = client.uid_store_flags(7, true).await.expect_err("应失败");
+    assert_eq!(err.kind, ConnectionErrorKind::Rejected);
 }
 
 #[tokio::test]

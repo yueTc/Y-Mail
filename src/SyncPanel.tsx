@@ -87,7 +87,7 @@ export default function SyncPanel() {
   };
 
   return (
-    <section className="panel">
+    <section className="panel" aria-busy={loading || busy}>
       <div className="panel-head">
         <h2>同步状态</h2>
         <div className="actions">
@@ -100,9 +100,9 @@ export default function SyncPanel() {
         </div>
       </div>
 
-      {error && <p className="error">同步操作失败：{error}</p>}
+      {error && <p className="error" role="alert">同步操作失败：{error}</p>}
 
-      {loading && statuses.length === 0 && <p className="hint">正在读取同步状态……</p>}
+      {loading && statuses.length === 0 && <p className="hint" role="status">正在读取同步状态……</p>}
       {!loading && statuses.length === 0 && (
         <p className="hint">还没有可同步的账号。先在下面添加一个邮箱账号。</p>
       )}
@@ -113,13 +113,13 @@ export default function SyncPanel() {
             <strong>{item.email}</strong>
             <span className={item.needsReauth ? "badge danger" : "badge"}>{item.stateLabel}</span>
           </div>
-          <p className="sync-detail">
+          <p className="sync-detail" role="status">
             {progressText(item) && <span>{progressText(item)}</span>}
             {item.message && <span className="hint">{item.message}</span>}
             {!progressText(item) && !item.message && <span className="hint">暂无进度</span>}
           </p>
           {item.needsReauth && (
-            <p className="error">授权码失效或缺失，请到账号设置里重新填写后再同步。</p>
+            <p className="error" role="alert">授权码失效或缺失，请到账号设置里重新填写后再同步。</p>
           )}
           <div className="actions">
             <button disabled={busy} onClick={() => void restart(item.accountId)}>

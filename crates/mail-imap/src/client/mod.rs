@@ -7,6 +7,7 @@ mod parse;
 mod session;
 #[cfg(test)]
 mod tests;
+pub(crate) mod utf7;
 
 use std::time::Duration;
 
@@ -34,12 +35,28 @@ pub struct ClientConfig {
 /// 服务器上的一个文件夹。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderInfo {
-    /// 完整路径（如 `INBOX`、`其他文件夹/项目`）。
+    /// 展示用完整路径，已把 Modified UTF-7 解码成正常文字。
     pub full_path: String,
+    /// 服务器上的原始完整路径，用于 SELECT 等命令。
+    pub server_path: String,
     /// 层级分隔符；服务器没给时为空串。
     pub delimiter: String,
     /// 服务器广告的属性（如 `\HasNoChildren`、`\Sent`）。
     pub attributes: Vec<String>,
+}
+
+impl FolderInfo {
+    /// 这个文件夹能不能被 SELECT。
+    ///
+    /// 带 `\NoSelect` 的文件夹只是「装子文件夹的空壳」，里面永远不会有邮件。
+    /// 部分服务器（如腾讯企业邮）对它发 SELECT 还会假装回 `OK` 却不真正选中，
+    /// 紧接着的搜索就会报「先选文件夹」。所以这类文件夹一律不去打开。
+    pub fn is_selectable(&self) -> bool {
+        !self
+            .attributes
+            .iter()
+            .any(|attr| attr.eq_ignore_ascii_case("\\Noselect"))
+    }
 }
 
 /// SELECT 之后邮箱的关键状态。
@@ -96,6 +113,8 @@ pub struct MessageMeta {
     pub size: u32,
     /// 信封。
     pub envelope: Envelope,
+    /// 从 BODYSTRUCTURE 判断出的「有附件」（含内嵌图片）。
+    pub has_attachments: bool,
 }
 
 /// IDLE 一次等待的结果。

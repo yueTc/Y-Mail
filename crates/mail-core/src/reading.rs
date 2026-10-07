@@ -296,7 +296,7 @@ impl MailEngine {
 
     /// 计算附件的落盘路径：下载目录 + 消毒后的文件名。
     fn attachment_path(&self, attachment: &StoredAttachment) -> Result<PathBuf, EngineError> {
-        let dir = Path::new(&self.init_summary().root_dir).join("downloads");
+        let dir = PathBuf::from(self.init_summary().attachment_dir);
         std::fs::create_dir_all(&dir)?;
         let name = sanitize_filename(&attachment.filename, attachment.id);
         let path = dir.join(&name);
@@ -545,8 +545,10 @@ fn new_attachment(parsed: &ParsedAttachment) -> NewAttachment {
     }
 }
 
-/// 文件名消毒：只取最后一段，去掉路径与非法字符，空名给个兜底。
-fn sanitize_filename(raw: &str, attachment_id: i64) -> String {
+/// 文件名消毒：只取最后一段，去掉路径与非法字符；什么都不剩时返回 None。
+///
+/// 外部大附件下载也用这一份规则，避免两处各写一套。
+pub(crate) fn clean_file_name(raw: &str) -> Option<String> {
     let base = raw.rsplit(['/', '\\']).next().unwrap_or(raw);
     let cleaned: String = base
         .chars()
@@ -555,10 +557,15 @@ fn sanitize_filename(raw: &str, attachment_id: i64) -> String {
     let trimmed = cleaned.replace("..", "");
     let trimmed = trimmed.trim().trim_matches('.').trim();
     if trimmed.is_empty() {
-        format!("attachment-{attachment_id}")
+        None
     } else {
-        trimmed.to_string()
+        Some(trimmed.to_string())
     }
+}
+
+/// 文件名消毒：空名给个兜底。
+fn sanitize_filename(raw: &str, attachment_id: i64) -> String {
+    clean_file_name(raw).unwrap_or_else(|| format!("attachment-{attachment_id}"))
 }
 
 /// 重名时给文件名加上附件编号，避免互相覆盖。

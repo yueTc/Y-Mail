@@ -1,4 +1,4 @@
-# em-master Rust 工作区：桌面外壳 + 引擎分层
+# Y-Mail Rust 工作区：桌面外壳 + 引擎分层
 # 依赖方向（单向、无环）：mail-domain ← 其它全部；mail-store ← mail-core；
 # 协议/解析/认证/AI crate ← mail-core；mail-core ← src-tauri ← 前端 UI。
 
@@ -22,7 +22,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-authors = ["em-master"]
+authors = ["Y-Mail"]
 
 [workspace.dependencies]
 # 内部 crate（路径依赖集中声明，版本随工作区）
@@ -41,6 +41,8 @@ mail-mcp = { path = "crates/mail-mcp" }
 tauri = { version = "2.12.1", features = ["tray-icon"] }
 tauri-build = { version = "2.7.1" }
 tauri-plugin-notification = "2.4.3"
+tauri-plugin-dialog = "2"
+tauri-plugin-autostart = "2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -50,11 +52,13 @@ tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 tracing-appender = "0.2.5"
 sha2 = "0.10"
 tempfile = "3.27.0"
+fs2 = "0.4.3"
 tokio = { version = "1.44", features = ["net", "io-util", "time", "macros", "rt"] }
 tokio-native-tls = "0.3.1"
 native-tls = "0.2.14"
 base64 = "0.22.1"
 winreg = "0.55"
+notify-rust = "4.18"
 keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
 
 [workspace.lints.rust]
