@@ -25,6 +25,9 @@ pub struct AppSettings {
     pub attachment_dir: Option<PathBuf>,
     /// 新邮件是否弹系统通知；默认开。
     pub notify_new_mail: bool,
+    /// 是不是默认拦截邮件里的远程图片；默认拦（true）。
+    /// 关掉之后，读信时远程图片会直接放行；本封放行与「信任发件人」仍各自有效。
+    pub block_remote_images_by_default: bool,
     /// 下次启动要清理的旧数据目录；为空表示没有待清理目录。
     pub pending_cleanup_dir: Option<PathBuf>,
 }
@@ -35,6 +38,7 @@ impl Default for AppSettings {
             data_dir: None,
             attachment_dir: None,
             notify_new_mail: true,
+            block_remote_images_by_default: true,
             pending_cleanup_dir: None,
         }
     }
@@ -94,6 +98,7 @@ mod tests {
         assert_eq!(settings.data_dir, None);
         assert_eq!(settings.attachment_dir, None);
         assert!(settings.notify_new_mail);
+        assert!(settings.block_remote_images_by_default);
         assert_eq!(settings.pending_cleanup_dir, None);
         assert_eq!(
             settings.effective_data_dir(std::path::Path::new("C:/app")),
@@ -111,6 +116,7 @@ mod tests {
             data_dir: Some(std::path::PathBuf::from("D:/Mail")),
             attachment_dir: Some(std::path::PathBuf::from("E:/OldFiles")),
             notify_new_mail: false,
+            block_remote_images_by_default: true,
             pending_cleanup_dir: None,
         };
         assert_eq!(
@@ -137,6 +143,7 @@ mod tests {
             data_dir: Some(std::path::PathBuf::from("D:/Mail")),
             attachment_dir: Some(std::path::PathBuf::from("E:/Files")),
             notify_new_mail: false,
+            block_remote_images_by_default: false,
             pending_cleanup_dir: Some(std::path::PathBuf::from("C:/Old/Mail")),
         };
         settings.save(&dir).expect("保存设置");
@@ -151,6 +158,10 @@ mod tests {
         std::fs::write(dir.join(super::SETTINGS_FILE), "{ \"notifyNewMail\": false }").expect("写文件");
         let partial = AppSettings::load(&dir);
         assert!(!partial.notify_new_mail);
+        assert!(
+            partial.block_remote_images_by_default,
+            "老配置里缺这个字段时要按默认拦截处理"
+        );
         assert_eq!(partial.data_dir, None);
         assert_eq!(partial.attachment_dir, None);
         assert_eq!(partial.pending_cleanup_dir, None);

@@ -1455,32 +1455,98 @@ textarea:focus {
   background: var(--accent);
 }
 
-/* ===== 单栏设置页 ===== */
+/* ===== 设置页（两栏：左分类 / 右内容） ===== */
 
 .settings-workspace {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
   height: 100%;
-  padding: 24px 28px 48px;
-  overflow-y: auto;
+  min-height: 0;
+  padding: 22px 24px 18px;
+  overflow: hidden;
 }
 
 .settings-head {
   display: flex;
+  flex: none;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+}
+
+.settings-head h1 {
+  margin: 0;
 }
 
 .settings-head .subtitle {
   margin: 4px 0 0;
 }
 
+/* 左栏宽度和拖动条宽度都由界面按当前窗口算，写进 grid 模板。 */
+.settings-columns {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.settings-nav {
+  min-width: 0;
+  min-height: 0;
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-bg);
+}
+
+.settings-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-nav-item {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.settings-nav-item:hover:not(.active) {
+  background: var(--state-hover-bg);
+}
+
+.settings-nav-item.active {
+  background: var(--state-active-bg);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.settings-content {
+  min-width: 0;
+  min-height: 0;
+  padding: 2px 2px 28px 4px;
+  overflow-y: auto;
+}
+
 .settings-group {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* hidden 要压过上面的 display:flex，不然切走的分类藏不住。 */
+.settings-group[hidden] {
+  display: none;
 }
 
 .settings-group-title {
@@ -1492,6 +1558,12 @@ textarea:focus {
 
 .settings-group .panel {
   margin-bottom: 0;
+}
+
+/* 面板里的小标题，比如「通用」里的「开机自动启动」。 */
+.settings-subtitle {
+  margin: 0 0 10px;
+  font-size: 0.98rem;
 }
 
 /* 设置页表单：一个字段一行，标签在上、说明在下。 */

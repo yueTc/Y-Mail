@@ -43,9 +43,11 @@ export default function ReaderSettingsPanel() {
   return (
     <section className="panel" aria-label={t("读信与远程图片")} aria-busy={loading || busy !== undefined}>
       <div className="panel-head">
-        <h2>{t("读信与远程图片")}</h2>
-        <p className="hint">
-          {t("远程图片默认拦截。被记住的发件人会直接显示图片，要恢复拦截就在下面移除。")}</p>
+        <div>
+          <h2>{t("读信与远程图片")}</h2>
+          <p className="hint">
+            {t("远程图片默认拦截。被记住的发件人会直接显示图片，要恢复拦截就在下面移除。")}</p>
+        </div>
       </div>
 
       {error && <p className="error" role="alert">{t("操作失败：")}{error}</p>}

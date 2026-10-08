@@ -161,17 +161,6 @@ export interface ConnectionReport {
   smtpMechanism: string;
 }
 
-/** 数据库状态快照。 */
-export interface DbStatus {
-  databaseFile: string;
-  logDir: string;
-  attachmentDir: string;
-  schemaVersion: number;
-  appliedCount: number;
-  appliedVersions: number[];
-  fts5Available: boolean;
-}
-
 /** 存储目录与通知开关快照。 */
 export interface AppSettings {
   /** 已保存的邮件数据目录；空字符串表示用默认。 */
@@ -180,6 +169,8 @@ export interface AppSettings {
   attachmentDir: string;
   /** 新邮件是否弹系统通知。 */
   notifyNewMail: boolean;
+  /** 读信是否默认拦截远程图片；出厂与默认都是拦。 */
+  blockRemoteImagesByDefault: boolean;
   /** 默认邮件数据目录。 */
   defaultDataDir: string;
   /** 附件目录留空时会用的默认位置。 */
@@ -197,6 +188,7 @@ export interface AppSettingsInput {
   dataDir: string;
   attachmentDir: string;
   notifyNewMail: boolean;
+  blockRemoteImagesByDefault: boolean;
 }
 
 /** 更改数据目录的结果；需要确认时先弹一次确认，再带 confirmed 重试。 */
@@ -688,8 +680,6 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 // ============================ 命令封装 ============================
 
 export const api = {
-  dbStatus: () => call<DbStatus>("db_status"),
-
   getAppSettings: () => call<AppSettings>("get_app_settings"),
 
   saveAppSettings: (input: AppSettingsInput) =>

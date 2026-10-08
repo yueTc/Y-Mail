@@ -26,7 +26,7 @@ _163、QQ、企业微信、Gmail、Outlook —— 收进同一个收件箱_
 
 ---
 
-> 当前版本 `0.1.1`。产品名 `Y-Mail`，机器标识 `com.ymail.desktop`。
+> 当前版本 `0.1.2`。产品名 `Y-Mail`，机器标识 `com.ymail.desktop`。
 
 ## 亮点
 

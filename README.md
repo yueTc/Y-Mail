@@ -26,7 +26,7 @@ _163, QQ, WeCom, Gmail, Outlook — all in one inbox_
 
 ---
 
-> Current version `0.1.1`. Product name `Y-Mail`, bundle identifier `com.ymail.desktop`.
+> Current version `0.1.2`. Product name `Y-Mail`, bundle identifier `com.ymail.desktop`.
 
 ## Highlights
 

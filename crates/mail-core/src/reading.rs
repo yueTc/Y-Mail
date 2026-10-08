@@ -9,6 +9,7 @@
 //! 锁纪律：存储锁只在同步代码里短暂持有，绝不跨 `.await`。
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Mutex, MutexGuard};
 
 use mail_domain::auth::AuthMaterial;
@@ -105,8 +106,11 @@ impl MailEngine {
         };
 
         let location = location.ok_or(EngineError::MessageNotFound(message_id))?;
-        // 发件人在「记住」名单里时，这封（以及以后的邮件）默认放行远程图片。
-        let allow_remote_images = allow_remote_images || self.sender_trusts_remote_images(message_id);
+        // 全局默认开关：默认是「拦」，用户显式关掉后这里直接放行。
+        // 单封放行与「记住的发件人」两条规则仍然有效。
+        let blocked_by_default = self.block_remote_images.load(Ordering::Relaxed);
+        let allow_remote_images =
+            !blocked_by_default || allow_remote_images || self.sender_trusts_remote_images(message_id);
         if let Some(body) = cached {
             let attachments = {
                 let store = lock_store(&self.store);
@@ -640,6 +644,118 @@ mod tests {
 
         let err = engine.download_attachment(999).await.expect_err("应失败");
         assert!(err.to_string().contains("999"), "错误应含编号：{err}");
+    }
+
+    /// 造一条带远程图片占位符的邮件，方便测全局默认拦截开关。
+    fn engine_with_remote_image_message(dir: &std::path::Path) -> (MailEngine, i64) {
+        use mail_domain::account::{AccountDraft, AccountProxyMode, AuthType, Security, ServerConfig};
+        use mail_domain::FolderKind;
+        use mail_store::{InboxQuery, NewMessage};
+
+        let engine =
+            MailEngine::initialize_with_secrets(dir, Arc::new(MemorySecretStore::new())).expect("初始化引擎");
+        let store = engine.store();
+        let draft = AccountDraft {
+            display_name: "测试账号".to_string(),
+            email: "me@example.com".to_string(),
+            auth_type: AuthType::Password,
+            username: "me@example.com".to_string(),
+            imap: ServerConfig {
+                host: "imap.example.com".to_string(),
+                port: 993,
+                security: Security::Tls,
+            },
+            smtp: ServerConfig {
+                host: "smtp.example.com".to_string(),
+                port: 465,
+                security: Security::Tls,
+            },
+            proxy: AccountProxyMode::InheritGlobal,
+            color: "#3366ff".to_string(),
+            enabled: true,
+            oauth_provider: None,
+            oauth_client_id: String::new(),
+        };
+        let account_id = store.insert_account(&draft, None).expect("插账号").0;
+        let folder_id = store
+            .upsert_folder(account_id, "INBOX", "/", FolderKind::Inbox)
+            .expect("插文件夹");
+        store
+            .insert_messages(&[NewMessage {
+                account_id,
+                folder_id,
+                uid: 1,
+                message_id_header: "<img@example.com>".to_string(),
+                thread_key: "img".to_string(),
+                subject: "远程图片".to_string(),
+                from_name: "Alice".to_string(),
+                from_addr: "alice@example.com".to_string(),
+                to_json: "[]".to_string(),
+                cc_json: "[]".to_string(),
+                date_utc: "2026-10-08T01:00:00Z".to_string(),
+                size: 100,
+                has_attachments: false,
+                is_read: false,
+                is_flagged: false,
+                is_answered: false,
+                is_draft: false,
+            }])
+            .expect("插邮件");
+        let message_id = store
+            .list_inbox_messages(&InboxQuery {
+                account_id: Some(account_id),
+                folder_id: Some(folder_id),
+                unread_only: false,
+                flagged_only: false,
+                folder_kind: None,
+                offset: 0,
+                limit: 10,
+            })
+            .expect("读回收件箱")
+            .into_iter()
+            .find(|message| message.uid == 1)
+            .expect("应有邮件")
+            .id;
+        store
+            .save_message_body(
+                message_id,
+                Some("hi"),
+                Some(r#"<p>hi</p><img data-em-original-src="https://example.com/a.png">"#),
+            )
+            .expect("存正文缓存");
+        drop(store);
+        (engine, message_id)
+    }
+
+    #[tokio::test]
+    async fn 默认拦截开关能放行或恢复拦截远程图片() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (engine, message_id) = engine_with_remote_image_message(dir.path());
+
+        // 默认是拦：占位属性还在，没放行。
+        let blocked = engine.get_message_body(message_id, false).await.expect("读正文");
+        assert!(!blocked.remote_images_allowed, "默认应拦住远程图片");
+        assert_eq!(blocked.blocked_remote_images, 1);
+        assert!(blocked
+            .html
+            .as_deref()
+            .unwrap_or_default()
+            .contains("data-em-original-src"));
+
+        // 关掉全局开关：本封没点放行也直接放行。
+        engine.set_block_remote_images(false);
+        let allowed = engine.get_message_body(message_id, false).await.expect("读正文");
+        assert!(allowed.remote_images_allowed, "关掉开关后应放行远程图片");
+        assert!(allowed
+            .html
+            .as_deref()
+            .unwrap_or_default()
+            .contains("https://example.com/a.png"));
+
+        // 再打开：恢复默认拦截。
+        engine.set_block_remote_images(true);
+        let blocked_again = engine.get_message_body(message_id, false).await.expect("读正文");
+        assert!(!blocked_again.remote_images_allowed, "重新打开后应恢复拦截");
     }
 
     /// 造一条附件记录，方便测内嵌图映射。

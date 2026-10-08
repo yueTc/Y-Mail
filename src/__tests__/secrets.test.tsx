@@ -13,7 +13,6 @@ import { api, type Account, type Proxy } from "../api";
 vi.mock("../api", () => ({
   describeError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
   api: {
-    dbStatus: vi.fn(),
     listAccounts: vi.fn(),
     testAccountConnection: vi.fn(),
     createAccount: vi.fn(),

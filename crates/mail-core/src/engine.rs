@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use mail_domain::{ConnectionError, ValidationError};
@@ -154,6 +155,8 @@ pub struct MailEngine {
     pub(crate) oauth_pending: std::sync::Mutex<HashMap<String, crate::oauth::PendingAuthorization>>,
     /// 已确认但还没真正外发的 AI 调用；键是一次性令牌。
     pub(crate) ai_authorizations: std::sync::Mutex<HashMap<String, crate::ai::PendingAiAuthorization>>,
+    /// 读信时是否默认拦截远程图片；外壳改设置时同步更新。默认拦（true）。
+    pub(crate) block_remote_images: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for MailEngine {
@@ -251,12 +254,23 @@ impl MailEngine {
             sync,
             oauth_pending: std::sync::Mutex::new(HashMap::new()),
             ai_authorizations: std::sync::Mutex::new(HashMap::new()),
+            block_remote_images: Arc::new(AtomicBool::new(true)),
         })
     }
 
     /// 初始化摘要（可克隆，供外壳展示或记录日志）。
     pub fn init_summary(&self) -> EngineInit {
         self.init.clone()
+    }
+
+    /// 远程图片默认拦截开关的共享句柄；外壳拿它跟引擎保持同一个值。
+    pub fn block_remote_images_handle(&self) -> Arc<AtomicBool> {
+        self.block_remote_images.clone()
+    }
+
+    /// 更新「默认拦截远程图片」；保存设置后由外壳调用，立刻生效。
+    pub fn set_block_remote_images(&self, block: bool) {
+        self.block_remote_images.store(block, Ordering::Relaxed);
     }
 
     /// 数据库文件路径。

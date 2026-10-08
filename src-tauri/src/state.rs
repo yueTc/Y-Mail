@@ -16,7 +16,6 @@ use tokio::sync::{Mutex, MutexGuard};
 
 use mail_core::{EngineInit, MailEngine};
 
-use crate::commands::DbStatus;
 use crate::logging::Logging;
 use crate::settings::AppSettings;
 
@@ -24,6 +23,8 @@ use crate::settings::AppSettings;
 pub struct AppState {
     engine: Mutex<MailEngine>,
     init: EngineInit,
+    /// 日志句柄：字段本身不再被读，但必须留着——它一被丢弃，后台写日志的线程就停了。
+    #[allow(dead_code)]
     logging: Logging,
     /// 默认应用数据目录；`settings.json` 固定放这里。
     default_data_dir: PathBuf,
@@ -31,6 +32,8 @@ pub struct AppState {
     settings: StdMutex<AppSettings>,
     /// 新邮件通知开关；后台轮询线程直接读它，改了立刻生效。
     notify_enabled: Arc<AtomicBool>,
+    /// 读信是否默认拦截远程图片；与引擎共用同一个原子开关，改设置立刻生效。
+    block_remote_images: Arc<AtomicBool>,
     /// 数据目录迁移是否正在跑；防止界面重复触发。
     migrating_data_dir: AtomicBool,
     /// 本次启动是不是全新安装后的第一次；界面据此弹「数据放哪」向导。
@@ -50,6 +53,9 @@ impl AppState {
         first_run: bool,
     ) -> Self {
         let init = engine.init_summary();
+        // 引擎自己持有这个原子开关，外壳复用同一个句柄，改设置就能让读信立刻换规则。
+        let block_remote_images = engine.block_remote_images_handle();
+        block_remote_images.store(settings.block_remote_images_by_default, Ordering::Relaxed);
         Self {
             engine: Mutex::new(engine),
             init,
@@ -57,6 +63,7 @@ impl AppState {
             default_data_dir,
             settings: StdMutex::new(settings),
             notify_enabled,
+            block_remote_images,
             migrating_data_dir: AtomicBool::new(false),
             first_run,
             pending_cleanup_dir: StdMutex::new(None),
@@ -93,6 +100,8 @@ impl AppState {
         settings.save(&self.default_data_dir)?;
         self.notify_enabled
             .store(settings.notify_new_mail, Ordering::Relaxed);
+        self.block_remote_images
+            .store(settings.block_remote_images_by_default, Ordering::Relaxed);
         let mut guard = self
             .settings
             .lock()
@@ -143,22 +152,5 @@ impl AppState {
     /// 当前引擎实际在用的附件目录。
     pub fn active_attachment_dir(&self) -> &str {
         &self.init.attachment_dir
-    }
-
-    /// 数据库状态快照。
-    ///
-    /// 迁移版本号从数据库实时读取，用来证明迁移登记记录确实落盘。
-    pub async fn db_status(&self) -> Result<DbStatus, String> {
-        let engine = self.engine.lock().await;
-        let applied_versions = engine
-            .store()
-            .applied_migration_versions()
-            .map_err(|err| format!("读取迁移登记记录失败：{err}"))?;
-
-        Ok(DbStatus::from_init(
-            &self.init,
-            applied_versions,
-            self.logging.dir().to_string_lossy().to_string(),
-        ))
     }
 }

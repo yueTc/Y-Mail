@@ -53,6 +53,12 @@ jobs:
       - name: 运行前端测试
         run: npm test
 
+      # src-tauri 的打包配置把 MCP 附属程序列为 externalBin，
+      # 这个文件不入库（构建产物），干净检出里必须先编译出来，
+      # 否则 clippy 和 cargo test 编译 src-tauri 时会直接失败。
+      - name: 构建 MCP 附属程序
+        run: node scripts/build-mcp-sidecar.mjs --debug
+
       - name: 检查格式
         run: cargo fmt --all --check
 

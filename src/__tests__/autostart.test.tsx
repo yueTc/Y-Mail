@@ -4,12 +4,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import SettingsWorkspace from "../SettingsWorkspace";
-import { api, type AppSettings, type DbStatus } from "../api";
+import { api, type AppSettings } from "../api";
 
 vi.mock("../api", () => ({
   describeError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
   api: {
-    dbStatus: vi.fn(),
     getAppSettings: vi.fn(),
     saveAppSettings: vi.fn(),
     changeDataDir: vi.fn(),
@@ -37,6 +36,7 @@ const SETTINGS: AppSettings = {
   dataDir: "",
   attachmentDir: "",
   notifyNewMail: true,
+  blockRemoteImagesByDefault: true,
   defaultDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",
   defaultAttachmentDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop/downloads",
   activeDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",
@@ -44,22 +44,11 @@ const SETTINGS: AppSettings = {
   firstRun: false,
 };
 
-const STATUS: DbStatus = {
-  databaseFile: "C:/db/ymail.db",
-  logDir: "C:/db/logs",
-  attachmentDir: "C:/db/downloads",
-  schemaVersion: 9,
-  appliedCount: 9,
-  appliedVersions: [1, 2],
-  fts5Available: true,
-};
-
 function renderSettings() {
   return render(
     <SettingsWorkspace
       proxiesVersion={1}
       onProxiesChanged={() => {}}
-      onGoInbox={() => {}}
     />,
   );
 }
@@ -71,7 +60,6 @@ function autostartBox() {
 
 describe("设置页开机启动", () => {
   beforeEach(() => {
-    vi.mocked(api.dbStatus).mockResolvedValue(STATUS);
     vi.mocked(api.getAppSettings).mockResolvedValue(SETTINGS);
     vi.mocked(api.autostartStatus).mockResolvedValue(false);
     vi.mocked(api.setAutostart).mockResolvedValue(false);

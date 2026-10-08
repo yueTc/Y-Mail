@@ -70,7 +70,6 @@ export default function App() {
           <SettingsWorkspace
             proxiesVersion={proxiesVersion}
             onProxiesChanged={() => setProxiesVersion((value) => value + 1)}
-            onGoInbox={() => setMode("inbox")}
           />
         }
       />

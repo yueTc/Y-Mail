@@ -47,7 +47,6 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
-            commands::db_status,
             commands::get_app_settings,
             commands::set_app_settings,
             commands::change_data_dir,

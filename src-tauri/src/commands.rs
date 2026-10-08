@@ -539,49 +539,6 @@ impl ConnectionReportDto {
     }
 }
 
-// ============================ 数据库状态 ============================
-
-/// 数据库状态快照，字段名与前端 TypeScript 类型保持一致。
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DbStatus {
-    /// 数据库文件绝对路径。
-    pub database_file: String,
-    /// 日志目录。
-    pub log_dir: String,
-    /// 附件下载目录。
-    pub attachment_dir: String,
-    /// 当前结构版本。
-    pub schema_version: i64,
-    /// 本次启动新应用的迁移条数。
-    pub applied_count: usize,
-    /// 已登记迁移的版本号（升序），直接读自数据库。
-    pub applied_versions: Vec<i64>,
-    /// bundled SQLite 是否带 FTS5。
-    pub fts5_available: bool,
-}
-
-impl DbStatus {
-    /// 由引擎初始化摘要与数据库登记行构造状态快照。
-    pub fn from_init(init: &mail_core::EngineInit, applied_versions: Vec<i64>, log_dir: String) -> Self {
-        Self {
-            database_file: init.database_file.clone(),
-            log_dir,
-            attachment_dir: init.attachment_dir.clone(),
-            schema_version: init.schema_version,
-            applied_count: init.applied_count(),
-            applied_versions,
-            fts5_available: init.fts5_available,
-        }
-    }
-}
-
-/// 返回数据库初始化状态，供界面确认迁移链路已跑通。
-#[tauri::command]
-pub async fn db_status(state: tauri::State<'_, AppState>) -> Result<DbStatus, CommandError> {
-    state.db_status().await.map_err(CommandError::new)
-}
-
 // ============================ 存储目录与通知设置 ============================
 
 /// 存储目录与通知开关快照，字段名与前端 TypeScript 类型保持一致。
@@ -594,6 +551,8 @@ pub struct AppSettingsDto {
     pub attachment_dir: String,
     /// 新邮件是否弹系统通知。
     pub notify_new_mail: bool,
+    /// 读信是否默认拦截远程图片；出厂与默认都是拦。
+    pub block_remote_images_by_default: bool,
     /// 默认邮件数据目录（界面上做提示）。
     pub default_data_dir: String,
     /// 附件目录留空时会用的默认位置。
@@ -617,6 +576,8 @@ pub struct AppSettingsInputDto {
     pub attachment_dir: String,
     /// 新邮件是否弹系统通知。
     pub notify_new_mail: bool,
+    /// 读信是否默认拦截远程图片；前端必须显式带上，防止旧调用悄悄变成放行。
+    pub block_remote_images_by_default: bool,
 }
 
 /// 把界面上的路径文本转成 `Option<PathBuf>` 并做校验。
@@ -658,6 +619,7 @@ pub async fn set_app_settings(
         data_dir,
         attachment_dir: None,
         notify_new_mail: input.notify_new_mail,
+        block_remote_images_by_default: input.block_remote_images_by_default,
         pending_cleanup_dir: previous.pending_cleanup_dir.take(),
     };
     state
@@ -911,6 +873,8 @@ fn reveal_file(path: &Path) -> std::io::Result<()> {
 }
 
 /// 组装返回给界面的设置快照。
+///
+/// 界面上的路径统一去掉 Windows 规范化前缀 `\\?\`，避免用户看到莫名符号。
 fn build_settings_dto(state: &AppState) -> AppSettingsDto {
     let settings = state.settings_snapshot();
     let default_dir = state.default_data_dir();
@@ -918,21 +882,36 @@ fn build_settings_dto(state: &AppState) -> AppSettingsDto {
         data_dir: path_text(settings.data_dir.as_deref()),
         attachment_dir: path_text(settings.attachment_dir.as_deref()),
         notify_new_mail: settings.notify_new_mail,
-        default_data_dir: default_dir.to_string_lossy().to_string(),
-        default_attachment_dir: settings
-            .effective_attachment_dir(default_dir)
-            .to_string_lossy()
-            .to_string(),
-        active_data_dir: state.active_data_dir().to_string(),
-        active_attachment_dir: state.active_attachment_dir().to_string(),
+        block_remote_images_by_default: settings.block_remote_images_by_default,
+        default_data_dir: strip_verbatim_prefix(&default_dir.to_string_lossy()),
+        default_attachment_dir: strip_verbatim_prefix(
+            &settings.effective_attachment_dir(default_dir).to_string_lossy(),
+        ),
+        active_data_dir: strip_verbatim_prefix(state.active_data_dir()),
+        active_attachment_dir: strip_verbatim_prefix(state.active_attachment_dir()),
         first_run: state.first_run(),
     }
 }
 
-/// `Option<&Path>` 转成界面用的字符串：没有就是空串。
+/// `Option<&Path>` 转成界面用的字符串：没有就是空串；顺带去掉 `\\?\` 前缀。
 fn path_text(path: Option<&Path>) -> String {
-    path.map(|value| value.to_string_lossy().to_string())
+    path.map(|value| strip_verbatim_prefix(&value.to_string_lossy()))
         .unwrap_or_default()
+}
+
+/// 去掉 Windows 规范化路径前缀，让界面显示成普通路径。
+///
+/// - `\\?\C:\dir` 还原成 `C:\dir`；
+/// - `\\?\UNC\server\share` 还原成 `\\server\share`；
+/// - 其它路径原样返回。
+fn strip_verbatim_prefix(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        path.to_string()
+    }
 }
 
 // ============================ 账号命令 ============================
@@ -3458,7 +3437,7 @@ pub async fn clear_ai_cache(state: tauri::State<'_, AppState>) -> Result<usize, 
 
 #[cfg(test)]
 mod tests {
-    use super::is_external_link;
+    use super::{is_external_link, strip_verbatim_prefix};
 
     #[test]
     fn only_absolute_http_https_mailto_links_are_opened() {
@@ -3477,5 +3456,20 @@ mod tests {
         assert!(!is_external_link("https://"));
         assert!(!is_external_link("mailto:"));
         assert!(!is_external_link(""));
+    }
+
+    #[test]
+    fn verbatim_prefix_is_stripped_for_display() {
+        // 盘符路径：只去掉前缀，保留反斜杠。
+        assert_eq!(strip_verbatim_prefix(r"\\?\D:\File\mails"), r"D:\File\mails");
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\D:\File\mails\downloads"),
+            r"D:\File\mails\downloads"
+        );
+        // 网络路径：\\?\UNC\server\share 还原成 \\server\share。
+        assert_eq!(strip_verbatim_prefix(r"\\?\UNC\srv\share"), r"\\srv\share");
+        // 本来就是普通路径：原样返回。
+        assert_eq!(strip_verbatim_prefix(r"D:\File\mails"), r"D:\File\mails");
+        assert_eq!(strip_verbatim_prefix(""), "");
     }
 }
