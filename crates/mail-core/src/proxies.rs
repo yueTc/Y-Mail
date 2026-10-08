@@ -190,10 +190,14 @@ impl MailEngine {
         }
     }
 
-    /// 测试一个代理是否能连到目标服务器（默认 `www.google.com:443`）。
+    /// 测试一个代理是否能真的访问到目标网站（默认 `www.google.com:443`）。
     ///
-    /// 只要代理按要求完成了到目标的隧道建立，就算测试通过。
-    pub async fn test_proxy(&self, id: ProxyId, target: Option<(String, u16)>) -> Result<(), EngineError> {
+    /// 光把隧道建起来不算数：有些代理会「乐观应答」，还没真连上目标就先回
+    /// 成功，那样量出来的耗时只有 1 毫秒，没有意义。所以隧道建好后还要对
+    /// 目标真发一次请求、等它回话，用这段往返时间当延迟。
+    ///
+    /// 返回整段耗时（毫秒），给界面显示延迟用。
+    pub async fn test_proxy(&self, id: ProxyId, target: Option<(String, u16)>) -> Result<u64, EngineError> {
         let stored = self.get_proxy(id)?;
         let route = route_from_stored(&stored, self.secrets())?;
         let (host, port) = target.unwrap_or_else(|| ("www.google.com".to_string(), 443));
@@ -203,9 +207,11 @@ impl MailEngine {
             ));
         }
 
+        let started = std::time::Instant::now();
         let tcp = mail_net::connect_tcp(&host, port, Some(&route), mail_net::DEFAULT_TIMEOUT).await?;
-        drop(tcp);
-        Ok(())
+        let stream = mail_net::Stream::plain(tcp);
+        mail_net::probe_website(stream, &host, port, mail_net::DEFAULT_TIMEOUT).await?;
+        Ok(started.elapsed().as_millis() as u64)
     }
 
     /// 按「账号级 > 全局自定义 > 跟随系统 > 直连」选出本次连接要走的代理。

@@ -796,8 +796,9 @@ export const api = {
 
   stopSync: (accountId?: number) =>
     call<void>("stop_sync", accountId === undefined ? {} : { accountId }),
+  /** 测试一个代理能不能真的访问到目标；返回往返耗时（毫秒）。 */
   testProxy: (id: number, target?: string) =>
-    call<void>("test_proxy", target === undefined ? { id } : { id, target }),
+    call<number>("test_proxy", target === undefined ? { id } : { id, target }),
 
   // ===== 统一收件箱（Wave 3） =====
 

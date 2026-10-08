@@ -1255,19 +1255,19 @@ pub async fn set_proxy_settings(
     Ok(GlobalProxyDto::from_domain(engine.global_proxy_mode()?))
 }
 
-/// 测试一个代理能不能连到目标服务器。
+/// 测试一个代理能不能真的访问到目标网站，返回往返耗时（毫秒）。
 ///
+/// 目标端口是 80 或 443 时会真发一次 HTTP 请求、等网站回话，数字才有意义。
 /// `target` 省略或为空时用默认目标 `www.google.com:443`。
 #[tauri::command]
 pub async fn test_proxy(
     state: tauri::State<'_, AppState>,
     id: i64,
     target: Option<String>,
-) -> Result<(), CommandError> {
+) -> Result<u64, CommandError> {
     let target = parse_target(target)?;
     let engine = state.engine().await;
-    engine.test_proxy(ProxyId(id), Some(target)).await?;
-    Ok(())
+    Ok(engine.test_proxy(ProxyId(id), Some(target)).await?)
 }
 
 /// 解析「主机:端口」形式的测试目标；空值回退到默认目标。

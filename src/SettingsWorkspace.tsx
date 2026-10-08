@@ -40,7 +40,7 @@ const SETTINGS_CATEGORIES: { id: SettingsCategoryId; label: string }[] = [
   { id: "proxy", label: "代理" },
   { id: "ai", label: "AI功能" },
   { id: "mcp", label: "MCP" },
-  { id: "storage", label: "存储与通知" },
+  { id: "storage", label: "存储" },
   { id: "contacts", label: "通讯录" },
   { id: "about", label: "关于" },
 ];
@@ -111,6 +111,9 @@ export default function SettingsWorkspace({
   // 「通用」里的远程图片开关单独一份提示，别和存储分组互相串。
   const [generalNotice, setGeneralNotice] = useState<string | null>(null);
   const [generalSaveError, setGeneralSaveError] = useState<string | null>(null);
+  // 「通用」里的通知开关单独一份提示，别和别的分组互相串。
+  const [notifyNotice, setNotifyNotice] = useState<string | null>(null);
+  const [notifySaveError, setNotifySaveError] = useState<string | null>(null);
   const [dirError, setDirError] = useState<string | null>(null);
   // 开机启动：状态以后端真实状态为准，不落本地设置。
   const [autostart, setAutostart] = useState(false);
@@ -209,7 +212,7 @@ export default function SettingsWorkspace({
   }
 
   /**
-   * 保存「存储与通知」里的通知开关；数据目录只能通过“更改目录”迁移。
+   * 保存「存储」分组里的设置；数据目录只能通过“更改目录”迁移。通知开关已挪到「通用」，这里仍带上它的当前值，避免覆盖。
    */
   async function saveStorage(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -261,6 +264,35 @@ export default function SettingsWorkspace({
     } catch (error: unknown) {
       setBlockRemoteImagesByDefault(previous);
       setGeneralSaveError(describeError(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /** 勾选即保存「新邮件系统通知」；带上当前其它设置字段，避免覆盖别的设置。 */
+  async function saveNotifyNewMail(next: boolean): Promise<void> {
+    if (storage.kind !== "ready") return;
+    const previous = notifyNewMail;
+    setNotifyNewMail(next);
+    setSaving(true);
+    setNotifyNotice(null);
+    setNotifySaveError(null);
+    try {
+      const saved = await api.saveAppSettings({
+        dataDir: storage.settings.dataDir,
+        attachmentDir: "",
+        notifyNewMail: next,
+        notifyAiEnabled,
+        blockRemoteImagesByDefault,
+      });
+      setStorage({ kind: "ready", settings: saved });
+      setNotifyNewMail(saved.notifyNewMail);
+      setNotifyAiEnabled(saved.notifyAiEnabled);
+      setBlockRemoteImagesByDefault(saved.blockRemoteImagesByDefault);
+      setNotifyNotice(t("设置已保存。"));
+    } catch (error: unknown) {
+      setNotifyNewMail(previous);
+      setNotifySaveError(describeError(error));
     } finally {
       setSaving(false);
     }
@@ -568,6 +600,36 @@ export default function SettingsWorkspace({
                   {t("正在读取……")}</p>
               )}
             </section>
+
+            <section className="panel" aria-label={t("通知")}>
+              <h3 className="settings-subtitle">{t("通知")}</h3>
+              {storage.kind === "ready" ? (
+                <div className="settings-form">
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={notifyNewMail}
+                      disabled={saving}
+                      onChange={(event) => void saveNotifyNewMail(event.target.checked)}
+                    />
+                    <span>{t("新邮件用 Windows 系统通知提醒（窗口切到后台时才弹）")}</span>
+                  </label>
+                  {notifyNotice && (
+                    <p className="hint" role="status">
+                      {notifyNotice}
+                    </p>
+                  )}
+                  {notifySaveError && (
+                    <p className="error" role="alert">
+                      {t("保存失败：")}{notifySaveError}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="hint" role="status">
+                  {t("正在读取……")}</p>
+              )}
+            </section>
           </section>
 
           <section
@@ -621,10 +683,10 @@ export default function SettingsWorkspace({
 
           <section
             className="settings-group"
-            aria-label={t("存储与通知")}
+            aria-label={t("存储")}
             hidden={activeCategory !== "storage"}
           >
-            <h2 className="settings-group-title">{t("存储与通知")}</h2>
+            <h2 className="settings-group-title">{t("存储")}</h2>
             <section
               className="panel"
               aria-busy={storage.kind === "loading" || migrating || opening}
@@ -661,14 +723,6 @@ export default function SettingsWorkspace({
                     {t("下载文件保存在：")}<span className="path">{storage.settings.defaultAttachmentDir}</span>
                   </p>
 
-                  <label className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={notifyNewMail}
-                      onChange={(event) => setNotifyNewMail(event.target.checked)}
-                    />
-                    <span>{t("新邮件用 Windows 系统通知提醒（窗口切到后台时才弹）")}</span>
-                  </label>
 
                   <dl className="status">
                     <dt>{t("当前生效的数据目录")}</dt>

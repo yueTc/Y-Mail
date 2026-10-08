@@ -210,3 +210,34 @@ describe("通讯录带过来的预填收件人", () => {
     });
   });
 });
+describe("抄送密送的展开与收起", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("默认收起来，点一下展开，再点一下收起且内容不丢", async () => {
+    render(<ComposePanel request={{ kind: "new" }} accounts={ACCOUNTS} onClose={() => {}} />);
+    await waitForReady();
+
+    // 默认两个栏都收起来。
+    expect(screen.queryByLabelText("抄送")).toBeNull();
+    expect(screen.queryByLabelText("密送")).toBeNull();
+
+    // 点「抄送」展开，填一个地址。
+    fireEvent.click(screen.getByRole("button", { name: "抄送" }));
+    const cc = await screen.findByLabelText("抄送");
+    fireEvent.change(cc, { target: { value: "cc@example.com" } });
+
+    // 点「密送」也能展开。
+    fireEvent.click(screen.getByRole("button", { name: "密送" }));
+    expect(await screen.findByLabelText("密送")).toBeTruthy();
+
+    // 再点「抄送」把栏收起来。
+    fireEvent.click(screen.getByRole("button", { name: "抄送" }));
+    expect(screen.queryByLabelText("抄送")).toBeNull();
+
+    // 重新展开，之前填的地址还在。
+    fireEvent.click(screen.getByRole("button", { name: "抄送" }));
+    expect((screen.getByLabelText("抄送") as HTMLInputElement).value).toBe("cc@example.com");
+  });
+});

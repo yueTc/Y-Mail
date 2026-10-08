@@ -181,6 +181,8 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
   const [toText, setToText] = useState("");
   const [ccText, setCcText] = useState("");
   const [bccText, setBccText] = useState("");
+  const [ccVisible, setCcVisible] = useState(false);
+  const [bccVisible, setBccVisible] = useState(false);
   const [subject, setSubject] = useState("");
   const [bodyHtml, setBodyHtml] = useState("");
   const [bodyText, setBodyText] = useState("");
@@ -292,6 +294,8 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
             setToText(backup.toText);
             setCcText(backup.ccText);
             setBccText(backup.bccText);
+            setCcVisible(backup.ccText.trim() !== "");
+            setBccVisible(backup.bccText.trim() !== "");
             setSubject(backup.subject);
             setBodyText(backup.bodyText);
             setBodyHtml(
@@ -316,6 +320,8 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
           setToText(formatRecipients(seed.to));
           setCcText(formatRecipients(seed.cc));
           setBccText(formatRecipients(seed.bcc));
+          setCcVisible(seed.cc.length > 0);
+          setBccVisible(seed.bcc.length > 0);
           setSubject(seed.subject);
           setBodyText(seed.bodyText || "");
           setBodyHtml(
@@ -869,15 +875,35 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
           </select>
         </label>
 
-        <label className="compose-field">
-          <span>{t("收件人")}</span>
+        <div className="compose-field">
+          <div className="compose-field-head">
+            <span>{t("收件人")}</span>
+            <div className="compose-cc-bcc">
+              <button
+                type="button"
+                className="compose-toggle-link"
+                aria-pressed={ccVisible}
+                onClick={() => setCcVisible((value) => !value)}
+              >
+                {t("抄送")}
+              </button>
+              <button
+                type="button"
+                className="compose-toggle-link"
+                aria-pressed={bccVisible}
+                onClick={() => setBccVisible((value) => !value)}
+              >
+                {t("密送")}
+              </button>
+            </div>
+          </div>
           <input
             aria-label={t("收件人")}
             value={toText}
             placeholder={t("名字 <a@b.com>，多个用逗号分开")}
             onChange={(event) => setToText(event.target.value)}
           />
-        </label>
+        </div>
         {suggestions.length > 0 && (
           <ul className="compose-suggestions" aria-label={t("联系人建议")}>
             {suggestions.map((contact) => (
@@ -891,15 +917,19 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
           </ul>
         )}
 
-        <label className="compose-field">
-          <span>{t("抄送")}</span>
-          <input aria-label={t("抄送")} value={ccText} onChange={(event) => setCcText(event.target.value)} />
-        </label>
+        {ccVisible && (
+          <label className="compose-field">
+            <span>{t("抄送")}</span>
+            <input aria-label={t("抄送")} value={ccText} onChange={(event) => setCcText(event.target.value)} />
+          </label>
+        )}
 
-        <label className="compose-field">
-          <span>{t("密送")}</span>
-          <input aria-label={t("密送")} value={bccText} onChange={(event) => setBccText(event.target.value)} />
-        </label>
+        {bccVisible && (
+          <label className="compose-field">
+            <span>{t("密送")}</span>
+            <input aria-label={t("密送")} value={bccText} onChange={(event) => setBccText(event.target.value)} />
+          </label>
+        )}
 
         <label className="compose-field">
           <span>{t("主题", undefined, "subject")}</span>

@@ -83,6 +83,9 @@ function validate(form: FormState): string | null {
   return null;
 }
 
+/** 一次代理测试的结果：连上记耗时（毫秒），连不上就是 timeout。 */
+type TestResult = { ok: true; ms: number } | { ok: false };
+
 interface Props {
   /** 通知外壳：代理列表变了，账号面板里的「指定代理」选项要重新拉取。 */
   onChanged: () => void;
@@ -98,6 +101,7 @@ export default function ProxyPanel({ onChanged }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<number, TestResult>>({});
 
   const reload = useCallback(async () => {
     try {
@@ -162,6 +166,7 @@ export default function ProxyPanel({ onChanged }: Props) {
       const saved = await api.saveProxy(toConfig(form), password);
       setNotice(t("代理「{0}」已保存。", [saved.label || `${saved.host}:${saved.port}`]));
       setForm(null);
+      forgetTestResult(saved.id);
       await reload();
       onChanged();
     } catch (err) {
@@ -181,6 +186,7 @@ export default function ProxyPanel({ onChanged }: Props) {
     setNotice(null);
     try {
       await api.deleteProxy(proxy.id);
+      forgetTestResult(proxy.id);
       setNotice(t("已删除代理「{0}」。", [name]));
       await reload();
       onChanged();
@@ -192,18 +198,45 @@ export default function ProxyPanel({ onChanged }: Props) {
   }
 
   async function handleTest(proxy: Proxy) {
-    const name = proxy.label || `${proxy.host}:${proxy.port}`;
     setBusy(`test-${proxy.id}`);
     setError(null);
     setNotice(null);
     try {
-      await api.testProxy(proxy.id, target.trim() === "" ? undefined : target.trim());
-      setNotice(t("代理「{0}」测试通过：已经能建立到 {1} 的连接。", [name, target.trim() || DEFAULT_TARGET]));
-    } catch (err) {
-      setError(describeError(err));
+      const ms = await api.testProxy(proxy.id, target.trim() === "" ? undefined : target.trim());
+      setTestResults((current) => ({ ...current, [proxy.id]: { ok: true, ms } }));
+    } catch {
+      setTestResults((current) => ({ ...current, [proxy.id]: { ok: false } }));
     } finally {
       setBusy(null);
     }
+  }
+
+  /** 「编辑」按钮左边的延迟标记：连上显示绿色毫秒数，连不上显示红色 timeout。 */
+  function latencyBadge(proxy: Proxy) {
+    const result = testResults[proxy.id];
+    if (result === undefined) return null;
+    if (result.ok) {
+      return (
+        <span className="proxy-latency proxy-latency-ok" role="status">
+          {result.ms} ms
+        </span>
+      );
+    }
+    return (
+      <span className="proxy-latency proxy-latency-bad" role="status">
+        timeout
+      </span>
+    );
+  }
+
+  /** 代理配置改了或删了，之前那次测试结果就不作数，丢掉。 */
+  function forgetTestResult(id: number) {
+    setTestResults((current) => {
+      if (!(id in current)) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
   }
 
   async function handleSaveGlobal() {
@@ -289,7 +322,7 @@ export default function ProxyPanel({ onChanged }: Props) {
             placeholder={DEFAULT_TARGET}
           />
         </label>
-        <span className="hint">{t("点每个代理后面的「测试」按钮，就用这个目标去连一次。")}</span>
+        <span className="hint">{t("点每个代理后面的「测试」按钮，就用这个目标真连一次网站；绿色数字是往返耗时，红色 timeout 是连不上。")}</span>
       </div>
 
       {proxies === null ? (
@@ -314,6 +347,7 @@ export default function ProxyPanel({ onChanged }: Props) {
                 </div>
               </div>
               <div className="card-actions">
+                {latencyBadge(proxy)}
                 <button type="button" onClick={() => openEdit(proxy)} disabled={busy !== null}>
                   {t("编辑")}</button>
                 <button

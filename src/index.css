@@ -317,6 +317,23 @@ textarea:focus {
   flex: none;
 }
 
+/* 代理卡片上「编辑」按钮左边的延迟标记：连上是绿字，连不上是红字。 */
+.proxy-latency {
+  align-self: center;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 0.86rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.proxy-latency-ok {
+  color: var(--ok);
+}
+
+.proxy-latency-bad {
+  color: var(--state-error-fg);
+}
+
 /* ---------- 表单 ---------- */
 
 .form {
@@ -481,6 +498,12 @@ textarea:focus {
 
 .secret-input-row input {
   flex: 1;
+}
+
+/* 输入框要自己的眼睛按钮，关掉浏览器（WebView2/Edge）自带的那个，免得出现两个眼睛。 */
+.secret-input::-ms-reveal,
+.secret-input::-ms-clear {
+  display: none;
 }
 
 /* 眼睛按钮：沿用图标按钮的尺寸，只露出眼睛图标。 */
@@ -1254,6 +1277,42 @@ textarea:focus {
 .compose-field > span {
   font-size: 0.85rem;
   opacity: 0.8;
+}
+
+.compose-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.compose-field-head > span {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.compose-cc-bcc {
+  display: flex;
+  gap: 12px;
+}
+
+.compose-toggle-link {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.compose-toggle-link:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.compose-toggle-link[aria-pressed="true"] {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .compose-field input,

@@ -109,7 +109,7 @@ describe("设置页分类栏", () => {
       "代理",
       "AI功能",
       "MCP",
-      "存储与通知",
+      "存储",
       "通讯录",
       "关于",
     ]);
@@ -125,7 +125,7 @@ describe("设置页分类栏", () => {
     expect(await screen.findByRole("checkbox", { name: /开机自启动/ })).toBeTruthy();
     expect(screen.queryByRole("textbox")).toBeNull();
 
-    await openCategory("存储与通知");
+    await openCategory("存储");
     expect(await screen.findByRole("textbox")).toBeTruthy();
     expect(screen.queryByRole("checkbox", { name: /开机自启动/ })).toBeNull();
   });
@@ -170,28 +170,46 @@ describe("设置页通用分组", () => {
     );
     expect(await screen.findByText("设置已保存。")).toBeTruthy();
   });
+
+  it("新邮件系统通知默认打开，点一下立即保存", async () => {
+    renderSettings();
+
+    const box = (await screen.findByRole("checkbox", {
+      name: /新邮件用 Windows 系统通知提醒/,
+    })) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+
+    fireEvent.click(box);
+
+    await waitFor(() =>
+      expect(api.saveAppSettings).toHaveBeenCalledWith({
+        dataDir: "",
+        attachmentDir: "",
+        notifyNewMail: false,
+        notifyAiEnabled: false,
+        blockRemoteImagesByDefault: true,
+      }),
+    );
+    expect(await screen.findByText("设置已保存。")).toBeTruthy();
+  });
 });
 
-describe("设置页存储目录与通知", () => {
+describe("设置页存储目录", () => {
   it("只显示一个可编辑目录输入框，并只读展示下载目录", async () => {
     renderSettings();
-    await openCategory("存储与通知");
+    await openCategory("存储");
 
     const inputs = await screen.findAllByRole("textbox");
     expect(inputs).toHaveLength(1);
     expect((inputs[0] as HTMLInputElement).value).toBe("");
     expect(screen.getByText(/下载文件保存在：/)).toBeTruthy();
     expect(screen.getAllByText(SETTINGS.defaultAttachmentDir).length).toBeGreaterThan(0);
-    expect(
-      screen.getByRole("checkbox", { name: /新邮件用 Windows 系统通知提醒/ }),
-    ).toBeTruthy();
-    expect(screen.getByText(/新邮件用 Windows 系统通知提醒/)).toBeTruthy();
     expect(screen.getByText(SETTINGS.activeDataDir)).toBeTruthy();
   });
 
-  it("保存时提交通知开关与远程图片开关，不再保存单独附件目录", async () => {
+  it("保存时带上通知与远程图片开关，不提交单独附件目录", async () => {
     renderSettings();
-    await openCategory("存储与通知");
+    await openCategory("存储");
 
     fireEvent.click(await screen.findByRole("button", { name: "保存设置" }));
 
@@ -220,7 +238,7 @@ describe("设置页存储目录与通知", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
 
     renderSettings();
-    await openCategory("存储与通知");
+    await openCategory("存储");
     const input = (await screen.findAllByRole("textbox"))[0] as HTMLInputElement;
     fireEvent.change(input, { target: { value: "D:/Mail" } });
     fireEvent.click(screen.getByRole("button", { name: "更改目录" }));
@@ -240,7 +258,7 @@ describe("设置页存储目录与通知", () => {
   it("迁移失败时显示可读错误，不假装成功", async () => {
     vi.mocked(api.changeDataDir).mockRejectedValue(new Error("目标盘空间不够"));
     renderSettings();
-    await openCategory("存储与通知");
+    await openCategory("存储");
 
     const input = (await screen.findAllByRole("textbox"))[0] as HTMLInputElement;
     fireEvent.change(input, { target: { value: "D:/Mail" } });
@@ -252,7 +270,7 @@ describe("设置页存储目录与通知", () => {
 
   it("打开目录只调用后端当前生效目录命令", async () => {
     renderSettings();
-    await openCategory("存储与通知");
+    await openCategory("存储");
 
     fireEvent.click(await screen.findByRole("button", { name: "打开目录" }));
 

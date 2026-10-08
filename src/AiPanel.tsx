@@ -592,6 +592,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
             CDKey / API Key
             <span className="secret-input-row">
               <input
+                className="secret-input"
                 type={showApiKey ? "text" : "password"}
                 aria-label="CDKey / API Key"
                 autoComplete="off"

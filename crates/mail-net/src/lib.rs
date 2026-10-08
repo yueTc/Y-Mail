@@ -7,6 +7,7 @@
 pub mod connect;
 pub mod error;
 pub mod io;
+pub mod probe;
 pub mod stream;
 pub mod system;
 
@@ -14,5 +15,6 @@ pub mod system;
 pub const CRATE_PURPOSE: &str = "共享网络连接层：直连、代理隧道与 TLS 包装";
 
 pub use connect::{connect_tcp, DEFAULT_TIMEOUT};
+pub use probe::probe_website;
 pub use stream::{tls_wrap, Stream};
 pub use system::{parse_proxy_server, read_system_proxy, SystemProxy};

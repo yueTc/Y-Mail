@@ -2932,7 +2932,7 @@ dependencies = [
 
 [[package]]
 name = "mail-ai"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "mail-domain",
  "mail-net",
@@ -2946,7 +2946,7 @@ dependencies = [
 
 [[package]]
 name = "mail-core"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.4.3",
@@ -2971,11 +2971,11 @@ dependencies = [
 
 [[package]]
 name = "mail-domain"
-version = "0.1.3"
+version = "0.1.4"
 
 [[package]]
 name = "mail-imap"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "base64 0.22.1",
  "mail-domain",
@@ -2987,7 +2987,7 @@ dependencies = [
 
 [[package]]
 name = "mail-mcp"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "mail-core",
  "mail-domain",
@@ -3000,7 +3000,7 @@ dependencies = [
 
 [[package]]
 name = "mail-mime"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "ammonia",
  "base64 0.22.1",
@@ -3012,7 +3012,7 @@ dependencies = [
 
 [[package]]
 name = "mail-net"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "base64 0.22.1",
  "mail-domain",
@@ -3026,7 +3026,7 @@ dependencies = [
 
 [[package]]
 name = "mail-oauth"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "base64 0.22.1",
  "form_urlencoded",
@@ -3054,7 +3054,7 @@ dependencies = [
 
 [[package]]
 name = "mail-smtp"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "base64 0.22.1",
  "mail-domain",
@@ -3067,7 +3067,7 @@ dependencies = [
 
 [[package]]
 name = "mail-store"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "mail-domain",
  "rusqlite",
@@ -7415,7 +7415,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
 name = "ymail"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "arboard",
  "base64 0.22.1",
