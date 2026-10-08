@@ -37,6 +37,7 @@ _163, QQ, WeCom, Gmail, Outlook — all in one inbox_
 - **Safe by default** — HTML is allowlist-sanitized and rendered in a sandbox, remote images are blocked, and secrets only ever go to Windows Credential Manager
 - **AI and MCP are off by default** — AI asks for confirmation before every outbound call and can be disabled in one click; MCP is read-only by default and speaks local stdio only, listening on no port; both leave a local audit trail
 - **Desktop integration** — tray residency, single instance, silent launch at startup, and a mail data directory you choose yourself
+- **Signed in-app updates** — **Settings → About** shows the version you are running, links to the project page and the release page, and can check for, download and install a signed update in place, then restart into the new build
 
 ## Features
 
@@ -52,6 +53,7 @@ _163, QQ, WeCom, Gmail, Outlook — all in one inbox_
 | **MCP integration** | Off by default and read-only by default, over local stdin/stdout only — it listens on no port · With the master switch on, settings generates ready-to-paste config for Codex / Claude Desktop / Cursor (`command` pointing at `ymail-mcp.exe` in the install directory, `env.YMAIL_DATA_DIR` at the app data directory) · Read-only tools `list_accounts` / `list_folders` / `search_messages` / `get_message` / `get_thread`, plus one write tool `create_draft` (off by default; it can only create drafts, never send) · Every call is recorded in a local audit log (tool name / account scope / argument hash / status, never message bodies); “disable MCP” takes effect immediately |
 | **Desktop integration** | Lives in the system tray — closing the window tucks it away and new mail raises a system notification · Single instance: launching again just brings the existing window forward, so two instances never fight over the same database · Launch at startup drops silently into the tray and keeps fetching mail in the background; the switch reflects real system state · On first launch a wizard asks where to keep mail data — the default location or a folder you pick — and it can be changed later in settings; changing it restarts the app and optionally cleans up the old directory (the settings file is kept) |
 | **Appearance** | Light / dark / follow system, applied across the whole app |
+| **About & updates** | **Settings → About** shows the current version, read from the app itself rather than hard-coded · “Check for update” reads the release manifest published with every release and answers with “already up to date”, the new version plus its release notes, or a plain error · “Download and install” runs in place with a progress bar: the package is verified against the public key baked into the app before it is applied, and the app restarts into the new build · One-click shortcuts to the project page and the release page |
 
 ## Installation
 
@@ -77,6 +79,8 @@ npm run build               # type-check and build the frontend
 npm run tauri build         # bundle (MSI / NSIS; generates the MCP sidecar for you)
 npm run tauri dev           # or: run the desktop app in development mode
 ```
+
+> `npm run tauri build` also produces the updater artifacts, so it expects the Tauri signing key in `TAURI_SIGNING_PRIVATE_KEY`. Without it the build stops with “A public key has been found, but no private key”. For a local build you do not intend to publish, add `--no-sign` to skip signing.
 
 ## Getting started
 
@@ -104,7 +108,7 @@ npm run tauri dev           # or: run the desktop app in development mode
 | [Security Audit Report](docs/security-audit.md) | Point-by-point conclusions, evidence and unverified areas for each security rule |
 | [Manual Acceptance Checklist](docs/manual-acceptance-checklist.md) | Real mailboxes / real AI / tray / installer scenarios that automation can’t cover |
 | [Release Checklist and Rollback Plan](docs/release-checklist.md) | Version numbers, artifact list, database backup and upgrade, uninstall and rollback |
-| Design specs (`docs/superpowers/specs/`) | The unified inbox master spec (v1.2), plus sub-specs for UI polish, folders and flags, contacts, launch at startup, renaming and data-directory cleanup |
+| Design specs (`docs/superpowers/specs/`) | The unified inbox master spec (v1.2), plus sub-specs for UI polish, folders and flags, contacts, launch at startup, renaming, data-directory cleanup, and the About page with signed updates |
 
 ## Architecture
 
