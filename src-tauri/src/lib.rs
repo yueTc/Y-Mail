@@ -40,6 +40,11 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        // 应用内更新：查新版本、下载并校验签名、装好由前端调重启。
+        // 更新源与公钥写在 tauri.conf.json 的 plugins.updater 里。
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // 更新装完后要重启应用；进程控制单独一个插件，只开重启/退出这两个能力。
+        .plugin(tauri_plugin_process::init())
         // 开机启动：写进启动项的那条命令会带 --autostart，程序据此静默进托盘。
         .plugin(
             tauri_plugin_autostart::Builder::new()

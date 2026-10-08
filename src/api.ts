@@ -4,6 +4,9 @@
 //! 界面出参里也永远拿不回已保存的密码本体（只有 hasCredential / hasPassword 布尔值）。
 
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import { t } from "./i18n";
 
 // ============================ 类型 ============================
@@ -677,6 +680,40 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   }
 }
 
+// ============================ 应用内更新 ============================
+
+/**
+ * 刚查到、还没装的更新句柄。
+ *
+ * 查和装是两步：`check()` 拿到的句柄在 Rust 侧占着一份资源，
+ * 装完或用户重新查之前必须关掉，否则会一直挂着。
+ */
+let pendingUpdate: Update | null = null;
+
+/** 丢掉上一次查到的更新句柄；关不掉也不影响用户重新查一次。 */
+async function releasePendingUpdate(): Promise<void> {
+  const previous = pendingUpdate;
+  pendingUpdate = null;
+  if (!previous) return;
+  try {
+    await previous.close();
+  } catch {
+    // 这里只做清理，失败不往外抛。
+  }
+}
+
+/** 查到的更新信息；只带界面要显示的字段，不带下载句柄。 */
+export interface UpdateInfo {
+  /** 更新包里的版本号。 */
+  version: string;
+  /** 当前正在运行的版本号。 */
+  currentVersion: string;
+  /** 发布说明原文；没有就空字符串。 */
+  notes: string;
+  /** 发布时间；没有就空字符串。 */
+  date: string;
+}
+
 // ============================ 命令封装 ============================
 
 export const api = {
@@ -1008,6 +1045,56 @@ export const api = {
   mcpTools: () => call<McpTool[]>("mcp_tools"),
 
   mcpAudit: (limit?: number) => call<McpAuditPage>("mcp_audit", limit === undefined ? {} : { limit }),
+  // ===== 关于与更新 =====
+
+  /**
+   * 当前运行的版本号。
+   *
+   * 取的是打包时写进程序里的版本，跟安装包一致；界面上不写死版本常量。
+   */
+  appVersion: () => getVersion(),
+
+  /** 查一次更新；没新版返回 null，有新版返回版本信息供界面显示。 */
+  checkForUpdate: async (): Promise<UpdateInfo | null> => {
+    await releasePendingUpdate();
+    const update = await check();
+    if (!update) return null;
+    pendingUpdate = update;
+    return {
+      version: update.version,
+      currentVersion: update.currentVersion,
+      notes: update.body ?? "",
+      date: update.date ?? "",
+    };
+  },
+
+  /**
+   * 下载并安装刚查到的更新。
+   *
+   * 下载完会先验签名再装：签名对不上直接失败，不会把来路不明的包装上去。
+   * Windows 上安装程序起来后主程序会被结束，所以这个函数不一定还会返回。
+   */
+  installPendingUpdate: async (onProgress: (percent: number | null) => void): Promise<void> => {
+    const update = pendingUpdate;
+    if (!update) throw new Error("还没有查到可以安装的更新");
+    let total = 0;
+    let received = 0;
+    await update.downloadAndInstall((event) => {
+      if (event.event === "Started") {
+        total = event.data.contentLength ?? 0;
+        received = 0;
+        onProgress(null);
+      } else if (event.event === "Progress") {
+        received += event.data.chunkLength;
+        onProgress(total > 0 ? Math.min(100, Math.round((received / total) * 100)) : null);
+      } else {
+        onProgress(100);
+      }
+    });
+  },
+
+  /** 装完重启到新版本。 */
+  relaunchApp: () => relaunch(),
 };
 
 // ============================ MCP 外部接入（Wave 8） ============================

@@ -1,7 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "最小权限集合：只开放核心默认能力与文件选择对话框，不开放 shell / fs / http 等插件权限。",
+  "description": "最小权限集合：核心默认能力、文件选择对话框、开机启动，以及应用内更新与更新后重启。不开放 shell / fs / http 等插件权限。",
   "windows": ["main", "screenshot"],
-  "permissions": ["core:default", "dialog:default", "autostart:default"]
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "autostart:default",
+    "updater:default",
+    "process:default"
+  ]
 }

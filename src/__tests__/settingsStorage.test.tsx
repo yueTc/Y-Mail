@@ -18,6 +18,11 @@ vi.mock("../api", () => ({
     clearAutoContacts: vi.fn(),
     autostartStatus: vi.fn(),
     setAutostart: vi.fn(),
+    appVersion: vi.fn().mockResolvedValue("0.1.3"),
+    checkForUpdate: vi.fn(),
+    installPendingUpdate: vi.fn(),
+    relaunchApp: vi.fn(),
+    openExternalUrl: vi.fn(),
   },
 }));
 
@@ -88,7 +93,7 @@ afterEach(() => {
 });
 
 describe("设置页分类栏", () => {
-  it("八个分类按拍板顺序排列，默认选中通用", async () => {
+  it("九个分类按拍板顺序排列，默认选中通用", async () => {
     renderSettings();
 
     const nav = await screen.findByRole("navigation", { name: "设置分类" });
@@ -102,6 +107,7 @@ describe("设置页分类栏", () => {
       "MCP",
       "存储与通知",
       "通讯录",
+      "关于",
     ]);
     expect(
       screen.getByRole("button", { name: "通用" }).getAttribute("aria-current"),

@@ -16,6 +16,11 @@ vi.mock("../api", () => ({
     clearAutoContacts: vi.fn(),
     autostartStatus: vi.fn(),
     setAutostart: vi.fn(),
+    appVersion: vi.fn().mockResolvedValue("0.1.3"),
+    checkForUpdate: vi.fn(),
+    installPendingUpdate: vi.fn(),
+    relaunchApp: vi.fn(),
+    openExternalUrl: vi.fn(),
   },
 }));
 

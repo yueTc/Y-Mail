@@ -36,6 +36,9 @@ notify-rust.workspace = true
 winreg.workspace = true
 tauri-plugin-dialog.workspace = true
 tauri-plugin-autostart.workspace = true
+# 应用内更新：查新版本、下载签名包、装完重启。
+tauri-plugin-updater.workspace = true
+tauri-plugin-process.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

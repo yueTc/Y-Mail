@@ -1565,6 +1565,29 @@ textarea:focus {
   margin: 0 0 10px;
   font-size: 0.98rem;
 }
+/* 「关于」页的更新说明：保留发布方写的换行，太长就在框里换行、不撑破面板。 */
+.update-notes {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field-bg);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--font-small);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 更新下载进度条：跟随主题底色，别用浏览器默认的亮蓝色。 */
+.update-progress {
+  width: 100%;
+  height: 8px;
+  margin: 4px 0 12px;
+  accent-color: var(--accent, var(--line));
+}
 
 /* 设置页表单：一个字段一行，标签在上、说明在下。 */
 .settings-form {

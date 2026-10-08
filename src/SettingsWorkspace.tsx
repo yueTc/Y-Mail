@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { api, describeError, type AppSettings } from "./api";
+import AboutPanel from "./AboutPanel";
 import AccountPanel from "./AccountPanel";
 import AiPanel from "./AiPanel";
 import AppearanceSettingsPanel from "./AppearanceSettingsPanel";
@@ -28,7 +29,8 @@ type SettingsCategoryId =
   | "ai"
   | "mcp"
   | "storage"
-  | "contacts";
+  | "contacts"
+  | "about";
 
 /** 左侧分类，数组顺序即界面顺序；文案进 `t()` 取词条。 */
 const SETTINGS_CATEGORIES: { id: SettingsCategoryId; label: string }[] = [
@@ -40,6 +42,7 @@ const SETTINGS_CATEGORIES: { id: SettingsCategoryId; label: string }[] = [
   { id: "mcp", label: "MCP" },
   { id: "storage", label: "存储与通知" },
   { id: "contacts", label: "通讯录" },
+  { id: "about", label: "关于" },
 ];
 
 /** 分类栏宽度记忆：默认 200，范围 160–320。 */
@@ -620,6 +623,15 @@ export default function SettingsWorkspace({
               </div>
               {contactNotice ? <p className="notice">{contactNotice}</p> : null}
             </section>
+          </section>
+
+          <section
+            className="settings-group"
+            aria-label={t("关于")}
+            hidden={activeCategory !== "about"}
+          >
+            <h2 className="settings-group-title">{t("关于")}</h2>
+            <AboutPanel />
           </section>
         </div>
       </div>
