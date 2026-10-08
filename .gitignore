@@ -38,7 +38,5 @@ desktop.ini
 .vscode/*
 !.vscode/extensions.json
 
-# === AI 记忆：仅提交项目级规则与交接，忽略按日期的个人上下文 ===
-.ai-memory/*/
-!.ai-memory/project_memory.md
-!.ai-memory/handoff.md
+# === AI 记忆：智能体工作区，逐会话变化，不入库（本地保留）===
+.ai-memory/

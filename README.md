@@ -138,7 +138,6 @@ flowchart TD
 | Protocols & storage | IMAP / SMTP / OAuth2, SQLite (FTS5) + MIME sanitization, AI sidecar off by default | [`crates/`](crates) |
 | MCP server | stdio server, executable entry point `ymail-mcp` | [`crates/mail-mcp/`](crates/mail-mcp) |
 | In-repo scripts | Icon generation, MCP sidecar generation, and more | [`scripts/`](scripts) |
-| Project memory | Handoff and project notes (dated session logs stay out of the repo) | [`.ai-memory/`](.ai-memory) |
 
 <details>
 <summary><b>Directory layout</b></summary>
@@ -159,7 +158,6 @@ src-tauri/       Desktop shell: windows, lifecycle, command forwarding
 src/             React/TS frontend
 scripts/         In-repo helper scripts (icon generation, MCP sidecar, and more)
 docs/            User guide, security audit, manual acceptance, release and rollback, design specs
-.ai-memory/      Project-level memory (handoff and notes; dated session logs stay out of the repo)
 ```
 
 </details>

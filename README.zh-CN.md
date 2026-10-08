@@ -136,7 +136,6 @@ flowchart TD
 | 协议与存储 | IMAP / SMTP / OAuth2、SQLite(FTS5) + MIME 清洗、AI 旁路默认关闭 | [`crates/`](crates) |
 | MCP 服务端 | stdio 服务端，可执行入口 `ymail-mcp` | [`crates/mail-mcp/`](crates/mail-mcp) |
 | 仓库内脚本 | 图标生成、MCP sidecar 生成等 | [`scripts/`](scripts) |
-| 项目记忆 | 交接与项目备忘（按日期的会话日志不入库） | [`.ai-memory/`](.ai-memory) |
 
 <details>
 <summary><b>目录结构</b></summary>
@@ -157,7 +156,6 @@ src-tauri/       桌面外壳：窗口、生命周期、命令转发
 src/             React/TS 前端
 scripts/         仓库内辅助脚本（图标生成、MCP sidecar 生成等）
 docs/            用户手册、安全审计、人工验收、发布与回滚、设计规格
-.ai-memory/      项目级记忆（交接与项目备忘；按日期的会话日志不入库）
 ```
 
 </details>
