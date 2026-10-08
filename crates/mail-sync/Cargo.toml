@@ -23,6 +23,7 @@ thiserror.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["net", "io-util", "time", "macros", "rt"] }
 url = "2"
+form_urlencoded = "1"
 
 [dev-dependencies]
 tokio = { version = "1.44", features = ["net", "io-util", "time", "macros", "rt", "rt-multi-thread"] }

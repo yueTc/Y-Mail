@@ -17,6 +17,7 @@ mail-mime.workspace = true
 mail-imap.workspace = true
 mail-smtp.workspace = true
 mail-oauth.workspace = true
+mail-sync.workspace = true
 mail-ai.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

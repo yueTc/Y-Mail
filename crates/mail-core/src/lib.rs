@@ -21,6 +21,7 @@ pub mod reading;
 pub mod search;
 pub mod secrets;
 pub mod sync;
+pub mod sync_settings;
 
 pub use ai::{
     AiAuthorizationPreview, AiProviderInput, AiProviderView, AiTarget, AiTextOutcome, AiTranslation,
@@ -60,6 +61,9 @@ pub use mail_store::{
 pub use paths::SqlitePaths;
 pub use secrets::{ChunkedSecretStore, KeyringSecretStore, MemorySecretStore, SecretStore, SecretStoreError};
 pub use sync::{AccountSyncStatus, SyncConfig, SyncService, SyncState};
+pub use sync_settings::{
+    GitHubLoginView, GITHUB_AVATAR_KEY, GITHUB_LOGIN_KEY, GITHUB_NAME_KEY, GITHUB_TOKEN_KEY,
+};
 
 /// 本 crate 的用途标识，供工作区自检与日志使用。
 pub const CRATE_PURPOSE: &str = "引擎门面（唯一对外接口）";
