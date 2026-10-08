@@ -306,3 +306,22 @@ fn show_main_window(app: &tauri::AppHandle) {
         let _ = window.set_focus();
     }
 }
+
+#[cfg(test)]
+mod config_tests {
+    #[test]
+    fn 桌面壳策略允许读信放行后的远程图片() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("配置应是合法 JSON");
+        let csp = config["app"]["security"]["csp"]
+            .as_str()
+            .expect("桌面壳应配置内容安全策略");
+        let img_src = csp
+            .split(';')
+            .map(str::trim)
+            .find(|part| part.starts_with("img-src "))
+            .expect("内容安全策略应有 img-src");
+        assert!(img_src.contains("http:"), "{img_src}");
+        assert!(img_src.contains("https:"), "{img_src}");
+    }
+}

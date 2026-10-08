@@ -132,7 +132,7 @@ export function buildReaderDocument(
     "<style>",
     `html,body{margin:0;padding:0;background:${background};color:${foreground};`,
     "font-family:'Segoe UI','Microsoft YaHei',system-ui,sans-serif;font-size:15px;line-height:1.6;}",
-    "body{padding:14px 16px;word-break:break-word;}",
+    "body{padding:14px 16px;overflow-wrap:break-word;}",
     `a{color:${link};}`,
     "img{max-width:100%;height:auto;}",
     "table{max-width:100%;border-collapse:collapse;}",
