@@ -6,6 +6,8 @@
 //!
 //! 这里只做识别与展示：不自动打开、不自动下载，正文永远只是数据。
 
+import { t } from "./i18n";
+
 /** 正文里的一条外部大附件。 */
 export interface ExternalAttachment {
   /** 下载页地址，原样取自正文，仅供用户复制。 */
@@ -75,7 +77,7 @@ function pickName(anchorText: string, containerText: string): string {
   if (beforeParen && beforeParen.length <= 120 && !GENERIC_NAMES.has(beforeParen.toLowerCase())) {
     return beforeParen;
   }
-  return FALLBACK_NAME;
+  return t(FALLBACK_NAME);
 }
 
 /**

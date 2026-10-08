@@ -5,14 +5,15 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api, describeError, type SyncStatus } from "./api";
+import { t } from "./i18n";
 
 /** 界面轮询间隔：两秒看一次状态快照就够，不要给后台添乱。 */
 const POLL_MS = 2000;
 
 /** 把进度数字整理成一句人话。 */
 function progressText(status: SyncStatus): string {
-  if (status.total > 0) return `进度 ${status.progress} / ${status.total}`;
-  if (status.progress > 0) return `已处理 ${status.progress} 封`;
+  if (status.total > 0) return t("进度 {0} / {1}", [status.progress, status.total]);
+  if (status.progress > 0) return t("已处理 {0} 封", [status.progress]);
   return "";
 }
 
@@ -89,22 +90,20 @@ export default function SyncPanel() {
   return (
     <section className="panel" aria-busy={loading || busy}>
       <div className="panel-head">
-        <h2>同步状态</h2>
+        <h2>{t("同步状态")}</h2>
         <div className="actions">
           <button className="primary" disabled={busy} onClick={() => void restart()}>
-            全部立即同步
-          </button>
+            {t("全部立即同步")}</button>
           <button disabled={busy} onClick={() => void stop()}>
-            全部停止
-          </button>
+            {t("全部停止")}</button>
         </div>
       </div>
 
-      {error && <p className="error" role="alert">同步操作失败：{error}</p>}
+      {error && <p className="error" role="alert">{t("同步操作失败：")}{error}</p>}
 
-      {loading && statuses.length === 0 && <p className="hint" role="status">正在读取同步状态……</p>}
+      {loading && statuses.length === 0 && <p className="hint" role="status">{t("正在读取同步状态……")}</p>}
       {!loading && statuses.length === 0 && (
-        <p className="hint">还没有可同步的账号。先在下面添加一个邮箱账号。</p>
+        <p className="hint">{t("还没有可同步的账号。先在下面添加一个邮箱账号。")}</p>
       )}
 
       {statuses.map((item) => (
@@ -116,18 +115,16 @@ export default function SyncPanel() {
           <p className="sync-detail" role="status">
             {progressText(item) && <span>{progressText(item)}</span>}
             {item.message && <span className="hint">{item.message}</span>}
-            {!progressText(item) && !item.message && <span className="hint">暂无进度</span>}
+            {!progressText(item) && !item.message && <span className="hint">{t("暂无进度")}</span>}
           </p>
           {item.needsReauth && (
-            <p className="error" role="alert">授权码失效或缺失，请到账号设置里重新填写后再同步。</p>
+            <p className="error" role="alert">{t("授权码失效或缺失，请到账号设置里重新填写后再同步。")}</p>
           )}
           <div className="actions">
             <button disabled={busy} onClick={() => void restart(item.accountId)}>
-              立即同步
-            </button>
+              {t("立即同步")}</button>
             <button disabled={busy} onClick={() => void stop(item.accountId)}>
-              停止
-            </button>
+              {t("停止")}</button>
           </div>
         </article>
       ))}

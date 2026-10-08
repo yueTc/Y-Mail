@@ -10,6 +10,7 @@ import ProxyPanel from "./ProxyPanel";
 import ReaderSettingsPanel from "./ReaderSettingsPanel";
 import RestartChoiceDialog from "./RestartChoiceDialog";
 import SyncPanel from "./SyncPanel";
+import { t } from "./i18n";
 
 type LoadState =
   | { kind: "loading" }
@@ -128,7 +129,7 @@ export default function SettingsWorkspace({
       });
       setStorage({ kind: "ready", settings: saved });
       setNotifyNewMail(saved.notifyNewMail);
-      setNotice("通知设置已保存。");
+      setNotice(t("通知设置已保存。"));
     } catch (error: unknown) {
       setSaveError(describeError(error));
     } finally {
@@ -145,11 +146,11 @@ export default function SettingsWorkspace({
       const chosen = await open({
         directory: true,
         multiple: false,
-        title: "选择新的数据目录",
+        title: t("选择新的数据目录"),
       });
       picked = typeof chosen === "string" ? chosen : null;
     } catch (error: unknown) {
-      setDirError(`打开目录选择失败：${describeError(error)}`);
+      setDirError(t("打开目录选择失败：{0}", [describeError(error)]));
       return;
     }
     if (!picked) return; // 用户在系统对话框里点了取消
@@ -162,14 +163,14 @@ export default function SettingsWorkspace({
         result = await api.changeDataDir(picked, true);
       }
       if (result.needsConfirmation) {
-        throw new Error(result.message || "目标目录需要确认");
+        throw new Error(result.message || t("目标目录需要确认"));
       }
       const saved = await api.getAppSettings();
       setStorage({ kind: "ready", settings: saved });
       setDataDir(saved.dataDir);
       setRestartNeeded(true);
     } catch (error: unknown) {
-      setDirError(`目录切换失败：${describeError(error)}`);
+      setDirError(t("目录切换失败：{0}", [describeError(error)]));
     } finally {
       setMigrating(false);
     }
@@ -182,7 +183,7 @@ export default function SettingsWorkspace({
     try {
       await api.restartApp(cleanup);
     } catch (error: unknown) {
-      setRestartError(`重启失败，请手动关掉再打开：${describeError(error)}`);
+      setRestartError(t("重启失败，请手动关掉再打开：{0}", [describeError(error)]));
     } finally {
       setRestartBusy(false);
     }
@@ -195,9 +196,9 @@ export default function SettingsWorkspace({
     setDirError(null);
     try {
       await api.openDataDir();
-      setNotice("已打开当前数据目录。");
+      setNotice(t("已打开当前数据目录。"));
     } catch (error: unknown) {
-      setDirError(`打开目录失败：${describeError(error)}`);
+      setDirError(t("打开目录失败：{0}", [describeError(error)]));
     } finally {
       setOpening(false);
     }
@@ -228,7 +229,7 @@ export default function SettingsWorkspace({
     if (contactBusy) return;
     if (
       !window.confirm(
-        "清掉所有同步自动收集的联系人？你自己建或改过的、以及已隐藏的都不会动。",
+        t("清掉所有同步自动收集的联系人？你自己建或改过的、以及已隐藏的都不会动。"),
       )
     ) {
       return;
@@ -236,7 +237,7 @@ export default function SettingsWorkspace({
     setContactBusy(true);
     try {
       const removed = await api.clearAutoContacts();
-      setContactNotice(`已清掉 ${removed} 条自动收集的联系人`);
+      setContactNotice(t("已清掉 {0} 条自动收集的联系人", [removed]));
     } catch (error: unknown) {
       setContactNotice(describeError(error));
     } finally {
@@ -248,23 +249,21 @@ export default function SettingsWorkspace({
     <div className="settings-workspace">
       <header className="settings-head">
         <div>
-          <h1>设置</h1>
+          <h1>{t("设置")}</h1>
           <p className="subtitle">
-            授权码只进 Windows 凭据管理器，保存前会先做一次连接自检。
-          </p>
+            {t("授权码只进 Windows 凭据管理器，保存前会先做一次连接自检。")}</p>
         </div>
         <button type="button" onClick={onGoInbox}>
-          进入收件箱
-        </button>
+          {t("进入收件箱")}</button>
       </header>
 
-      <section className="settings-group" aria-label="外观">
-        <h2 className="settings-group-title">外观</h2>
+      <section className="settings-group" aria-label={t("外观")}>
+        <h2 className="settings-group-title">{t("外观")}</h2>
         <AppearanceSettingsPanel />
       </section>
 
-      <section className="settings-group" aria-label="启动">
-        <h2 className="settings-group-title">启动</h2>
+      <section className="settings-group" aria-label={t("启动")}>
+        <h2 className="settings-group-title">{t("启动")}</h2>
         <section className="panel">
           <label className="checkbox">
             <input
@@ -273,66 +272,63 @@ export default function SettingsWorkspace({
               disabled={autostartBusy}
               onChange={(event) => void toggleAutostart(event.target.checked)}
             />
-            <span>开机自动启动（静默进托盘，不弹主窗口）</span>
+            <span>{t("开机自动启动（静默进托盘，不弹主窗口）")}</span>
           </label>
           <p className="hint">
-            打开后会把本程序写进 Windows 当前用户的启动项，开机自动在后台收信，
-            只留一个托盘图标。你在任务管理器的启动项里手动禁用，这里也会跟着显示成关闭。
-          </p>
+            {t("打开后会把本程序写进 Windows 当前用户的启动项，开机自动在后台收信， 只留一个托盘图标。你在任务管理器的启动项里手动禁用，这里也会跟着显示成关闭。")}</p>
           {autostartError && (
             <p className="error" role="alert">
-              开机启动设置失败：{autostartError}
+              {t("开机启动设置失败：")}{autostartError}
             </p>
           )}
         </section>
       </section>
 
-      <section className="settings-group" aria-label="账号与同步">
-        <h2 className="settings-group-title">账号与同步</h2>
+      <section className="settings-group" aria-label={t("账号与同步")}>
+        <h2 className="settings-group-title">{t("账号与同步")}</h2>
         <SyncPanel />
         <AccountPanel proxiesVersion={proxiesVersion} />
       </section>
 
-      <section className="settings-group" aria-label="代理">
-        <h2 className="settings-group-title">代理</h2>
+      <section className="settings-group" aria-label={t("代理")}>
+        <h2 className="settings-group-title">{t("代理")}</h2>
         <ProxyPanel onChanged={onProxiesChanged} />
       </section>
 
-      <section className="settings-group" aria-label="阅读设置">
-        <h2 className="settings-group-title">阅读设置</h2>
+      <section className="settings-group" aria-label={t("阅读设置")}>
+        <h2 className="settings-group-title">{t("阅读设置")}</h2>
         <ReaderSettingsPanel />
       </section>
 
-      <section className="settings-group" aria-label="人工智能">
-        <h2 className="settings-group-title">人工智能</h2>
+      <section className="settings-group" aria-label={t("人工智能")}>
+        <h2 className="settings-group-title">{t("人工智能")}</h2>
         <AiPanel />
       </section>
 
-      <section className="settings-group" aria-label="外部接入">
-        <h2 className="settings-group-title">外部接入</h2>
+      <section className="settings-group" aria-label={t("外部接入")}>
+        <h2 className="settings-group-title">{t("外部接入")}</h2>
         <McpPanel />
       </section>
 
-      <section className="settings-group" aria-label="存储目录与通知">
-        <h2 className="settings-group-title">存储目录与通知</h2>
+      <section className="settings-group" aria-label={t("存储目录与通知")}>
+        <h2 className="settings-group-title">{t("存储目录与通知")}</h2>
         <section
           className="panel"
           aria-busy={storage.kind === "loading" || migrating || opening}
         >
           {storage.kind === "loading" && (
             <p className="hint" role="status">
-              正在读取……
-            </p>
+              {t("正在读取……")}</p>
           )}
           {storage.kind === "error" && (
             <p className="error" role="alert">
-              读取失败：{storage.message}
+              {t("读取失败：")}{storage.message}
             </p>
           )}
           {storage.kind === "ready" && (
             <form className="settings-form" onSubmit={saveStorage}>
               <label className="field">
-                <span>数据目录</span>
+                <span>{t("数据目录")}</span>
                 <input
                   type="text"
                   value={dataDir}
@@ -341,13 +337,12 @@ export default function SettingsWorkspace({
                   spellCheck={false}
                 />
                 <small className="hint">
-                  数据库和日志放这里。改目录会先复制并校验，重启后生效。留空用默认：
-                  {storage.settings.defaultDataDir}
+                  {t("数据库和日志放这里。改目录会先复制并校验，重启后生效。留空用默认：")}{storage.settings.defaultDataDir}
                 </small>
               </label>
 
               <p className="hint">
-                下载文件保存在：<span className="path">{storage.settings.defaultAttachmentDir}</span>
+                {t("下载文件保存在：")}<span className="path">{storage.settings.defaultAttachmentDir}</span>
               </p>
 
               <label className="checkbox">
@@ -356,13 +351,13 @@ export default function SettingsWorkspace({
                   checked={notifyNewMail}
                   onChange={(event) => setNotifyNewMail(event.target.checked)}
                 />
-                <span>新邮件用 Windows 系统通知提醒（窗口切到后台时才弹）</span>
+                <span>{t("新邮件用 Windows 系统通知提醒（窗口切到后台时才弹）")}</span>
               </label>
 
               <dl className="status">
-                <dt>当前生效的数据目录</dt>
+                <dt>{t("当前生效的数据目录")}</dt>
                 <dd className="path">{storage.settings.activeDataDir}</dd>
-                <dt>当前生效的下载目录</dt>
+                <dt>{t("当前生效的下载目录")}</dt>
                 <dd className="path">{storage.settings.activeAttachmentDir}</dd>
               </dl>
 
@@ -372,35 +367,30 @@ export default function SettingsWorkspace({
                   disabled={saving || migrating || opening}
                   aria-busy={saving}
                 >
-                  保存通知设置
-                </button>
+                  {t("保存通知设置")}</button>
                 <button
                   type="button"
                   onClick={changeDirectory}
                   disabled={saving || migrating || opening}
                   aria-busy={migrating}
                 >
-                  更改目录
-                </button>
+                  {t("更改目录")}</button>
                 <button
                   type="button"
                   onClick={openDirectory}
                   disabled={saving || migrating || opening}
                   aria-busy={opening}
                 >
-                  打开目录
-                </button>
+                  {t("打开目录")}</button>
               </div>
 
               {migrating && (
                 <p className="hint" role="status">
-                  正在更改目录，请稍等……
-                </p>
+                  {t("正在更改目录，请稍等……")}</p>
               )}
               {opening && (
                 <p className="hint" role="status">
-                  正在打开目录……
-                </p>
+                  {t("正在打开目录……")}</p>
               )}
               {notice && (
                 <p className="hint" role="status">
@@ -409,7 +399,7 @@ export default function SettingsWorkspace({
               )}
               {saveError && (
                 <p className="error" role="alert">
-                  保存失败：{saveError}
+                  {t("保存失败：")}{saveError}
                 </p>
               )}
               {dirError && (
@@ -422,45 +412,42 @@ export default function SettingsWorkspace({
         </section>
       </section>
 
-      <section className="settings-group" aria-label="通讯录">
-        <h2 className="settings-group-title">通讯录</h2>
+      <section className="settings-group" aria-label={t("通讯录")}>
+        <h2 className="settings-group-title">{t("通讯录")}</h2>
         <section className="panel">
           <p className="hint">
-            通讯录里的联系人分两种：收信发信时自动记下来的，和你自己建或改过的。
-            这条只清自动记下来的那些；你自己建或改过的、以及已经藏起来的一条都不动。
-          </p>
+            {t("通讯录里的联系人分两种：收信发信时自动记下来的，和你自己建或改过的。 这条只清自动记下来的那些；你自己建或改过的、以及已经藏起来的一条都不动。")}</p>
           <div className="form-actions">
             <button type="button" className="danger" disabled={contactBusy} onClick={() => void clearAutoContacts()}>
-              清空自动收集的联系人
-            </button>
+              {t("清空自动收集的联系人")}</button>
           </div>
           {contactNotice ? <p className="notice">{contactNotice}</p> : null}
         </section>
       </section>
 
-      <section className="settings-group" aria-label="数据库状态">
-        <h2 className="settings-group-title">数据库状态</h2>
+      <section className="settings-group" aria-label={t("数据库状态")}>
+        <h2 className="settings-group-title">{t("数据库状态")}</h2>
         <section className="panel" aria-busy={state.kind === "loading"}>
-          {state.kind === "loading" && <p className="hint" role="status">正在读取……</p>}
-          {state.kind === "error" && <p className="error" role="alert">读取失败：{state.message}</p>}
+          {state.kind === "loading" && <p className="hint" role="status">{t("正在读取……")}</p>}
+          {state.kind === "error" && <p className="error" role="alert">{t("读取失败：")}{state.message}</p>}
           {state.kind === "ready" && (
             <dl className="status">
-              <dt>数据库文件</dt>
+              <dt>{t("数据库文件")}</dt>
               <dd className="path">{state.status.databaseFile}</dd>
-              <dt>结构版本</dt>
+              <dt>{t("结构版本")}</dt>
               <dd>{state.status.schemaVersion}</dd>
-              <dt>已登记迁移</dt>
+              <dt>{t("已登记迁移")}</dt>
               <dd>
-                {state.status.appliedVersions.join("、") || "无"}
-                （共 {state.status.appliedVersions.length} 条）
+                {state.status.appliedVersions.join(t("、")) || t("无")}
+                {t("（共 ")}{state.status.appliedVersions.length}{t(" 条）")}
               </dd>
-              <dt>本次新应用</dt>
-              <dd>{state.status.appliedCount} 条</dd>
-              <dt>全文检索 FTS5</dt>
-              <dd>{state.status.fts5Available ? "可用" : "不可用"}</dd>
-              <dt>附件目录</dt>
+              <dt>{t("本次新应用")}</dt>
+              <dd>{state.status.appliedCount}{t(" 条")}</dd>
+              <dt>{t("全文检索 FTS5")}</dt>
+              <dd>{state.status.fts5Available ? t("可用") : t("不可用")}</dd>
+              <dt>{t("附件目录")}</dt>
               <dd className="path">{state.status.attachmentDir}</dd>
-              <dt>日志目录</dt>
+              <dt>{t("日志目录")}</dt>
               <dd className="path">{state.status.logDir}</dd>
             </dl>
           )}

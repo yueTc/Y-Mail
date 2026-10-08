@@ -31,6 +31,7 @@ import {
 } from "./externalAttachments";
 import { applyInlineImages, MAX_INLINE_IMAGE_BYTES } from "./inlineImages";
 import { useAttachmentHeight, useElementHeight } from "./useAttachmentHeight";
+import { t } from "./i18n";
 
 // 深色模式偏好搬到了设置页，这里只保留原有导出，实际读写由 readerTheme.ts 负责。
 export { READER_THEME_KEY, type ReaderTheme } from "./readerTheme";
@@ -71,8 +72,8 @@ export function isExecutableAttachment(attachment: MessageAttachment): boolean {
 
 /** 把字节数说成大白话。 */
 export function formatAttachmentSize(size: number): string {
-  if (!Number.isFinite(size) || size < 0) return "未知大小";
-  if (size < 1024) return `${size} 字节`;
+  if (!Number.isFinite(size) || size < 0) return t("未知大小");
+  if (size < 1024) return t("{0} 字节", [size]);
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
   return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
@@ -90,7 +91,7 @@ function formatReaderTime(iso: string): string {
 export function attachmentLabel(attachment: MessageAttachment): string {
   const name = attachment.filename.trim();
   if (name) return name;
-  return attachment.isInline ? "内嵌图片" : "未命名附件";
+  return attachment.isInline ? t("内嵌图片") : t("未命名附件");
 }
 
 /**
@@ -212,7 +213,7 @@ function ReaderFrame({ html, onOpenLink }: { html: string; onOpenLink: (url: str
     <iframe
       ref={frameRef}
       className="reader-frame reader-frame-primary"
-      title="邮件正文"
+      title={t("邮件正文")}
       sandbox="allow-same-origin"
       referrerPolicy="no-referrer"
       srcDoc={html}
@@ -704,7 +705,7 @@ export default function MessageReader({
     } catch (caught) {
       const message = describeError(caught);
       setActionError(message);
-      if (message.includes("过期")) {
+      if (message.includes(t("过期"))) {
         setExternalExpired((old) => new Set(old).add(item.href));
       }
     } finally {
@@ -868,7 +869,7 @@ export default function MessageReader({
     setActionError(undefined);
     const ok = await writeClipboard(href);
     if (!ok) {
-      setActionError("复制失败，请手动选中链接复制。");
+      setActionError(t("复制失败，请手动选中链接复制。"));
       return;
     }
     setCopiedExternalLink(href);
@@ -950,7 +951,7 @@ export default function MessageReader({
   if (!message) {
     return (
       <div className="reader-pane">
-        <p className="hint reader-empty">从中间列表选一封邮件，这里显示正文与附件。</p>
+        <p className="hint reader-empty">{t("从中间列表选一封邮件，这里显示正文与附件。")}</p>
       </div>
     );
   }
@@ -977,12 +978,12 @@ export default function MessageReader({
       )}
       <header className="reader-header">
         <div className="reader-head-top">
-          <h3 className="reader-subject">{message.subject || "（无主题）"}</h3>
+          <h3 className="reader-subject">{message.subject || t("（无主题）")}</h3>
           {onToggleFlag && (
             <FlagButton
               flagged={message.isFlagged}
               onToggle={() => onToggleFlag(message)}
-              label={message.isFlagged ? "取消标红这封邮件" : "标红这封邮件"}
+              label={message.isFlagged ? t("取消标红这封邮件") : t("标红这封邮件")}
               className="reader-flag"
             />
           )}
@@ -1000,14 +1001,13 @@ export default function MessageReader({
             aria-busy={translationBusy}
             disabled={!aiEnabled || translationBusy}
             onClick={() => void requestTranslation()}
-            title={aiEnabled ? "翻译这封邮件" : "需先在设置里启用 AI 站点"}
+            title={aiEnabled ? t("翻译这封邮件") : t("需先在设置里启用 AI 站点")}
           >
-            {translationBusy ? "翻译中……" : aiEnabled ? "翻译" : "翻译（需启用）"}
+            {translationBusy ? t("翻译中……") : aiEnabled ? t("翻译") : t("翻译（需启用）")}
           </button>
           <label>
-            目标语言
-            <select
-              aria-label="目标语言"
+            {t("目标语言")}<select
+              aria-label={t("目标语言")}
               value={targetLanguage}
               onChange={(event) => {
                 setTargetLanguage(event.target.value);
@@ -1017,40 +1017,36 @@ export default function MessageReader({
             >
               {TRANSLATION_LANGUAGES.map((language) => (
                 <option key={language.value} value={language.value}>
-                  {language.label}
+                  {t(language.label)}
                 </option>
               ))}
             </select>
           </label>
           {translation && (
-            <div className="reader-translation-modes" role="group" aria-label="翻译显示模式">
+            <div className="reader-translation-modes" role="group" aria-label={t("翻译显示模式")}>
               <button
                 type="button"
                 className={translationMode === "side_by_side" ? "active" : ""}
                 aria-pressed={translationMode === "side_by_side"}
                 onClick={() => setTranslationMode("side_by_side")}
               >
-                对照翻译
-              </button>
+                {t("对照翻译")}</button>
               <button
                 type="button"
                 className={translationMode === "inline" ? "active" : ""}
                 aria-pressed={translationMode === "inline"}
                 onClick={() => setTranslationMode("inline")}
               >
-                行内翻译
-              </button>
+                {t("行内翻译")}</button>
               <button
                 type="button"
                 className={translationMode === "direct" ? "active" : ""}
                 aria-pressed={translationMode === "direct"}
                 onClick={() => setTranslationMode("direct")}
               >
-                直接翻译
-              </button>
+                {t("直接翻译")}</button>
               <button type="button" onClick={() => setTranslation(undefined)}>
-                切回原文
-              </button>
+                {t("切回原文")}</button>
             </div>
           )}
           <button
@@ -1058,36 +1054,37 @@ export default function MessageReader({
             aria-busy={summaryBusy}
             disabled={!aiEnabled || summaryBusy}
             onClick={() => void requestSummary()}
-            title={aiEnabled ? "摘要这封邮件" : "需先在设置里启用 AI 站点"}
+            title={aiEnabled ? t("摘要这封邮件") : t("需先在设置里启用 AI 站点")}
           >
-            {summaryBusy ? "摘要中……" : aiEnabled ? "摘要" : "摘要（需启用）"}
+            {summaryBusy ? t("摘要中……") : aiEnabled ? t("摘要") : t("摘要（需启用）")}
           </button>
         </div>
         {!aiEnabled && (
           <p className="hint reader-ai-disabled">
-            AI 和翻译默认关闭，需到「账号与代理」设置里添加并启用站点。
-          </p>
+            {t("AI 和翻译默认关闭，需到「账号与代理」设置里添加并启用站点。")}</p>
         )}
         {aiDowngraded && (
-          <p className="reader-ai-note" role="status">该模型不支持所选思考程度，已按默认调用。</p>
+          <p className="reader-ai-note" role="status">{t("该模型不支持所选思考程度，已按默认调用。")}</p>
         )}
-        {translationError && <p className="error" role="alert">翻译失败：{translationError}</p>}
-        {summaryError && <p className="error" role="alert">摘要失败：{summaryError}</p>}
+        {translationError && <p className="error" role="alert">{t("翻译失败：")}{translationError}</p>}
+        {summaryError && <p className="error" role="alert">{t("摘要失败：")}{summaryError}</p>}
       </header>
 
       <div className="reader-body" ref={readerBodyRef}>
         <div className="reader-content" aria-busy={loading}>
-        {loading && <p className="hint" role="status">正在读取正文……</p>}
-        {error && <p className="error" role="alert">读信失败：{error}</p>}
-        {actionError && <p className="error" role="alert">附件操作失败：{actionError}</p>}
-        {linkError && <p className="error" role="alert">打开链接失败：{linkError}</p>}
+        {loading && <p className="hint" role="status">{t("正在读取正文……")}</p>}
+        {error && <p className="error" role="alert">{t("读信失败：")}{error}</p>}
+        {actionError && <p className="error" role="alert">{t("附件操作失败：")}{actionError}</p>}
+        {linkError && <p className="error" role="alert">{t("打开链接失败：")}{linkError}</p>}
 
         {!loading && !error && body && (
           <>
             {blocked > 0 && !allowRemote && (
               <div className="reader-blocked">
                 <span>
-                  已拦截远程图片（{blocked} 张）。放行后服务器可能知道你打开了这封邮件，请先确认发件人可信。
+                  {t("已拦截远程图片（")}
+                  {blocked}
+                  {t(" 张）。放行后服务器可能知道你打开了这封邮件，请先确认发件人可信。")}
                 </span>
                 <span className="reader-blocked-actions">
                   <button
@@ -1095,17 +1092,16 @@ export default function MessageReader({
                     className="reader-allow"
                     onClick={() => setRemoteAllowedFor(message.id)}
                   >
-                    本封放行远程图片
-                  </button>
+                    {t("本封放行远程图片")}</button>
                   <button
                     type="button"
                     className="reader-remember"
                     aria-busy={rememberBusy}
                     disabled={rememberBusy}
-                    title={`记住 ${message.fromAddr}，以后自动显示远程图片`}
+                    title={t("记住 {0}，以后自动显示远程图片", [message.fromAddr])}
                     onClick={() => void rememberSender()}
                   >
-                    {rememberBusy ? "记住中……" : "以后这个发件人都自动显示"}
+                    {rememberBusy ? t("记住中……") : t("以后这个发件人都自动显示")}
                   </button>
                 </span>
               </div>
@@ -1113,17 +1109,19 @@ export default function MessageReader({
             {blocked > 0 && allowRemote && (
               <p className="hint" role="status">
                 {rememberedFor === message.id
-                  ? "已记住这个发件人，以后自动显示远程图片；可在「账号与代理」设置里移除。"
-                  : "本封已放行远程图片，关闭后自动恢复默认拦截。"}
+                  ? t("已记住这个发件人，以后自动显示远程图片；可在「账号与代理」设置里移除。")
+                  : t("本封已放行远程图片，关闭后自动恢复默认拦截。")}
               </p>
             )}
 
             {(inlineApplication.pending.length > 0 || inlineApplication.rejected > 0) && (
-              <section className="reader-inline-images" aria-label="内嵌图片">
+              <section className="reader-inline-images" aria-label={t("内嵌图片")}>
                 {inlineApplication.pending.length > 0 && (
                   <>
                     <p className="hint">
-                      有 {inlineApplication.pending.length} 张内嵌图片还没下载。渲染时不会联网，点「点一下加载」才会去邮箱服务器取。
+                      {t("有 ")}
+                      {inlineApplication.pending.length}
+                      {t(" 张内嵌图片还没下载。渲染时不会联网，点「点一下加载」才会去邮箱服务器取。")}
                     </p>
                     <ul className="reader-inline-list">
                       {inlineApplication.pending.map((image) => {
@@ -1143,7 +1141,7 @@ export default function MessageReader({
                               disabled={busy}
                               onClick={() => void loadInlineImage(image)}
                             >
-                              {busy ? "加载中……" : "点一下加载"}
+                              {busy ? t("加载中……") : t("点一下加载")}
                             </button>
                           </li>
                         );
@@ -1153,9 +1151,10 @@ export default function MessageReader({
                 )}
                 {inlineApplication.rejected > 0 && (
                   <p className="hint" role="status">
-                    还有 {inlineApplication.rejected} 张内嵌图片未显示（缺失、类型不支持或超过{" "}
-                    {formatAttachmentSize(MAX_INLINE_IMAGE_BYTES)}）。
-                  </p>
+                    {t("还有 ")}
+                    {inlineApplication.rejected}
+                    {t(" 张内嵌图片未显示（缺失、类型不支持或超过")}{" "}
+                    {formatAttachmentSize(MAX_INLINE_IMAGE_BYTES)}{t("）。")}</p>
                 )}
               </section>
             )}
@@ -1167,7 +1166,7 @@ export default function MessageReader({
                   onOpenLink={openExternalLink}
                 />
               ) : (
-                <p className="hint">这封邮件没有可显示的正文。</p>
+                <p className="hint">{t("这封邮件没有可显示的正文。")}</p>
               )
             ) : translation && translationMode === "side_by_side" ? (
               <div className="reader-translation-columns">
@@ -1194,14 +1193,14 @@ export default function MessageReader({
                   />
                 )}
                 {!(translationMode === "inline" ? inlineDocument_ : document_) && (
-                  <p className="hint">这封邮件没有可显示的正文。</p>
+                  <p className="hint">{t("这封邮件没有可显示的正文。")}</p>
                 )}
               </>
             )}
 
             {summaryText && (
-              <section className="reader-summary" aria-label="邮件摘要">
-                <h4>摘要</h4>
+              <section className="reader-summary" aria-label={t("邮件摘要")}>
+                <h4>{t("摘要")}</h4>
                 <p>{summaryText}</p>
               </section>
             )}
@@ -1212,7 +1211,7 @@ export default function MessageReader({
 
         {showAttachmentPane && (
           <ReaderResizer
-            label="附件区高度"
+            label={t("附件区高度")}
             value={attachmentHeight}
             min={attachmentMinHeight}
             max={attachmentMaxHeight}
@@ -1225,12 +1224,12 @@ export default function MessageReader({
         {!loading && !error && body && showAttachmentPane && (
           <section
             className="reader-attachments reader-attachments-docked"
-            aria-label="附件"
+            aria-label={t("附件")}
             style={{ height: attachmentHeight }}
           >
             {hasAttachments && (
               <>
-                <h4>附件（{body.attachments.length}）</h4>
+                <h4>{t("附件（")}{body.attachments.length}{t("）")}</h4>
                 <ul className="attachment-list">
                   {body.attachments.map((attachment) => {
                     const executable = isExecutableAttachment(attachment);
@@ -1247,16 +1246,15 @@ export default function MessageReader({
                         <div className="attachment-info">
                           <span className="attachment-name">{attachmentLabel(attachment)}</span>
                           <span className="attachment-meta">
-                            {attachment.mimeType || "未知类型"} ·{" "}
+                            {attachment.mimeType || t("未知类型")} ·{" "}
                             {formatAttachmentSize(attachment.size)}
-                            {attachment.isInline ? " · 内嵌" : ""}
+                            {attachment.isInline ? t(" · 内嵌") : ""}
                           </span>
                           {executable && (
                             <span className="attachment-warning">
-                              可执行文件，打开前请确认来源可信
-                            </span>
+                              {t("可执行文件，打开前请确认来源可信")}</span>
                           )}
-                          {path && <span className="attachment-path">已保存：{path}</span>}
+                          {path && <span className="attachment-path">{t("已保存：")}{path}</span>}
                         </div>
                         <span className="attachment-actions">
                           <button
@@ -1266,7 +1264,7 @@ export default function MessageReader({
                             disabled={busy}
                             onClick={() => void download(attachment)}
                           >
-                            {busy ? "下载中……" : path ? "重新下载" : "下载"}
+                            {busy ? t("下载中……") : path ? t("重新下载") : t("下载")}
                           </button>
                           {path && (
                             <>
@@ -1275,15 +1273,13 @@ export default function MessageReader({
                                 disabled={openingFile === path}
                                 onClick={() => void openSavedFile(path)}
                               >
-                                打开文件
-                              </button>
+                                {t("打开文件")}</button>
                               <button
                                 type="button"
                                 disabled={openingFile === path}
                                 onClick={() => void openSavedFileDir(path)}
                               >
-                                打开所在位置
-                              </button>
+                                {t("打开所在位置")}</button>
                             </>
                           )}
                         </span>
@@ -1296,10 +1292,9 @@ export default function MessageReader({
 
             {hasExternalAttachments && (
               <>
-                <h4>外部大附件（{externalAttachments.length}）</h4>
+                <h4>{t("外部大附件（")}{externalAttachments.length}{t("）")}</h4>
                 <p className="hint">
-                  文件放在邮箱服务器上，点「下载」本应用替你取回；下载完可以直接打开。
-                </p>
+                  {t("文件放在邮箱服务器上，点「下载」本应用替你取回；下载完可以直接打开。")}</p>
                 <ul className="attachment-list">
                   {externalAttachments.map((item) => {
                     const expired =
@@ -1312,11 +1307,11 @@ export default function MessageReader({
                           <span className="attachment-name">{item.name}</span>
                           <span className="attachment-meta">
                             {[item.sizeText, item.expiresText].filter(Boolean).join(" · ") ||
-                              "存在邮箱服务器上"}
-                            {expired && <span className="attachment-expired">已过期</span>}
+                              t("存在邮箱服务器上")}
+                            {expired && <span className="attachment-expired">{t("已过期")}</span>}
                           </span>
                           <span className="attachment-path">
-                            {path ? `已保存：${path}` : item.href}
+                            {path ? t("已保存：{0}", [path]) : item.href}
                           </span>
                         </div>
                         <span className="attachment-actions">
@@ -1326,14 +1321,14 @@ export default function MessageReader({
                             aria-busy={busy}
                             disabled={busy || expired}
                             title={
-                              expired ? "这个超大附件已经过期，取不回来了" : "从网易服务器下载"
+                              expired ? t("这个超大附件已经过期，取不回来了") : t("从网易服务器下载")
                             }
                             onClick={() => void downloadExternal(item)}
                           >
-                            {busy ? "下载中……" : expired ? "已过期" : path ? "重新下载" : "下载"}
+                            {busy ? t("下载中……") : expired ? t("已过期") : path ? t("重新下载") : t("下载")}
                           </button>
                           <button type="button" onClick={() => void copyExternalLink(item.href)}>
-                            {copiedExternalLink === item.href ? "已复制" : "复制链接"}
+                            {copiedExternalLink === item.href ? t("已复制") : t("复制链接")}
                           </button>
                           {path && (
                             <>
@@ -1342,15 +1337,13 @@ export default function MessageReader({
                                 disabled={openingFile === path}
                                 onClick={() => void openSavedFile(path)}
                               >
-                                打开文件
-                              </button>
+                                {t("打开文件")}</button>
                               <button
                                 type="button"
                                 disabled={openingFile === path}
                                 onClick={() => void openSavedFileDir(path)}
                               >
-                                打开所在位置
-                              </button>
+                                {t("打开所在位置")}</button>
                             </>
                           )}
                         </span>

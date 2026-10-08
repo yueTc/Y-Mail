@@ -4,6 +4,7 @@
 //! 界面出参里也永远拿不回已保存的密码本体（只有 hasCredential / hasPassword 布尔值）。
 
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "./i18n";
 
 // ============================ 类型 ============================
 
@@ -649,10 +650,10 @@ export class ApiError extends Error {
 export function describeError(error: unknown): string {
   if (error instanceof ApiError) {
     const parts: string[] = [];
-    parts.push(error.kind ? `${error.kind}：${error.message}` : error.message);
+    parts.push(error.kind ? t("{0}：{1}", [error.kind, error.message]) : error.message);
     parts.push(...error.details);
-    if (error.hint) parts.push(`建议：${error.hint}`);
-    return parts.join("；");
+    if (error.hint) parts.push(t("建议：{0}", [error.hint]));
+    return parts.join(t("；"));
   }
   if (error instanceof Error) return error.message;
   return String(error);
@@ -665,7 +666,7 @@ function normalizeError(error: unknown): ApiError {
     const message =
       typeof record.message === "string" && record.message.trim() !== ""
         ? record.message
-        : "操作失败，请稍后重试";
+        : t("操作失败，请稍后重试");
     const kind = typeof record.kind === "string" ? record.kind : undefined;
     const hint = typeof record.hint === "string" ? record.hint : undefined;
     const details = Array.isArray(record.details)

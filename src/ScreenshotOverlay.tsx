@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, describeError } from "./api";
+import { t } from "./i18n";
 
 interface Point {
   x: number;
@@ -154,8 +155,8 @@ export default function ScreenshotOverlay() {
       ) : (
         <div className="screenshot-mask" style={{ inset: 0 }} />
       )}
-      <p className="screenshot-hint">拖动选择要插入的区域，按 Esc 取消</p>
-      {error && <p className="screenshot-error">操作失败：{error}</p>}
+      <p className="screenshot-hint">{t("拖动选择要插入的区域，按 Esc 取消")}</p>
+      {error && <p className="screenshot-error">{t("操作失败：")}{error}</p>}
     </div>
   );
 }

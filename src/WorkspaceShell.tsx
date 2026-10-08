@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { t } from "./i18n";
 
 export type WorkspaceMode = "inbox" | "contacts" | "settings";
 
@@ -88,19 +89,19 @@ export default function WorkspaceShell({
 }: WorkspaceShellProps) {
   return (
     <div className="workspace">
-      <nav className="workspace-rail" aria-label="主导航">
+      <nav className="workspace-rail" aria-label={t("主导航")}>
         {ENTRIES.map((entry) => (
           <button
             key={entry.id}
             type="button"
             className={mode === entry.id ? "rail-button active" : "rail-button"}
             aria-current={mode === entry.id ? "page" : undefined}
-            aria-label={entry.label}
-            title={entry.label}
+            aria-label={t(entry.label)}
+            title={t(entry.label)}
             onClick={() => onModeChange(entry.id)}
           >
             <EntryIcon id={entry.id} />
-            <span className="rail-label">{entry.label}</span>
+            <span className="rail-label">{t(entry.label)}</span>
           </button>
         ))}
       </nav>

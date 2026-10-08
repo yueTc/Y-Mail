@@ -3,6 +3,8 @@
 //! 未标红是空心 `☆`，标红是红色实心 `★`。按钮可键盘聚焦，回车或空格触发；
 //! 点击和回车都会阻止事件冒泡，避免连带把整行邮件打开。
 
+import { t } from "./i18n";
+
 /** 红旗按钮属性。 */
 export interface FlagButtonProps {
   /** 当前是否已标红。 */
@@ -17,7 +19,7 @@ export interface FlagButtonProps {
 
 /** 列表与读信页共用的红旗切换按钮。 */
 export default function FlagButton({ flagged, onToggle, label, className }: FlagButtonProps) {
-  const title = flagged ? "取消标红" : "标红";
+  const title = flagged ? t("取消标红") : t("标红");
   const text = flagged ? "★" : "☆";
   const classes = ["flag-button", flagged ? "flagged" : "", className ?? ""]
     .filter(Boolean)

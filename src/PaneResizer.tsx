@@ -1,5 +1,6 @@
 import { useCallback, useRef } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import { t } from "./i18n";
 
 type PaneResizerProps = {
   /** 中文可读名称，读屏会念出来。 */
@@ -93,7 +94,7 @@ export default function PaneResizer({
       aria-valuenow={value}
       aria-valuemin={min}
       aria-valuemax={max}
-      title={`${label}：拖动或按左右方向键调整，双击复位`}
+      title={t("{0}：拖动或按左右方向键调整，双击复位", [label])}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}

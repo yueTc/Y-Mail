@@ -31,6 +31,7 @@ import {
   type PickedFormat,
 } from "./composeFormatPainter";
 import { IMAGE_CID_ATTR, IMAGE_PATH_ATTR, newContentId } from "./composeRichText";
+import { t } from "./i18n";
 
 /** 截图完成后主窗口收到的事件名；与后端 compose_images.rs 一致。 */
 const SCREENSHOT_EVENT = "compose:screenshot-ready";
@@ -139,7 +140,7 @@ function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.onerror = () => reject(new Error("读取剪贴板里的图片失败"));
+    reader.onerror = () => reject(new Error(t("读取剪贴板里的图片失败")));
     reader.readAsDataURL(file);
   });
 }
@@ -239,7 +240,7 @@ function ColorPanel({
           ))}
         </div>
       ))}
-      <p className="rte-recent-title">最近使用</p>
+      <p className="rte-recent-title">{t("最近使用")}</p>
       <div className="rte-color-row">
         {Array.from({ length: RECENT_LIMIT }).map((_, index) => {
           const color = recent[index];
@@ -248,7 +249,7 @@ function ColorPanel({
               key={`recent-${index}`}
               type="button"
               role="menuitem"
-              aria-label={color ? `最近使用 ${color}` : `最近使用 ${index + 1}`}
+              aria-label={color ? t("最近使用 {0}", [color]) : t("最近使用 {0}", [index + 1])}
               className="rte-swatch"
               style={{ background: color ?? "transparent" }}
               disabled={!color}
@@ -350,7 +351,7 @@ export default function RichTextEditor({
     editorProps: {
       attributes: {
         class: "rte-content",
-        "aria-label": "正文",
+        "aria-label": t("正文"),
       },
       handlePaste: (_view, event) => {
         const files = Array.from(event.clipboardData?.files ?? []).filter((file) =>
@@ -514,8 +515,8 @@ export default function RichTextEditor({
     try {
       const chosen = await open({
         multiple: true,
-        title: "选择图片",
-        filters: [{ name: "图片", extensions: IMAGE_EXTENSIONS }],
+        title: t("选择图片"),
+        filters: [{ name: t("图片"), extensions: IMAGE_EXTENSIONS }],
       });
       if (!chosen) return;
       const paths = Array.isArray(chosen) ? chosen : [chosen];
@@ -555,7 +556,7 @@ export default function RichTextEditor({
     if (!editor) return;
     const href = normalizeHref(linkHref);
     if (!href) {
-      setError("链接要以 http://、https:// 或 mailto: 开头");
+      setError(t("链接要以 http://、https:// 或 mailto: 开头"));
       return;
     }
     const label = linkText.trim() || href;
@@ -576,10 +577,9 @@ export default function RichTextEditor({
 
   return (
     <div className="rte" ref={rootRef}>
-      <div className="rte-toolbar" role="toolbar" aria-label="正文工具栏">
-        <button type="button" onClick={onAttach} disabled={disabled} title="从文件管理器选择附件">
-          附件
-        </button>
+      <div className="rte-toolbar" role="toolbar" aria-label={t("正文工具栏")}>
+        <button type="button" onClick={onAttach} disabled={disabled} title={t("从文件管理器选择附件")}>
+          {t("附件")}</button>
 
         <div className="rte-menu-wrap">
           <button
@@ -588,16 +588,13 @@ export default function RichTextEditor({
             aria-expanded={menu === "insert"}
             onClick={() => setMenu(menu === "insert" ? null : "insert")}
           >
-            插入 ▾
-          </button>
+            {t("插入 ▾")}</button>
           {menu === "insert" && (
-            <div className="rte-menu" role="menu" aria-label="插入">
+            <div className="rte-menu" role="menu" aria-label={t("插入")}>
               <button type="button" role="menuitem" onClick={() => void pickImage()}>
-                图片
-              </button>
+                {t("图片")}</button>
               <button type="button" role="menuitem" onClick={() => void startScreenshot()}>
-                截图
-              </button>
+                {t("截图")}</button>
               <button
                 type="button"
                 role="menuitem"
@@ -606,8 +603,7 @@ export default function RichTextEditor({
                   setTableOpen(true);
                 }}
               >
-                表格
-              </button>
+                {t("表格")}</button>
               <button
                 type="button"
                 role="menuitem"
@@ -616,8 +612,7 @@ export default function RichTextEditor({
                   setLinkOpen(true);
                 }}
               >
-                链接
-              </button>
+                {t("链接")}</button>
             </div>
           )}
         </div>
@@ -629,10 +624,9 @@ export default function RichTextEditor({
             aria-expanded={menu === "font"}
             onClick={() => setMenu(menu === "font" ? null : "font")}
           >
-            字体 ▾
-          </button>
+            {t("字体 ▾")}</button>
           {menu === "font" && (
-            <div className="rte-menu" role="menu" aria-label="字体">
+            <div className="rte-menu" role="menu" aria-label={t("字体")}>
               {FONT_CHOICES.map((item) => (
                 <button
                   key={item.label}
@@ -641,7 +635,7 @@ export default function RichTextEditor({
                   style={{ fontFamily: item.value || "inherit" }}
                   onClick={() => applyFont(item.value)}
                 >
-                  {item.label}
+                  {t(item.label)}
                 </button>
               ))}
             </div>
@@ -655,13 +649,11 @@ export default function RichTextEditor({
             aria-expanded={menu === "size"}
             onClick={() => setMenu(menu === "size" ? null : "size")}
           >
-            字号 ▾
-          </button>
+            {t("字号 ▾")}</button>
           {menu === "size" && (
-            <div className="rte-menu" role="menu" aria-label="字号">
+            <div className="rte-menu" role="menu" aria-label={t("字号")}>
               <button type="button" role="menuitem" onClick={() => applySize("")}>
-                默认
-              </button>
+                {t("默认")}</button>
               {SIZE_CHOICES.map((size) => (
                 <button key={size} type="button" role="menuitem" onClick={() => applySize(String(size))}>
                   {size}
@@ -675,7 +667,7 @@ export default function RichTextEditor({
           <button
             type="button"
             className="rte-color-button"
-            aria-label="颜色"
+            aria-label={t("颜色")}
             disabled={disabled}
             aria-expanded={menu === "color"}
             onClick={() => setMenu(menu === "color" ? null : "color")}
@@ -687,7 +679,7 @@ export default function RichTextEditor({
           </button>
           {menu === "color" && (
             <ColorPanel
-              namePrefix="颜色"
+              namePrefix={t("颜色")}
               current={currentColor}
               recent={recentColors}
               onPick={applyColor}
@@ -699,7 +691,7 @@ export default function RichTextEditor({
           <button
             type="button"
             className="rte-color-button"
-            aria-label="背景色"
+            aria-label={t("背景色")}
             disabled={disabled}
             aria-expanded={menu === "background"}
             onClick={() => setMenu(menu === "background" ? null : "background")}
@@ -711,7 +703,7 @@ export default function RichTextEditor({
           </button>
           {menu === "background" && (
             <ColorPanel
-              namePrefix="背景色"
+              namePrefix={t("背景色")}
               current={currentBackground}
               recent={recentColors}
               onPick={applyBackground}
@@ -724,7 +716,7 @@ export default function RichTextEditor({
         <button
           type="button"
           className={editor?.isActive("bold") ? "is-active" : undefined}
-          aria-label="加粗"
+          aria-label={t("加粗")}
           aria-pressed={editor?.isActive("bold") ?? false}
           disabled={disabled}
           onClick={() => editor?.chain().focus().toggleBold().run()}
@@ -734,7 +726,7 @@ export default function RichTextEditor({
         <button
           type="button"
           className={editor?.isActive("italic") ? "is-active" : undefined}
-          aria-label="斜体"
+          aria-label={t("斜体")}
           aria-pressed={editor?.isActive("italic") ?? false}
           disabled={disabled}
           onClick={() => editor?.chain().focus().toggleItalic().run()}
@@ -744,7 +736,7 @@ export default function RichTextEditor({
         <button
           type="button"
           className={editor?.isActive("underline") ? "is-active" : undefined}
-          aria-label="下划线"
+          aria-label={t("下划线")}
           aria-pressed={editor?.isActive("underline") ?? false}
           disabled={disabled}
           onClick={() => editor?.chain().focus().toggleUnderline().run()}
@@ -754,7 +746,7 @@ export default function RichTextEditor({
         <button
           type="button"
           className={editor?.isActive("strike") ? "is-active" : undefined}
-          aria-label="删除线"
+          aria-label={t("删除线")}
           aria-pressed={editor?.isActive("strike") ?? false}
           disabled={disabled}
           onClick={() => editor?.chain().focus().toggleStrike().run()}
@@ -767,94 +759,85 @@ export default function RichTextEditor({
         <button
           type="button"
           className={editor?.isActive({ textAlign: "left" }) ? "is-active" : undefined}
-          aria-label="居左"
+          aria-label={t("居左")}
           disabled={disabled}
           onClick={() => editor?.chain().focus().setTextAlign("left").run()}
         >
-          居左
-        </button>
+          {t("居左")}</button>
         <button
           type="button"
           className={editor?.isActive({ textAlign: "center" }) ? "is-active" : undefined}
-          aria-label="居中"
+          aria-label={t("居中")}
           disabled={disabled}
           onClick={() => editor?.chain().focus().setTextAlign("center").run()}
         >
-          居中
-        </button>
+          {t("居中")}</button>
         <button
           type="button"
           className={editor?.isActive({ textAlign: "right" }) ? "is-active" : undefined}
-          aria-label="居右"
+          aria-label={t("居右")}
           disabled={disabled}
           onClick={() => editor?.chain().focus().setTextAlign("right").run()}
         >
-          居右
-        </button>
+          {t("居右")}</button>
 
         <span className="rte-sep" aria-hidden="true" />
 
         <button
           type="button"
           className={editor?.isActive("bulletList") ? "is-active" : undefined}
-          aria-label="项目符号列表"
+          aria-label={t("项目符号列表")}
           disabled={disabled}
           onClick={() => editor?.chain().focus().toggleBulletList().run()}
         >
-          • 列表
-        </button>
+          {t("• 列表")}</button>
         <button
           type="button"
           className={editor?.isActive("orderedList") ? "is-active" : undefined}
-          aria-label="数字编号列表"
+          aria-label={t("数字编号列表")}
           disabled={disabled}
           onClick={() => editor?.chain().focus().toggleOrderedList().run()}
         >
-          1. 列表
-        </button>
+          {t("1. 列表")}</button>
 
         <span className="rte-sep" aria-hidden="true" />
 
         <button
           type="button"
-          aria-label="减少缩进"
+          aria-label={t("减少缩进")}
           disabled={disabled}
           onClick={() => editor?.chain().focus().decreaseIndent().run()}
         >
-          缩进－
-        </button>
+          {t("缩进－")}</button>
         <button
           type="button"
-          aria-label="增加缩进"
+          aria-label={t("增加缩进")}
           disabled={disabled}
           onClick={() => editor?.chain().focus().increaseIndent().run()}
         >
-          缩进＋
-        </button>
+          {t("缩进＋")}</button>
         <button
           type="button"
-          aria-label="减少行距"
+          aria-label={t("减少行距")}
           disabled={disabled}
           onClick={() => editor?.chain().focus().decreaseLineHeight().run()}
         >
-          行距－
-        </button>
+          {t("行距－")}</button>
         <button
           type="button"
-          aria-label="增加行距"
+          aria-label={t("增加行距")}
           disabled={disabled}
           onClick={() => editor?.chain().focus().increaseLineHeight().run()}
         >
-          行距＋
-        </button>
+          {t("行距＋")}</button>
 
         <span className="rte-sep" aria-hidden="true" />
 
         <button
           type="button"
           className={`rte-icon-button${brush ? " is-active" : ""}`}
-          aria-label="格式刷"
-          title="格式刷"
+          aria-label={t("格式刷")}
+          title={t("格式刷")}
           aria-pressed={brush !== null}
           disabled={disabled}
           onClick={toggleFormatBrush}
@@ -864,8 +847,8 @@ export default function RichTextEditor({
         <button
           type="button"
           className="rte-icon-button"
-          aria-label="清除格式"
-          title="清除格式"
+          aria-label={t("清除格式")}
+          title={t("清除格式")}
           disabled={disabled}
           onClick={runClearFormat}
         >
@@ -874,18 +857,17 @@ export default function RichTextEditor({
       </div>
 
       {attachments.length > 0 && (
-        <ul className="rte-attachments" aria-label="已添加的附件">
+        <ul className="rte-attachments" aria-label={t("已添加的附件")}>
           {attachments.map((item, index) => (
             <li key={`${item.path}-${index}`}>
               <span className="rte-attachment-name">{item.filename || item.path}</span>
               <button
                 type="button"
-                aria-label={`移除附件 ${item.filename}`}
+                aria-label={t("移除附件 {0}", [item.filename])}
                 disabled={disabled}
                 onClick={() => onRemoveAttachment?.(index)}
               >
-                移除
-              </button>
+                {t("移除")}</button>
             </li>
           ))}
         </ul>
@@ -898,41 +880,39 @@ export default function RichTextEditor({
         onKeyUp={applyFormatBrush}
       />
 
-      {error && <p className="error rte-error">操作失败：{error}</p>}
+      {error && <p className="error rte-error">{t("操作失败：")}{error}</p>}
 
       {tableOpen && (
         <div className="ai-modal-backdrop" role="presentation">
-          <section className="ai-modal" role="dialog" aria-modal="true" aria-label="插入表格">
-            <h3>插入表格</h3>
+          <section className="ai-modal" role="dialog" aria-modal="true" aria-label={t("插入表格")}>
+            <h3>{t("插入表格")}</h3>
             <label className="compose-field">
-              <span>几行</span>
+              <span>{t("几行")}</span>
               <input
                 type="number"
                 min={1}
                 max={30}
-                aria-label="表格行数"
+                aria-label={t("表格行数")}
                 value={tableRows}
                 onChange={(event) => setTableRows(Number(event.target.value))}
               />
             </label>
             <label className="compose-field">
-              <span>几列</span>
+              <span>{t("几列")}</span>
               <input
                 type="number"
                 min={1}
                 max={12}
-                aria-label="表格列数"
+                aria-label={t("表格列数")}
                 value={tableCols}
                 onChange={(event) => setTableCols(Number(event.target.value))}
               />
             </label>
             <div className="form-actions">
               <button type="button" className="primary" onClick={confirmTable}>
-                插入
-              </button>
+                {t("插入")}</button>
               <button type="button" onClick={() => setTableOpen(false)}>
-                取消
-              </button>
+                {t("取消")}</button>
             </div>
           </section>
         </div>
@@ -940,21 +920,21 @@ export default function RichTextEditor({
 
       {linkOpen && (
         <div className="ai-modal-backdrop" role="presentation">
-          <section className="ai-modal" role="dialog" aria-modal="true" aria-label="插入链接">
-            <h3>插入链接</h3>
+          <section className="ai-modal" role="dialog" aria-modal="true" aria-label={t("插入链接")}>
+            <h3>{t("插入链接")}</h3>
             <label className="compose-field">
-              <span>链接文字</span>
+              <span>{t("链接文字")}</span>
               <input
-                aria-label="链接文字"
+                aria-label={t("链接文字")}
                 value={linkText}
-                placeholder="留空就用网址本身"
+                placeholder={t("留空就用网址本身")}
                 onChange={(event) => setLinkText(event.target.value)}
               />
             </label>
             <label className="compose-field">
-              <span>链接地址</span>
+              <span>{t("链接地址")}</span>
               <input
-                aria-label="链接地址"
+                aria-label={t("链接地址")}
                 value={linkHref}
                 placeholder="https://example.com"
                 onChange={(event) => setLinkHref(event.target.value)}
@@ -962,11 +942,9 @@ export default function RichTextEditor({
             </label>
             <div className="form-actions">
               <button type="button" className="primary" onClick={confirmLink}>
-                插入
-              </button>
+                {t("插入")}</button>
               <button type="button" onClick={() => setLinkOpen(false)}>
-                取消
-              </button>
+                {t("取消")}</button>
             </div>
           </section>
         </div>

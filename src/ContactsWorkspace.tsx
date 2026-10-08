@@ -29,6 +29,7 @@ import {
 } from "./api";
 import PaneResizer from "./PaneResizer";
 import { CONTACTS_PANE_PROFILE, RESIZER_WIDTH, usePaneWidths } from "./usePaneWidths";
+import { t } from "./i18n";
 
 /** 一次最多拉多少条；与后端上限一致。 */
 const PAGE_LIMIT = 5000;
@@ -78,12 +79,12 @@ export function filterContacts(contacts: Contact[], keyword: string): Contact[] 
 
 /** 最近联系时间：只给到「哪天」，空值说明还没正式来往过。 */
 export function lastUsedLabel(iso: string | null): string {
-  if (!iso) return "还没通过信";
+  if (!iso) return t("还没通过信");
   const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "还没通过信";
+  if (Number.isNaN(date.getTime())) return t("还没通过信");
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day} 联系过`;
+  return t("{0}-{1}-{2} 联系过", [date.getFullYear(), month, day]);
 }
 
 let pinyinCollator: Intl.Collator | undefined;
@@ -180,10 +181,10 @@ export function buildListRows(contacts: Contact[]): ContactsListRow[] {
 
 /** 当前视图的标题。 */
 export function viewTitle(view: ContactsView, groups: ContactGroup[]): string {
-  if (view.kind === "all") return "所有联系人";
-  if (view.kind === "ungrouped") return "未分组";
-  if (view.kind === "hidden") return "已隐藏";
-  return groups.find((group) => group.id === view.id)?.name ?? "分组";
+  if (view.kind === "all") return t("所有联系人");
+  if (view.kind === "ungrouped") return t("未分组");
+  if (view.kind === "hidden") return t("已隐藏");
+  return groups.find((group) => group.id === view.id)?.name ?? t("分组");
 }
 
 /** 空草稿。 */
@@ -346,10 +347,10 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
     try {
       if (selectedId === undefined) {
         await api.createContact(draft);
-        flash("联系人已新建");
+        flash(t("联系人已新建"));
       } else {
         await api.updateContact(selectedId, draft);
-        flash("联系人已保存");
+        flash(t("联系人已保存"));
       }
       setEditing(false);
       setDraft(emptyDraft(null));
@@ -364,11 +365,11 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
 
   const hideContact = useCallback(
     (contact: Contact) => {
-      if (!window.confirm(`把「${contactLabel(contact)}」移到已隐藏？`)) return;
+      if (!window.confirm(t("把「{0}」移到已隐藏？", [contactLabel(contact)]))) return;
       void runAction(async () => {
         await api.hideContact(contact.id);
         if (selectedId === contact.id) setSelectedId(undefined);
-      }, "已移到「已隐藏」");
+      }, t("已移到「已隐藏」"));
     },
     [runAction, selectedId],
   );
@@ -378,7 +379,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
       void runAction(async () => {
         await api.restoreContact(contact.id);
         if (selectedId === contact.id) setSelectedId(undefined);
-      }, "已恢复");
+      }, t("已恢复"));
     },
     [runAction, selectedId],
   );
@@ -386,12 +387,12 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
   const purgeContact = useCallback(
     (contact: Contact) => {
       const tip =
-        "彻底删除后，以后要是再收到这个地址的来信，它会重新出现在通讯录里。确定要删吗？";
+        t("彻底删除后，以后要是再收到这个地址的来信，它会重新出现在通讯录里。确定要删吗？");
       if (!window.confirm(`${contactLabel(contact)}\n\n${tip}`)) return;
       void runAction(async () => {
         await api.purgeContact(contact.id);
         if (selectedId === contact.id) setSelectedId(undefined);
-      }, "已彻底删除");
+      }, t("已彻底删除"));
     },
     [runAction, selectedId],
   );
@@ -400,9 +401,9 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
     async (contact: Contact) => {
       try {
         await navigator.clipboard.writeText(contact.email);
-        flash("地址已复制");
+        flash(t("地址已复制"));
       } catch {
-        flash("复制失败，请手动选中");
+        flash(t("复制失败，请手动选中"));
       }
     },
     [flash],
@@ -448,7 +449,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
   /** 把一位联系人挪到某个分组（null = 未分组）。 */
   const moveOneToGroup = useCallback(
     async (contact: Contact, groupId: number | null) => {
-      const name = groupId === null ? "未分组" : groups.find((item) => item.id === groupId)?.name ?? "分组";
+      const name = groupId === null ? t("未分组") : groups.find((item) => item.id === groupId)?.name ?? t("分组");
       await runAction(async () => {
         await api.updateContact(contact.id, {
           name: contact.name,
@@ -456,39 +457,39 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
           note: contact.note,
           groupId,
         });
-      }, `已移到「${name}」`);
+      }, t("已移到「{0}」", [name]));
     },
     [groups, runAction],
   );
 
   const createGroup = useCallback(async () => {
-    const name = window.prompt("新分组叫什么？");
+    const name = window.prompt(t("新分组叫什么？"));
     if (name === null) return;
     await runAction(async () => {
       await api.createContactGroup(name);
-    }, "分组已新建");
+    }, t("分组已新建"));
   }, [runAction]);
 
   const renameGroup = useCallback(
     async (group: ContactGroup) => {
-      const name = window.prompt("改成什么名字？", group.name);
+      const name = window.prompt(t("改成什么名字？"), group.name);
       if (name === null) return;
       await runAction(async () => {
         await api.renameContactGroup(group.id, name);
-      }, "分组已改名");
+      }, t("分组已改名"));
     },
     [runAction],
   );
 
   const removeGroup = useCallback(
     async (group: ContactGroup) => {
-      if (!window.confirm(`删掉分组「${group.name}」？组内联系人会回到「未分组」，联系人本身不会被删。`)) {
+      if (!window.confirm(t("删掉分组「{0}」？组内联系人会回到「未分组」，联系人本身不会被删。", [group.name]))) {
         return;
       }
       await runAction(async () => {
         await api.deleteContactGroup(group.id);
         if (view.kind === "group" && view.id === group.id) setView({ kind: "all" });
-      }, "分组已删除");
+      }, t("分组已删除"));
     },
     [runAction, view],
   );
@@ -497,13 +498,13 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
   const hideChecked = useCallback(() => {
     const list = contacts.filter((item) => checked.has(item.id));
     if (list.length === 0) return;
-    if (!window.confirm(`把选中的 ${list.length} 位移到「已隐藏」？`)) return;
+    if (!window.confirm(t("把选中的 {0} 位移到「已隐藏」？", [list.length]))) return;
     void runAction(async () => {
       for (const item of list) await api.hideContact(item.id);
       setChecked(new Set());
       setBatchMode(false);
       setSelectedId(undefined);
-    }, `已隐藏 ${list.length} 位`);
+    }, t("已隐藏 {0} 位", [list.length]));
   }, [checked, contacts, runAction]);
 
   /** 批量改分组。 */
@@ -522,7 +523,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
         }
         setChecked(new Set());
         setBatchMode(false);
-      }, `已移动 ${list.length} 位`);
+      }, t("已移动 {0} 位", [list.length]));
     },
     [checked, contacts, runAction],
   );
@@ -533,14 +534,14 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
       setExportOpen(false);
       const extension = kind === "csv" ? "csv" : "vcf";
       const path = await save({
-        title: kind === "csv" ? "导出为 CSV" : "导出为 vCard",
-        defaultPath: `通讯录.${extension}`,
+        title: kind === "csv" ? t("导出为 CSV") : t("导出为 vCard"),
+        defaultPath: t("通讯录.{0}", [extension]),
         filters: [{ name: kind === "csv" ? "CSV" : "vCard", extensions: [extension] }],
       });
       if (!path) return;
       await runAction(async () => {
         const result = await api.exportContacts(path, kind, "active");
-        flash(`已导出 ${result.count} 条到 ${result.path}`);
+        flash(t("已导出 {0} 条到 {1}", [result.count, result.path]));
       });
     },
     [flash, runAction],
@@ -549,9 +550,9 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
   /** 选文件并读预览（这一步不写库）。 */
   const openImport = useCallback(async () => {
     const chosen = await open({
-      title: "选择要导入的联系人文件",
+      title: t("选择要导入的联系人文件"),
       multiple: false,
-      filters: [{ name: "联系人文件", extensions: ["csv", "vcf"] }],
+      filters: [{ name: t("联系人文件"), extensions: ["csv", "vcf"] }],
     });
     if (!chosen || Array.isArray(chosen)) return;
     try {
@@ -584,7 +585,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
       const outcome = await api.applyContactImport(importPreview.entries, importOverwrite);
       setImportPreview(undefined);
       flash(
-        `导入完成：新增 ${outcome.imported}，覆盖 ${outcome.overwritten}，跳过 ${outcome.skipped}`,
+        t("导入完成：新增 {0}，覆盖 {1}，跳过 {2}", [outcome.imported, outcome.overwritten, outcome.skipped]),
       );
       reload();
     } catch (caught: unknown) {
@@ -608,8 +609,8 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
           <input
             type="search"
             className="contacts-search"
-            placeholder="搜名字或邮箱"
-            aria-label="搜索联系人"
+            placeholder={t("搜名字或邮箱")}
+            aria-label={t("搜索联系人")}
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
           />
@@ -622,7 +623,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
               className={view.kind === "all" ? "contacts-group active" : "contacts-group"}
               onClick={() => setView({ kind: "all" })}
             >
-              <span className="contacts-group-name">所有联系人</span>
+              <span className="contacts-group-name">{t("所有联系人")}</span>
               <span className="contacts-group-count">{counts.active}</span>
             </button>
           </li>
@@ -633,7 +634,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
                 className={view.kind === "ungrouped" ? "contacts-group active" : "contacts-group"}
                 onClick={() => setView({ kind: "ungrouped" })}
               >
-                <span className="contacts-group-name">未分组</span>
+                <span className="contacts-group-name">{t("未分组")}</span>
                 <span className="contacts-group-count">{counts.ungrouped}</span>
               </button>
             </li>
@@ -647,7 +648,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
                     ? "contacts-group active"
                     : "contacts-group"
                 }
-                title="右键可以重命名或删除"
+                title={t("右键可以重命名或删除")}
                 onClick={() => setView({ kind: "group", id: group.id })}
                 onContextMenu={(event) => openGroupMenu(event, group)}
               >
@@ -662,7 +663,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
               className={view.kind === "hidden" ? "contacts-group active" : "contacts-group"}
               onClick={() => setView({ kind: "hidden" })}
             >
-              <span className="contacts-group-name">已隐藏</span>
+              <span className="contacts-group-name">{t("已隐藏")}</span>
               <span className="contacts-group-count">{counts.hidden}</span>
             </button>
           </li>
@@ -670,29 +671,24 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
 
         <div className="contacts-groups-foot">
           <button type="button" onClick={() => void createGroup()}>
-            新建分组
-          </button>
+            {t("新建分组")}</button>
           <button type="button" onClick={() => void openImport()}>
-            导入
-          </button>
+            {t("导入")}</button>
           <button type="button" onClick={() => setExportOpen((value) => !value)}>
-            导出
-          </button>
+            {t("导出")}</button>
           {exportOpen ? (
             <div className="contacts-export-menu">
               <button type="button" onClick={() => void exportContacts("csv")}>
-                CSV（Excel 能开）
-              </button>
+                {t("CSV（Excel 能开）")}</button>
               <button type="button" onClick={() => void exportContacts("vcf")}>
-                vCard（手机 / Outlook 能认）
-              </button>
+                {t("vCard（手机 / Outlook 能认）")}</button>
             </div>
           ) : null}
         </div>
       </aside>
 
       <PaneResizer
-        label="分组栏宽度"
+        label={t("分组栏宽度")}
         value={widths.sidebar}
         min={paneLimits.sidebar.min}
         max={paneLimits.sidebar.max}
@@ -709,8 +705,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
           {view.kind === "hidden" ? null : (
             <>
               <button type="button" className="primary" onClick={startCreate}>
-                新建联系人
-              </button>
+                {t("新建联系人")}</button>
               <button
                 type="button"
                 onClick={() => {
@@ -718,7 +713,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
                   setChecked(new Set());
                 }}
               >
-                {batchMode ? "退出批量" : "批量"}
+                {batchMode ? t("退出批量") : t("批量")}
               </button>
             </>
           )}
@@ -726,12 +721,11 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
 
         {batchMode ? (
           <div className="contacts-batch-bar">
-            <span>已选 {checked.size} 位</span>
+            <span>{t("已选 ")}{checked.size}{t(" 位")}</span>
             <button type="button" disabled={checked.size === 0} onClick={hideChecked}>
-              批量隐藏
-            </button>
+              {t("批量隐藏")}</button>
             <select
-              aria-label="移到分组"
+              aria-label={t("移到分组")}
               value=""
               disabled={checked.size === 0}
               onChange={(event) => {
@@ -740,8 +734,8 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
                 void moveChecked(value === "none" ? null : Number(value));
               }}
             >
-              <option value="">移到分组…</option>
-              <option value="none">未分组</option>
+              <option value="">{t("移到分组…")}</option>
+              <option value="none">{t("未分组")}</option>
               {groups.map((group) => (
                 <option key={group.id} value={String(group.id)}>
                   {group.name}
@@ -751,13 +745,13 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
           </div>
         ) : null}
 
-        {loading ? <p className="hint">正在读通讯录…</p> : null}
+        {loading ? <p className="hint">{t("正在读通讯录…")}</p> : null}
         {error ? <p className="error">{error}</p> : null}
         {!loading && !error && visible.length === 0 ? (
           <p className="hint">
             {keyword.trim() === ""
-              ? "这里还没有联系人。同步一次邮件，或者自己新建一位。"
-              : "没有匹配的联系人。"}
+              ? t("这里还没有联系人。同步一次邮件，或者自己新建一位。")
+              : t("没有匹配的联系人。")}
           </p>
         ) : null}
 
@@ -790,13 +784,13 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
                       : "contacts-row"
                   }
                   style={{ transform: `translateY(${item.start}px)`, height: `${item.size}px` }}
-                  title="右键可以加进分组"
+                  title={t("右键可以加进分组")}
                   onContextMenu={(event) => openContactMenu(event, contact)}
                 >
                   {batchMode ? (
                     <input
                       type="checkbox"
-                      aria-label={`选择 ${contactLabel(contact)}`}
+                      aria-label={t("选择 {0}", [contactLabel(contact)])}
                       checked={checked.has(contact.id)}
                       onChange={(event) => {
                         setChecked((old) => {
@@ -820,7 +814,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
       </section>
 
       <PaneResizer
-        label="联系人列表宽度"
+        label={t("联系人列表宽度")}
         value={widths.list}
         min={paneLimits.list.min}
         max={paneLimits.list.max}
@@ -829,7 +823,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
         onCommit={persistPaneWidths}
       />
 
-      <aside className="contacts-detail" aria-label="联系人详情">
+      <aside className="contacts-detail" aria-label={t("联系人详情")}>
         {notice ? <p className="notice">{notice}</p> : null}
 
         {editing ? (
@@ -840,27 +834,27 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
               void saveDraft();
             }}
           >
-            <h2>{selectedId === undefined ? "新建联系人" : "编辑联系人"}</h2>
+            <h2>{selectedId === undefined ? t("新建联系人") : t("编辑联系人")}</h2>
             <label className="field">
-              <span>显示名</span>
+              <span>{t("显示名")}</span>
               <input
-                aria-label="显示名"
+                aria-label={t("显示名")}
                 value={draft.name}
                 onChange={(event) => setDraft({ ...draft, name: event.target.value })}
               />
             </label>
             <label className="field">
-              <span>邮箱</span>
+              <span>{t("邮箱")}</span>
               <input
-                aria-label="邮箱"
+                aria-label={t("邮箱")}
                 value={draft.email}
                 onChange={(event) => setDraft({ ...draft, email: event.target.value })}
               />
             </label>
             <label className="field">
-              <span>分组</span>
+              <span>{t("分组")}</span>
               <select
-                aria-label="联系人分组"
+                aria-label={t("联系人分组")}
                 value={draft.groupId === null ? "" : String(draft.groupId)}
                 onChange={(event) =>
                   setDraft({
@@ -869,7 +863,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
                   })
                 }
               >
-                <option value="">未分组</option>
+                <option value="">{t("未分组")}</option>
                 {groups.map((group) => (
                   <option key={group.id} value={String(group.id)}>
                     {group.name}
@@ -878,9 +872,9 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
               </select>
             </label>
             <label className="field">
-              <span>备注</span>
+              <span>{t("备注")}</span>
               <textarea
-                aria-label="备注"
+                aria-label={t("备注")}
                 rows={6}
                 value={draft.note}
                 onChange={(event) => setDraft({ ...draft, note: event.target.value })}
@@ -888,11 +882,9 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
             </label>
             <div className="form-actions">
               <button type="submit" className="primary" disabled={saving}>
-                保存
-              </button>
+                {t("保存")}</button>
               <button type="button" onClick={cancelEdit} disabled={saving}>
-                取消
-              </button>
+                {t("取消")}</button>
             </div>
           </form>
         ) : selected ? (
@@ -900,61 +892,61 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
             <h2>{contactLabel(selected)}</h2>
             <p className="path">{selected.email}</p>
             <dl className="contacts-meta">
-              <dt>分组</dt>
-              <dd>{selected.groupName ?? "未分组"}</dd>
-              <dt>最近联系</dt>
+              <dt>{t("分组")}</dt>
+              <dd>{selected.groupName ?? t("未分组")}</dd>
+              <dt>{t("最近联系")}</dt>
               <dd>{lastUsedLabel(selected.lastUsedAt)}</dd>
-              <dt>来源</dt>
-              <dd>{selected.source === "manual" ? "手动添加" : "自动收集"}</dd>
+              <dt>{t("来源")}</dt>
+              <dd>{selected.source === "manual" ? t("手动添加") : t("自动收集")}</dd>
             </dl>
-            <p className="contacts-note">{selected.note.trim() === "" ? "没有备注" : selected.note}</p>
+            <p className="contacts-note">{selected.note.trim() === "" ? t("没有备注") : selected.note}</p>
             <div className="form-actions">
               <button type="button" className="primary" onClick={() => onCompose(selected)}>
-                写邮件
-              </button>
+                {t("写邮件")}</button>
               <button type="button" onClick={() => void copyAddress(selected)}>
-                复制地址
-              </button>
+                {t("复制地址")}</button>
               {selected.hidden ? (
                 <>
                   <button type="button" onClick={() => restoreContact(selected)}>
-                    恢复
-                  </button>
+                    {t("恢复")}</button>
                   <button type="button" className="danger" onClick={() => purgeContact(selected)}>
-                    彻底删除
-                  </button>
+                    {t("彻底删除")}</button>
                 </>
               ) : (
                 <>
                   <button type="button" onClick={() => startEdit(selected)}>
-                    编辑
-                  </button>
+                    {t("编辑")}</button>
                   <button type="button" className="danger" onClick={() => hideContact(selected)}>
-                    删除
-                  </button>
+                    {t("删除")}</button>
                 </>
               )}
             </div>
           </div>
         ) : (
-          <p className="hint">从中间选一个人看看详情。</p>
+          <p className="hint">{t("从中间选一个人看看详情。")}</p>
         )}
 
       </aside>
 
       {importPreview ? (
-        <div className="modal-backdrop" role="dialog" aria-label="导入预览">
+        <div className="modal-backdrop" role="dialog" aria-label={t("导入预览")}>
           <div className="modal contacts-import">
-            <h2>导入预览</h2>
+            <h2>{t("导入预览")}</h2>
             <p>
-              读到 {importPreview.entries.length} 条：新增 {importPreview.newCount}，库里已有{" "}
-              {importPreview.duplicateCount}，坏行 {importPreview.problems.length}
+              {t("读到 ")}
+              {importPreview.entries.length}
+              {t(" 条：新增 ")}
+              {importPreview.newCount}
+              {t("，库里已有")}{" "}
+              {importPreview.duplicateCount}
+              {t("，坏行 ")}
+              {importPreview.problems.length}
             </p>
             {importPreview.headers.length > 0 && importPreview.emailColumn !== null ? (
               <label className="field">
-                <span>哪一列是邮箱</span>
+                <span>{t("哪一列是邮箱")}</span>
                 <select
-                  aria-label="邮箱列"
+                  aria-label={t("邮箱列")}
                   value={String(importPreview.emailColumn)}
                   onChange={(event) => void pickEmailColumn(Number(event.target.value))}
                 >
@@ -972,24 +964,21 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
                 checked={importOverwrite}
                 onChange={(event) => setImportOverwrite(event.target.checked)}
               />
-              用文件里的名字与备注覆盖已有联系人（不勾就跳过重复的）
-            </label>
+              {t("用文件里的名字与备注覆盖已有联系人（不勾就跳过重复的）")}</label>
             {importPreview.problems.length > 0 ? (
               <ul className="contacts-problems">
                 {importPreview.problems.map((problem) => (
                   <li key={problem.line}>
-                    第 {problem.line} 行：{problem.reason}
+                    {t("第 ")}{problem.line}{t(" 行：")}{problem.reason}
                   </li>
                 ))}
               </ul>
             ) : null}
             <div className="form-actions">
               <button type="button" className="primary" disabled={importBusy} onClick={() => void confirmImport()}>
-                确认导入
-              </button>
+                {t("确认导入")}</button>
               <button type="button" disabled={importBusy} onClick={() => setImportPreview(undefined)}>
-                取消
-              </button>
+                {t("取消")}</button>
             </div>
           </div>
         </div>
@@ -999,7 +988,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
         <div
           className="contacts-menu"
           role="menu"
-          aria-label={menuTarget.kind === "group" ? "分组菜单" : "联系人菜单"}
+          aria-label={menuTarget.kind === "group" ? t("分组菜单") : t("联系人菜单")}
           style={{
             left: Math.min(menuTarget.x, Math.max(8, window.innerWidth - 220)),
             top: Math.min(menuTarget.y, Math.max(8, window.innerHeight - 200)),
@@ -1018,8 +1007,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
                   void renameGroup(target);
                 }}
               >
-                重命名
-              </button>
+                {t("重命名")}</button>
               <button
                 type="button"
                 role="menuitem"
@@ -1030,8 +1018,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
                   void removeGroup(target);
                 }}
               >
-                删除分组
-              </button>
+                {t("删除分组")}</button>
             </>
           ) : (
             <div
@@ -1039,10 +1026,10 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
               onMouseEnter={() => setSubmenuOpen(true)}
               onMouseLeave={() => setSubmenuOpen(false)}
             >
-              <span>添加到</span>
+              <span>{t("添加到")}</span>
               <span aria-hidden="true">▸</span>
               {submenuOpen ? (
-                <div className="contacts-submenu" role="menu" aria-label="选择分组">
+                <div className="contacts-submenu" role="menu" aria-label={t("选择分组")}>
                   <button
                     type="button"
                     role="menuitem"
@@ -1053,8 +1040,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
                       void moveOneToGroup(target, null);
                     }}
                   >
-                    未分组
-                  </button>
+                    {t("未分组")}</button>
                   {groups.map((group) => (
                     <button
                       key={group.id}
@@ -1071,7 +1057,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
                     </button>
                   ))}
                   {groups.length === 0 ? (
-                    <span className="contacts-menu-empty">还没有分组</span>
+                    <span className="contacts-menu-empty">{t("还没有分组")}</span>
                   ) : null}
                 </div>
               ) : null}

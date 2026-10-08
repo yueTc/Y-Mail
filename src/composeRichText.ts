@@ -4,6 +4,7 @@
 //! `cid:` 引用 + 附件清单里的内嵌图片条目；否则整张 base64 会塞进正文，邮件会大到发不出去。
 
 import { basename } from "./composeAttachments";
+import { t } from "./i18n";
 
 /** 正文里的一张内嵌图片（发送用）。 */
 export interface InlineImageRef {
@@ -62,7 +63,7 @@ export function htmlForSending(html: string): { html: string; images: InlineImag
     if (seen.has(contentId)) continue;
     seen.add(contentId);
     const title = (image.getAttribute("title") ?? "").trim();
-    images.push({ path, filename: title || basename(path) || "图片", contentId });
+    images.push({ path, filename: title || basename(path) || t("图片"), contentId });
   }
   return { html: document_.body.innerHTML, images };
 }

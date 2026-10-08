@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, type CSSProperties, type JSX } from "react";
 
 import AccountForm from "./AccountForm";
+import { t } from "./i18n";
 
 /** 打开「添加邮箱」弹窗的入口：邮箱栏或设置页。 */
 export type AddAccountSource = "mailbox" | "settings";
@@ -109,7 +110,7 @@ export default function AddAccountDialog({
   const requestClose = useCallback(() => {
     // 正在测试 / 保存 / 授权时先别关，避免半截请求把状态搞乱。
     if (busyRef.current) return;
-    if (dirtyRef.current && !window.confirm("表单里还有没保存的内容，确定放弃吗？")) {
+    if (dirtyRef.current && !window.confirm(t("表单里还有没保存的内容，确定放弃吗？"))) {
       return;
     }
     onClose();
@@ -166,11 +167,10 @@ export default function AddAccountDialog({
       >
         <header style={HEADER_STYLE}>
           <h2 id="add-account-title" style={{ margin: 0, fontSize: 18 }}>
-            添加邮箱
-          </h2>
+            {t("添加邮箱")}</h2>
           <button
             type="button"
-            aria-label="关闭"
+            aria-label={t("关闭")}
             onClick={requestClose}
             style={{
               border: "none",
@@ -186,10 +186,7 @@ export default function AddAccountDialog({
         </header>
 
         <p style={STEP_STYLE}>
-          操作步骤：先填邮箱地址，服务器参数会自动补齐；微软邮箱（Outlook / Hotmail / Live / MSN）
-          和谷歌 Gmail 会自动改用 OAuth2，点「浏览器授权」登录即可；其他邮箱点「连接自检」确认能收能发，通过后保存。
-          密码、授权码和令牌只进系统保险箱，不会写进数据库或日志。
-        </p>
+          {t("操作步骤：先填邮箱地址，服务器参数会自动补齐；微软邮箱（Outlook / Hotmail / Live / MSN） 和谷歌 Gmail 会自动改用 OAuth2，点「浏览器授权」登录即可；其他邮箱点「连接自检」确认能收能发，通过后保存。 密码、授权码和令牌只进系统保险箱，不会写进数据库或日志。")}</p>
 
         <div style={BODY_STYLE}>
           <AccountForm

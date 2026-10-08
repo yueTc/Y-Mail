@@ -7,6 +7,7 @@
 //! - 远程图片（data-em-original-src）原样不动，仍由既有放行开关控制。
 
 import type { InlineImage } from "./api";
+import { t } from "./i18n";
 
 /** 与后端一致的单张内嵌图片上限（2 MiB）。 */
 export const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
@@ -115,18 +116,18 @@ export function applyInlineImages(contentHtml: string, images: readonly InlineIm
 
 /** 占位文字；带原因方便用户判断，不带任何原始地址。 */
 function placeholderText(image: InlineImage | undefined): string {
-  if (!image) return "［内嵌图片缺失，未显示］";
+  if (!image) return t("［内嵌图片缺失，未显示］");
   switch (image.state) {
     case "too-large":
-      return "［内嵌图片过大，未显示］";
+      return t("［内嵌图片过大，未显示］");
     case "unsupported":
-      return "［内嵌图片类型不支持，未显示］";
+      return t("［内嵌图片类型不支持，未显示］");
     case "not-downloaded":
-      return "［内嵌图片未加载，点下方按钮加载］";
+      return t("［内嵌图片未加载，点下方按钮加载］");
     case "available":
-      return "［内嵌图片数据异常，未显示］";
+      return t("［内嵌图片数据异常，未显示］");
     default:
-      return "［内嵌图片未显示］";
+      return t("［内嵌图片未显示］");
   }
 }
 

@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { api, describeError, type AppSettings } from "./api";
 import RestartChoiceDialog from "./RestartChoiceDialog";
+import { t } from "./i18n";
 
 export type FirstRunWizardProps = {
   /** 启动时读到的设置；默认位置与通知开关都从这里取初值。 */
@@ -43,7 +44,7 @@ export default function FirstRunWizard({ settings, onDone }: FirstRunWizardProps
       });
       onDone();
     } catch (cause) {
-      setError(`保存默认位置失败：${describeError(cause)}`);
+      setError(t("保存默认位置失败：{0}", [describeError(cause)]));
       setBusy(false);
     }
   }, [onDone, settings.notifyNewMail]);
@@ -53,10 +54,10 @@ export default function FirstRunWizard({ settings, onDone }: FirstRunWizardProps
     setError(null);
     let picked: string | null = null;
     try {
-      const chosen = await open({ directory: true, multiple: false, title: "选择邮件数据目录" });
+      const chosen = await open({ directory: true, multiple: false, title: t("选择邮件数据目录") });
       picked = typeof chosen === "string" ? chosen : null;
     } catch (cause) {
-      setError(`打开目录选择失败：${describeError(cause)}`);
+      setError(t("打开目录选择失败：{0}", [describeError(cause)]));
       return;
     }
     if (picked === null) return; // 用户在系统对话框里点了取消
@@ -72,11 +73,11 @@ export default function FirstRunWizard({ settings, onDone }: FirstRunWizardProps
         result = await api.changeDataDir(picked, true);
       }
       if (result.needsConfirmation) {
-        throw new Error(result.message || "目标目录需要确认");
+        throw new Error(result.message || t("目标目录需要确认"));
       }
       setRestartNeeded(true);
     } catch (cause) {
-      setError(`设置数据目录失败：${describeError(cause)}`);
+      setError(t("设置数据目录失败：{0}", [describeError(cause)]));
     } finally {
       setBusy(false);
     }
@@ -89,7 +90,7 @@ export default function FirstRunWizard({ settings, onDone }: FirstRunWizardProps
     try {
       await api.restartApp(cleanup);
     } catch (cause) {
-      setError(`重启失败，请手动关掉再打开：${describeError(cause)}`);
+      setError(t("重启失败，请手动关掉再打开：{0}", [describeError(cause)]));
       setBusy(false);
     }
   }, []);
@@ -112,13 +113,11 @@ export default function FirstRunWizard({ settings, onDone }: FirstRunWizardProps
         aria-modal="true"
         aria-labelledby="first-run-title"
       >
-        <h2 id="first-run-title">先定一下邮件数据放哪</h2>
+        <h2 id="first-run-title">{t("先定一下邮件数据放哪")}</h2>
         <p>
-          第一次使用，先挑一个文件夹存邮件数据（数据库、附件下载、日志都放这里）。
-          以后想换，在「设置」页里也能改。
-        </p>
+          {t("第一次使用，先挑一个文件夹存邮件数据（数据库、附件下载、日志都放这里）。 以后想换，在「设置」页里也能改。")}</p>
         <p className="first-run-default">
-          默认位置：<code>{settings.defaultDataDir}</code>
+          {t("默认位置：")}<code>{settings.defaultDataDir}</code>
         </p>
         {error !== null && <p className="first-run-error">{error}</p>}
         <div className="actions">
@@ -128,11 +127,9 @@ export default function FirstRunWizard({ settings, onDone }: FirstRunWizardProps
             onClick={() => void useDefault()}
             disabled={busy}
           >
-            用默认位置
-          </button>
+            {t("用默认位置")}</button>
           <button type="button" onClick={() => void chooseFolder()} disabled={busy}>
-            选择文件夹…
-          </button>
+            {t("选择文件夹…")}</button>
         </div>
       </div>
     </div>

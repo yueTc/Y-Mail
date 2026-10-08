@@ -18,6 +18,7 @@ import {
   type AiProviderKind,
   type AiThinkingLevel,
 } from "./api";
+import { t } from "./i18n";
 
 /** 显示密钥图标：一只睁开的眼睛。 */
 function EyeIcon() {
@@ -209,7 +210,7 @@ export default function AiPanel() {
   const saveProvider = useCallback(async () => {
     if (!editing) return;
     if (editing.label.trim() === "") {
-      setError("请填写站点名称");
+      setError(t("请填写站点名称"));
       return;
     }
     setBusy(true);
@@ -232,7 +233,7 @@ export default function AiPanel() {
       );
       setApiKey("");
       setEditing(undefined);
-      setNotice(`已保存「${saved.label}」`);
+      setNotice(t("已保存「{0}」", [saved.label]));
       await refresh();
     } catch (caught) {
       setError(describeError(caught));
@@ -253,7 +254,7 @@ export default function AiPanel() {
         apiKey === "" ? undefined : apiKey,
         editing.id,
       );
-      setModelsHint(`连接成功，拉到 ${models.length} 个模型。`);
+      setModelsHint(t("连接成功，拉到 {0} 个模型。", [models.length]));
       if (models.length > 0) {
         setEditing((old) => (old ? { ...old, modelsText: models.join("\n") } : old));
       }
@@ -271,7 +272,7 @@ export default function AiPanel() {
       setNotice("");
       try {
         const models = await api.refreshAiProviderModels(id);
-        setNotice(`已拉取 ${models.length} 个模型`);
+        setNotice(t("已拉取 {0} 个模型", [models.length]));
         await refresh();
       } catch (caught) {
         setError(describeError(caught));
@@ -284,13 +285,13 @@ export default function AiPanel() {
 
   const removeProvider = useCallback(
     async (provider: AiProvider) => {
-      if (!window.confirm(`确定删除 AI 站点「${provider.label}」吗？相关缓存也会清理。`)) return;
+      if (!window.confirm(t("确定删除 AI 站点「{0}」吗？相关缓存也会清理。", [provider.label]))) return;
       setBusy(true);
       setError("");
       setNotice("");
       try {
         await api.deleteAiProvider(provider.id);
-        setNotice(`已删除「${provider.label}」`);
+        setNotice(t("已删除「{0}」", [provider.label]));
         if (editing?.id === provider.id) setEditing(undefined);
         await refresh();
       } catch (caught) {
@@ -306,7 +307,7 @@ export default function AiPanel() {
     async (fn: AiFunction) => {
       const draft = featureDrafts[fn];
       if (!draft?.providerId) {
-        setError(`请先为「${FUNCTION_LABEL[fn]}」选择站点`);
+        setError(t("请先为「{0}」选择站点", [t(FUNCTION_LABEL[fn])]));
         return;
       }
       setBusy(true);
@@ -319,7 +320,7 @@ export default function AiPanel() {
           draft.model,
           draft.thinkingLevel === "" ? undefined : draft.thinkingLevel,
         );
-        setNotice(`已保存「${FUNCTION_LABEL[fn]}」的模型设置`);
+        setNotice(t("已保存「{0}」的模型设置", [t(FUNCTION_LABEL[fn])]));
         await refresh();
       } catch (caught) {
         setError(describeError(caught));
@@ -341,7 +342,7 @@ export default function AiPanel() {
           ...old,
           [fn]: { providerId: "", model: "", thinkingLevel: "" },
         }));
-        setNotice(`已清除「${FUNCTION_LABEL[fn]}」的单独设置，将回退站点默认`);
+        setNotice(t("已清除「{0}」的单独设置，将回退站点默认", [t(FUNCTION_LABEL[fn])]));
         await refresh();
       } catch (caught) {
         setError(describeError(caught));
@@ -353,13 +354,13 @@ export default function AiPanel() {
   );
 
   const disableAll = useCallback(async () => {
-    if (!window.confirm("确定一键关闭 AI 吗？所有站点会停用，已发出的授权也会作废。")) return;
+    if (!window.confirm(t("确定一键关闭 AI 吗？所有站点会停用，已发出的授权也会作废。"))) return;
     setBusy(true);
     setError("");
     setNotice("");
     try {
       const count = await api.disableAllAi();
-      setNotice(`已关闭 AI，停用 ${count} 个站点`);
+      setNotice(t("已关闭 AI，停用 {0} 个站点", [count]));
       await refresh();
     } catch (caught) {
       setError(describeError(caught));
@@ -369,13 +370,13 @@ export default function AiPanel() {
   }, [refresh]);
 
   const clearCache = useCallback(async () => {
-    if (!window.confirm("确定清空 AI 缓存吗？清空后翻译和摘要会重新请求模型。")) return;
+    if (!window.confirm(t("确定清空 AI 缓存吗？清空后翻译和摘要会重新请求模型。"))) return;
     setBusy(true);
     setError("");
     setNotice("");
     try {
       const count = await api.clearAiCache();
-      setNotice(`已清空 ${count} 条 AI 缓存`);
+      setNotice(t("已清空 {0} 条 AI 缓存", [count]));
       await refresh();
     } catch (caught) {
       setError(describeError(caught));
@@ -388,29 +389,26 @@ export default function AiPanel() {
     <section className="panel ai-panel" aria-busy={loading || busy}>
       <div className="panel-head">
         <div>
-          <h2>AI 与翻译</h2>
+          <h2>{t("AI 与翻译")}</h2>
           <p className="hint">
-            默认关闭。Key 只进系统保险箱；非本机地址必须用 HTTPS。每次真正外发前都会弹窗确认域名、模型和是否本地。
-          </p>
+            {t("默认关闭。Key 只进系统保险箱；非本机地址必须用 HTTPS。每次真正外发前都会弹窗确认域名、模型和是否本地。")}</p>
         </div>
         <div className="ai-panel-actions">
           <button type="button" className="danger" onClick={() => void disableAll()} disabled={busy}>
-            一键关闭 AI
-          </button>
+            {t("一键关闭 AI")}</button>
           <button type="button" onClick={() => void clearCache()} disabled={busy}>
-            清空缓存
-          </button>
+            {t("清空缓存")}</button>
         </div>
       </div>
 
-      {loading && <p className="hint" role="status">正在读取 AI 设置……</p>}
-      {error && <p className="error" role="alert">操作失败：{error}</p>}
+      {loading && <p className="hint" role="status">{t("正在读取 AI 设置……")}</p>}
+      {error && <p className="error" role="alert">{t("操作失败：")}{error}</p>}
       {notice && <p className="notice" role="status">{notice}</p>}
 
-      <h3>AI 站点</h3>
+      <h3>{t("AI 站点")}</h3>
       <div className="ai-provider-list">
         {providers.length === 0 && !loading && (
-          <p className="hint">还没有站点。添加一个后，AI 功能才会出现可用状态。</p>
+          <p className="hint">{t("还没有站点。添加一个后，AI 功能才会出现可用状态。")}</p>
         )}
         {providers.map((provider) => (
           <article key={provider.id} className="ai-provider-card">
@@ -418,30 +416,26 @@ export default function AiPanel() {
               <div className="ai-provider-title">
                 <strong>{provider.label}</strong>
                 <span className={provider.enabled ? "tag ai-enabled" : "tag"}>
-                  {provider.enabled ? "已启用" : "已停用"}
+                  {provider.enabled ? t("已启用") : t("已停用")}
                 </span>
-                <span className="tag">{KIND_LABEL[provider.kind] ?? provider.kind}</span>
-                <span className="tag">{provider.hasKey ? "已有密钥" : "无密钥"}</span>
+                <span className="tag">{t(KIND_LABEL[provider.kind] ?? provider.kind)}</span>
+                <span className="tag">{provider.hasKey ? t("已有密钥") : t("无密钥")}</span>
               </div>
-              <div className="card-sub">地址：{provider.baseUrl}</div>
+              <div className="card-sub">{t("地址：")}{provider.baseUrl}</div>
               <div className="card-sub">
-                默认模型：{provider.defaultModel || "未填写"}；思考程度：
-                {THINKING_LABEL[provider.thinkingLevel]}
+                {t("默认模型：")}{provider.defaultModel || t("未填写")}{t("；思考程度：")}{t(THINKING_LABEL[provider.thinkingLevel], undefined, "ai")}
               </div>
               <div className="card-sub">
-                模型：{provider.models.length > 0 ? provider.models.join("、") : "未拉取，可手工填写"}
+                {t("模型：")}{provider.models.length > 0 ? provider.models.join(t("、")) : t("未拉取，可手工填写")}
               </div>
             </div>
             <div className="card-actions">
               <button type="button" onClick={() => startEdit(provider)} disabled={busy}>
-                编辑
-              </button>
+                {t("编辑")}</button>
               <button type="button" onClick={() => void refreshModels(provider.id)} disabled={busy}>
-                拉取模型
-              </button>
+                {t("拉取模型")}</button>
               <button type="button" className="danger" onClick={() => void removeProvider(provider)} disabled={busy}>
-                删除
-              </button>
+                {t("删除")}</button>
             </div>
           </article>
         ))}
@@ -449,18 +443,16 @@ export default function AiPanel() {
 
       {!editing && (
         <button type="button" className="ai-add-provider" onClick={startCreate} disabled={busy}>
-          新增 AI 站点
-        </button>
+          {t("新增 AI 站点")}</button>
       )}
 
       {editing && (
         <div className="form ai-provider-form">
-          <h3>{editing.id === undefined ? "新增 AI 站点" : "编辑 AI 站点"}</h3>
+          <h3>{editing.id === undefined ? t("新增 AI 站点") : t("编辑 AI 站点")}</h3>
           <div className="field-row">
             <label>
-              站点名称
-              <input
-                aria-label="AI 站点名称"
+              {t("站点名称")}<input
+                aria-label={t("AI 站点名称")}
                 value={editing.label}
                 onChange={(event) =>
                   setEditing((old) => (old ? { ...old, label: event.target.value } : old))
@@ -468,9 +460,8 @@ export default function AiPanel() {
               />
             </label>
             <label>
-              站点类型
-              <select
-                aria-label="AI 站点类型"
+              {t("站点类型")}<select
+                aria-label={t("AI 站点类型")}
                 value={editing.kind}
                 onChange={(event) =>
                   setEditing((old) =>
@@ -478,18 +469,17 @@ export default function AiPanel() {
                   )
                 }
               >
-                <option value="openai_compatible">OpenAI 兼容站点</option>
+                <option value="openai_compatible">{t("OpenAI 兼容站点")}</option>
                 <option value="deepl">DeepL</option>
-                <option value="ollama">本机 Ollama</option>
+                <option value="ollama">{t("本机 Ollama")}</option>
               </select>
             </label>
           </div>
           <label className="secret-field">
-            站点地址
-            <input
-              aria-label="AI 站点地址"
+            {t("站点地址")}<input
+              aria-label={t("AI 站点地址")}
               value={editing.baseUrl}
-              placeholder="例如 https://api.example.com/v1，本机 Ollama 可填 http://127.0.0.1:11434"
+              placeholder={t("例如 https://api.example.com/v1，本机 Ollama 可填 http://127.0.0.1:11434")}
               onChange={(event) =>
                 setEditing((old) => (old ? { ...old, baseUrl: event.target.value } : old))
               }
@@ -503,14 +493,14 @@ export default function AiPanel() {
                 aria-label="CDKey / API Key"
                 autoComplete="off"
                 value={apiKey}
-                placeholder={editing.id === undefined ? "新建时填写" : "留空沿用已存密钥，输入后替换"}
+                placeholder={editing.id === undefined ? t("新建时填写") : t("留空沿用已存密钥，输入后替换")}
                 onChange={(event) => setApiKey(event.target.value)}
               />
               <button
                 type="button"
                 className="secret-toggle"
-                aria-label={showApiKey ? "隐藏密钥" : "显示密钥"}
-                title={showApiKey ? "隐藏密钥" : "显示密钥"}
+                aria-label={showApiKey ? t("隐藏密钥") : t("显示密钥")}
+                title={showApiKey ? t("隐藏密钥") : t("显示密钥")}
                 aria-pressed={showApiKey}
                 onClick={() => setShowApiKey((old) => !old)}
               >
@@ -520,20 +510,18 @@ export default function AiPanel() {
           </label>
           <div className="field-row">
             <label>
-              默认模型
-              <input
-                aria-label="默认模型"
+              {t("默认模型")}<input
+                aria-label={t("默认模型")}
                 value={editing.defaultModel}
-                placeholder="不填写就使用功能级模型"
+                placeholder={t("不填写就使用功能级模型")}
                 onChange={(event) =>
                   setEditing((old) => (old ? { ...old, defaultModel: event.target.value } : old))
                 }
               />
             </label>
             <label>
-              默认思考程度
-              <select
-                aria-label="默认思考程度"
+              {t("默认思考程度")}<select
+                aria-label={t("默认思考程度")}
                 value={editing.thinkingLevel}
                 onChange={(event) =>
                   setEditing((old) =>
@@ -543,16 +531,15 @@ export default function AiPanel() {
               >
                 {THINKING_ORDER.map((level) => (
                   <option key={level} value={level}>
-                    {THINKING_LABEL[level]}
+                    {t(THINKING_LABEL[level], undefined, "ai")}
                   </option>
                 ))}
               </select>
             </label>
           </div>
           <label className="secret-field">
-            模型列表（每行一个，也可手工填写）
-            <textarea
-              aria-label="模型列表"
+            {t("模型列表（每行一个，也可手工填写）")}<textarea
+              aria-label={t("模型列表")}
               rows={4}
               value={editing.modelsText}
               onChange={(event) =>
@@ -568,36 +555,31 @@ export default function AiPanel() {
                 setEditing((old) => (old ? { ...old, enabled: event.target.checked } : old))
               }
             />
-            启用这个站点
-          </label>
+            {t("启用这个站点")}</label>
           {modelsHint && <p className="hint" role="status">{modelsHint}</p>}
           <div className="form-actions">
             <button type="button" className="primary" onClick={() => void saveProvider()} disabled={busy}>
-              保存
-            </button>
+              {t("保存")}</button>
             <button type="button" onClick={() => void testDraft()} disabled={busy}>
-              测试连接并拉取模型
-            </button>
+              {t("测试连接并拉取模型")}</button>
             <button type="button" onClick={() => setEditing(undefined)} disabled={busy}>
-              取消
-            </button>
+              {t("取消")}</button>
           </div>
         </div>
       )}
 
-      <h3>功能级模型与思考程度</h3>
-      <p className="hint">没有单独指定时回退到站点默认模型；思考程度不支持时后端会自动降级并在结果里标注。</p>
+      <h3>{t("功能级模型与思考程度")}</h3>
+      <p className="hint">{t("没有单独指定时回退到站点默认模型；思考程度不支持时后端会自动降级并在结果里标注。")}</p>
       <div className="ai-feature-list">
         {FUNCTION_ORDER.map((fn) => {
           const draft = featureDrafts[fn] ?? { providerId: "", model: "", thinkingLevel: "" };
           const selected = providers.find((provider) => String(provider.id) === draft.providerId);
           return (
             <section key={fn} className="ai-feature-card">
-              <h4>{FUNCTION_LABEL[fn]}</h4>
+              <h4>{t(FUNCTION_LABEL[fn])}</h4>
               <label className="secret-field">
-                站点
-                <select
-                  aria-label={`${FUNCTION_LABEL[fn]}站点`}
+                {t("站点")}<select
+                  aria-label={t("{0}站点", [t(FUNCTION_LABEL[fn])])}
                   value={draft.providerId}
                   onChange={(event) =>
                     setFeatureDrafts((old) => ({
@@ -606,21 +588,20 @@ export default function AiPanel() {
                     }))
                   }
                 >
-                  <option value="">自动选择第一个启用站点</option>
+                  <option value="">{t("自动选择第一个启用站点")}</option>
                   {providers.map((provider) => (
                     <option key={provider.id} value={provider.id}>
-                      {provider.label}{provider.enabled ? "" : "（已停用）"}
+                      {provider.label}{provider.enabled ? "" : t("（已停用）")}
                     </option>
                   ))}
                 </select>
               </label>
               <label className="secret-field">
-                模型
-                <input
-                  aria-label={`${FUNCTION_LABEL[fn]}模型`}
+                {t("模型")}<input
+                  aria-label={t("{0}模型", [t(FUNCTION_LABEL[fn])])}
                   list={`ai-models-${fn}`}
                   value={draft.model}
-                  placeholder={selected?.defaultModel || "留空回退站点默认模型"}
+                  placeholder={selected?.defaultModel || t("留空回退站点默认模型")}
                   onChange={(event) =>
                     setFeatureDrafts((old) => ({ ...old, [fn]: { ...draft, model: event.target.value } }))
                   }
@@ -632,9 +613,8 @@ export default function AiPanel() {
                 ))}
               </datalist>
               <label className="secret-field">
-                思考程度
-                <select
-                  aria-label={`${FUNCTION_LABEL[fn]}思考程度`}
+                {t("思考程度")}<select
+                  aria-label={t("{0}思考程度", [t(FUNCTION_LABEL[fn])])}
                   value={draft.thinkingLevel}
                   onChange={(event) =>
                     setFeatureDrafts((old) => ({
@@ -646,54 +626,52 @@ export default function AiPanel() {
                     }))
                   }
                 >
-                  <option value="">回退站点默认</option>
+                  <option value="">{t("回退站点默认")}</option>
                   {THINKING_ORDER.map((level) => (
                     <option key={level} value={level}>
-                      {THINKING_LABEL[level]}
+                      {t(THINKING_LABEL[level], undefined, "ai")}
                     </option>
                   ))}
                 </select>
               </label>
               <div className="form-actions">
                 <button type="button" onClick={() => void saveFeature(fn)} disabled={busy}>
-                  保存设置
-                </button>
+                  {t("保存设置")}</button>
                 <button type="button" onClick={() => void clearFeature(fn)} disabled={busy}>
-                  恢复默认
-                </button>
+                  {t("恢复默认")}</button>
               </div>
             </section>
           );
         })}
       </div>
 
-      <h3>AI 调用审计</h3>
-      <p className="hint">只记录时间、功能、站点、模型、是否外发和结果，不记录邮件正文或密钥。</p>
+      <h3>{t("AI 调用审计")}</h3>
+      <p className="hint">{t("只记录时间、功能、站点、模型、是否外发和结果，不记录邮件正文或密钥。")}</p>
       {audits.length === 0 ? (
-        <p className="hint">还没有 AI 调用记录。</p>
+        <p className="hint">{t("还没有 AI 调用记录。")}</p>
       ) : (
         <div className="ai-audit-wrap">
           <table className="ai-audit">
             <thead>
               <tr>
-                <th>时间</th>
-                <th>功能</th>
-                <th>站点</th>
-                <th>模型</th>
-                <th>目标域名</th>
-                <th>是否本地</th>
-                <th>结果</th>
+                <th>{t("时间")}</th>
+                <th>{t("功能")}</th>
+                <th>{t("站点")}</th>
+                <th>{t("模型")}</th>
+                <th>{t("目标域名")}</th>
+                <th>{t("是否本地")}</th>
+                <th>{t("结果")}</th>
               </tr>
             </thead>
             <tbody>
               {audits.map((audit) => (
                 <tr key={audit.id}>
                   <td>{audit.createdAt}</td>
-                  <td>{FUNCTION_LABEL[audit.function as AiFunction] ?? audit.function}</td>
+                  <td>{t(FUNCTION_LABEL[audit.function as AiFunction] ?? audit.function)}</td>
                   <td>{audit.providerLabel}</td>
                   <td>{audit.model}</td>
                   <td>{audit.targetHost}</td>
-                  <td>{audit.local ? "本地" : "外发"}</td>
+                  <td>{audit.local ? t("本地") : t("外发")}</td>
                   <td>{audit.outcome}</td>
                 </tr>
               ))}

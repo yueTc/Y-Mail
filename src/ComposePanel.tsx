@@ -41,6 +41,7 @@ import {
 import { htmlForEditor, htmlForSending, type ResolvedInlineImage } from "./composeRichText";
 import { subscribeFileDrop } from "./fileDrop";
 import RichTextEditor from "./RichTextEditor";
+import { t } from "./i18n";
 
 
 /** 一次发送最多调用几轮发送命令：1 次首发 + 2 次重试。 */
@@ -211,7 +212,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
   const attachmentsRef = useRef<ComposeAttachment[]>([]);
   const paneRef = useRef<HTMLElement | null>(null);
 
-  const title = request.kind === "reply" ? "回复" : request.kind === "forward" ? "转发" : "写邮件";
+  const title = request.kind === "reply" ? t("回复") : request.kind === "forward" ? t("转发") : t("写邮件");
 
   /** 读取某个账号的发件箱最近记录。 */
   const refreshOutbox = useCallback(
@@ -517,7 +518,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
 
   /** 保存草稿，返回发件队列编号。 */
   const saveDraft = useCallback(async (): Promise<number> => {
-    if (!draftPayload) throw new Error("请先选择发信账号");
+    if (!draftPayload) throw new Error(t("请先选择发信账号"));
     const id = await api.saveDraft(draftPayload);
     setOutboxId(id);
     return id;
@@ -531,7 +532,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
     try {
       const id = await saveDraft();
       await refreshOutbox();
-      setStatusText(`草稿已保存（编号 ${id}）`);
+      setStatusText(t("草稿已保存（编号 {0}）", [id]));
     } catch (caught) {
       setError(describeError(caught));
     } finally {
@@ -563,15 +564,15 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
           // 本地存储不可用时忽略。
         }
         setRestoredFromBackup(false);
-        setStatusText("已发送");
+        setStatusText(t("已发送"));
         onSent?.();
         return;
       }
       const item = await api.getOutbox(id);
       setStatusText(
         lastErrors.length > 0
-          ? lastErrors.join("；")
-          : item?.lastError ?? "发送失败，草稿已保留，可稍后重试",
+          ? lastErrors.join(t("；"))
+          : item?.lastError ?? t("发送失败，草稿已保留，可稍后重试"),
       );
     },
     [refreshOutbox, onSent],
@@ -583,7 +584,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
     sendGuard.current = true;
     setBusy(true);
     setError("");
-    setStatusText("正在发送……");
+    setStatusText(t("正在发送……"));
     try {
       const id = await saveDraft();
       await api.enqueueOutbox(id);
@@ -629,7 +630,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
       if (aiBusy) return;
       const source = action === "polish" ? bodyText.trim() : aiInstruction.trim();
       if (source === "") {
-        setAiError(action === "polish" ? "请先写正文再润色" : "请先写一句起草要求");
+        setAiError(action === "polish" ? t("请先写正文再润色") : t("请先写一句起草要求"));
         return;
       }
       setAiBusy(true);
@@ -688,7 +689,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
     try {
       const next = await api.saveSignature(accountId, signatureDraft, signatureOn);
       setSignature(next);
-      setStatusText("签名已保存");
+      setStatusText(t("签名已保存"));
     } catch (caught) {
       setError(describeError(caught));
     }
@@ -708,17 +709,17 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
     }
     setStatusText(
       skipped === 0
-        ? `已添加 ${added} 个附件`
+        ? t("已添加 {0} 个附件", [added])
         : added === 0
-          ? `这 ${skipped} 个附件已经在列表里`
-          : `已添加 ${added} 个附件，跳过 ${skipped} 个重复项`,
+          ? t("这 {0} 个附件已经在列表里", [skipped])
+          : t("已添加 {0} 个附件，跳过 {1} 个重复项", [added, skipped]),
     );
   }, []);
 
   /** 走系统资源管理器选文件；选完把绝对路径加进附件列表。 */
   const chooseAttachments = useCallback(async () => {
     try {
-      const chosen = await open({ multiple: true, title: "选择附件" });
+      const chosen = await open({ multiple: true, title: t("选择附件") });
       if (!chosen) return;
       addAttachmentPaths(Array.isArray(chosen) ? chosen : [chosen]);
     } catch (caught) {
@@ -800,15 +801,14 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
   }, [clearBackup, onClose]);
 
   return (
-    <section className="compose-pane" aria-label="写信窗格" ref={paneRef}>
+    <section className="compose-pane" aria-label={t("写信窗格")} ref={paneRef}>
       <header className="compose-head">
         <h3>
           {title}
-          {restoredFromBackup && <span className="compose-draft-badge">草稿</span>}
+          {restoredFromBackup && <span className="compose-draft-badge">{t("草稿")}</span>}
         </h3>
         <button type="button" onClick={handleCloseRequest} disabled={busy}>
-          关闭
-        </button>
+          {t("关闭")}</button>
       </header>
 
       {closePromptOpen && (
@@ -817,10 +817,10 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
             className="ai-modal"
             role="dialog"
             aria-modal="true"
-            aria-label="关闭写信窗格"
+            aria-label={t("关闭写信窗格")}
           >
-            <h3>还有内容没保存</h3>
-            <p>直接关闭会丢掉没保存的内容，要先存成草稿吗？</p>
+            <h3>{t("还有内容没保存")}</h3>
+            <p>{t("直接关闭会丢掉没保存的内容，要先存成草稿吗？")}</p>
             <div className="form-actions">
               <button
                 type="button"
@@ -828,14 +828,11 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
                 onClick={() => void confirmSaveAndClose()}
                 disabled={busy}
               >
-                保存草稿
-              </button>
+                {t("保存草稿")}</button>
               <button type="button" onClick={confirmDiscardAndClose} disabled={busy}>
-                放弃修改
-              </button>
+                {t("放弃修改")}</button>
               <button type="button" onClick={() => setClosePromptOpen(false)} disabled={busy}>
-                取消关闭
-              </button>
+                {t("取消关闭")}</button>
             </div>
           </section>
         </div>
@@ -852,18 +849,18 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
           onConfirm={() => void confirmAi()}
         />
       )}
-      {loading && <p className="hint">正在准备内容……</p>}
-      {error && <p className="error">操作失败：{error}</p>}
+      {loading && <p className="hint">{t("正在准备内容……")}</p>}
+      {error && <p className="error">{t("操作失败：")}{error}</p>}
 
       <div className="compose-form">
         <label className="compose-field">
-          <span>发信账号</span>
+          <span>{t("发信账号")}</span>
           <select
-            aria-label="发信账号"
+            aria-label={t("发信账号")}
             value={accountId ?? ""}
             onChange={(event) => setAccountId(Number(event.target.value))}
           >
-            <option value="">请选择账号</option>
+            <option value="">{t("请选择账号")}</option>
             {accounts.map((account) => (
               <option key={account.accountId} value={account.accountId}>
                 {account.displayName || account.email}
@@ -873,16 +870,16 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
         </label>
 
         <label className="compose-field">
-          <span>收件人</span>
+          <span>{t("收件人")}</span>
           <input
-            aria-label="收件人"
+            aria-label={t("收件人")}
             value={toText}
-            placeholder="名字 <a@b.com>，多个用逗号分开"
+            placeholder={t("名字 <a@b.com>，多个用逗号分开")}
             onChange={(event) => setToText(event.target.value)}
           />
         </label>
         {suggestions.length > 0 && (
-          <ul className="compose-suggestions" aria-label="联系人建议">
+          <ul className="compose-suggestions" aria-label={t("联系人建议")}>
             {suggestions.map((contact) => (
               <li key={contact.id}>
                 <button type="button" onClick={() => chooseSuggestion(contact)}>
@@ -895,18 +892,18 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
         )}
 
         <label className="compose-field">
-          <span>抄送</span>
-          <input aria-label="抄送" value={ccText} onChange={(event) => setCcText(event.target.value)} />
+          <span>{t("抄送")}</span>
+          <input aria-label={t("抄送")} value={ccText} onChange={(event) => setCcText(event.target.value)} />
         </label>
 
         <label className="compose-field">
-          <span>密送</span>
-          <input aria-label="密送" value={bccText} onChange={(event) => setBccText(event.target.value)} />
+          <span>{t("密送")}</span>
+          <input aria-label={t("密送")} value={bccText} onChange={(event) => setBccText(event.target.value)} />
         </label>
 
         <label className="compose-field">
-          <span>主题</span>
-          <input aria-label="主题" value={subject} onChange={(event) => setSubject(event.target.value)} />
+          <span>{t("主题", undefined, "subject")}</span>
+          <input aria-label={t("主题", undefined, "subject")} value={subject} onChange={(event) => setSubject(event.target.value)} />
         </label>
 
         <div className="compose-ai">
@@ -915,16 +912,15 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
               type="button"
               disabled={!aiEnabled || aiBusy}
               onClick={() => void previewAi("polish")}
-              title={aiEnabled ? "润色正文" : "需先在设置里启用 AI 站点"}
+              title={aiEnabled ? t("润色正文") : t("需先在设置里启用 AI 站点")}
             >
-              {aiBusy && aiAction === "polish" ? "润色中……" : aiEnabled ? "AI 润色" : "AI 润色（需启用）"}
+              {aiBusy && aiAction === "polish" ? t("润色中……") : aiEnabled ? t("AI 润色") : t("AI 润色（需启用）")}
             </button>
             <label>
-              起草要求
-              <input
-                aria-label="起草要求"
+              {t("起草要求")}<input
+                aria-label={t("起草要求")}
                 value={aiInstruction}
-                placeholder="例如：写一封礼貌的项目进度询问邮件"
+                placeholder={t("例如：写一封礼貌的项目进度询问邮件")}
                 onChange={(event) => setAiInstruction(event.target.value)}
                 disabled={!aiEnabled}
               />
@@ -933,17 +929,17 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
               type="button"
               disabled={!aiEnabled || aiBusy}
               onClick={() => void previewAi("draft")}
-              title={aiEnabled ? "按起草要求生成内容" : "需先在设置里启用 AI 站点"}
+              title={aiEnabled ? t("按起草要求生成内容") : t("需先在设置里启用 AI 站点")}
             >
-              {aiBusy && aiAction === "draft" ? "起草中……" : aiEnabled ? "AI 起草" : "AI 起草（需启用）"}
+              {aiBusy && aiAction === "draft" ? t("起草中……") : aiEnabled ? t("AI 起草") : t("AI 起草（需启用）")}
             </button>
           </div>
-          {aiDowngraded && <p className="hint">该模型不支持所选思考程度，已按默认调用。</p>}
-          {aiError && <p className="error">AI 操作失败：{aiError}</p>}
+          {aiDowngraded && <p className="hint">{t("该模型不支持所选思考程度，已按默认调用。")}</p>}
+          {aiError && <p className="error">{t("AI 操作失败：")}{aiError}</p>}
         </div>
 
         <div className="compose-field compose-body">
-          <span>正文</span>
+          <span>{t("正文")}</span>
           <RichTextEditor
             value={bodyHtml}
             onChange={(html, text) => {
@@ -967,18 +963,16 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
               checked={signatureOn}
               onChange={(event) => setSignatureOn(event.target.checked)}
             />
-            附加签名
-          </label>
+            {t("附加签名")}</label>
           <textarea
-            aria-label="签名内容"
+            aria-label={t("签名内容")}
             rows={3}
             value={signatureDraft}
-            placeholder="这个账号的签名，支持简单 HTML"
+            placeholder={t("这个账号的签名，支持简单 HTML")}
             onChange={(event) => setSignatureDraft(event.target.value)}
           />
           <button type="button" onClick={() => void handleSaveSignature()}>
-            保存签名
-          </button>
+            {t("保存签名")}</button>
         </div>
 
 
@@ -986,30 +980,27 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
 
       <footer className="compose-actions">
         <button type="button" onClick={() => void handleSaveDraft()} disabled={busy}>
-          存草稿
-        </button>
+          {t("存草稿")}</button>
         <button type="button" className="primary" onClick={() => void handleSend()} disabled={busy}>
-          发送
-        </button>
+          {t("发送")}</button>
         {statusText && <span className="compose-status">{statusText}</span>}
       </footer>
 
       <section className="compose-outbox">
-        <h4>发件箱（最近）</h4>
-        {outbox.length === 0 && <p className="hint">这里暂时没有记录。</p>}
+        <h4>{t("发件箱（最近）")}</h4>
+        {outbox.length === 0 && <p className="hint">{t("这里暂时没有记录。")}</p>}
         <ul>
           {outbox.map((item) => (
             <li key={item.id} className={`compose-outbox-item state-${item.state}`}>
-              <span className="compose-outbox-subject">{item.subject || "（无主题）"}</span>
+              <span className="compose-outbox-subject">{item.subject || t("（无主题）")}</span>
               <span className="compose-outbox-state">
-                {STATE_LABEL[item.state] ?? item.state}
-                {item.attempts > 0 ? `（已尝试 ${item.attempts} 次）` : ""}
+                {t(STATE_LABEL[item.state] ?? item.state)}
+                {item.attempts > 0 ? t("（已尝试 {0} 次）", [item.attempts]) : ""}
               </span>
               {item.lastError && <span className="compose-outbox-error">{item.lastError}</span>}
               {item.state === "failed" && (
                 <button type="button" disabled={busy} onClick={() => void handleRetry(item.id)}>
-                  重试
-                </button>
+                  {t("重试")}</button>
               )}
             </li>
           ))}

@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 type RestartChoiceDialogProps = {
   /** 正在回调重启命令时禁用按钮，避免连点。 */
   busy: boolean;
@@ -27,14 +28,11 @@ export default function RestartChoiceDialog({
         aria-labelledby="restart-choice-title"
         aria-describedby="restart-choice-desc"
       >
-        <h2 id="restart-choice-title">数据目录已经切换</h2>
+        <h2 id="restart-choice-title">{t("数据目录已经切换")}</h2>
         <p id="restart-choice-desc">
-          需要重启应用后才会使用新目录。重启时当前所有窗口都会关闭。
-        </p>
+          {t("需要重启应用后才会使用新目录。重启时当前所有窗口都会关闭。")}</p>
         <p className="hint">
-          是否清理旧数据目录里的邮件数据？旧目录里的 settings.json 会保留，
-          只清数据库、日志、下载、配图和备份。
-        </p>
+          {t("是否清理旧数据目录里的邮件数据？旧目录里的 settings.json 会保留， 只清数据库、日志、下载、配图和备份。")}</p>
         {error !== null && <p className="first-run-error">{error}</p>}
         <div className="actions">
           <button
@@ -43,11 +41,9 @@ export default function RestartChoiceDialog({
             onClick={() => onChoose(true)}
             disabled={busy}
           >
-            清理并重启
-          </button>
+            {t("清理并重启")}</button>
           <button type="button" onClick={() => onChoose(false)} disabled={busy}>
-            直接重启（不清理旧文件）
-          </button>
+            {t("直接重启（不清理旧文件）")}</button>
         </div>
       </div>
     </div>

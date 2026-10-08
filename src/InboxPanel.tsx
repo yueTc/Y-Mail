@@ -40,6 +40,7 @@ import {
   RESIZER_WIDTH,
   usePaneWidths,
 } from "./usePaneWidths";
+import { t } from "./i18n";
 
 /** 每页条数；外壳上限是 500。 */
 const PAGE_SIZE = 200;
@@ -86,7 +87,8 @@ const FOLDER_KIND_LABEL: Record<string, string> = {
 export function folderLabel(folder: InboxFolder): string {
   const path = folder.fullPath.trim();
   if (path && path.toUpperCase() !== "INBOX") return path;
-  return FOLDER_KIND_LABEL[folder.kind] ?? path;
+  const kindLabel = FOLDER_KIND_LABEL[folder.kind];
+  return kindLabel === undefined ? path : t(kindLabel);
 }
 
 /**
@@ -157,10 +159,10 @@ export function inboxEmptyHint(options: {
   flaggedView: boolean;
   hasAccounts: boolean;
 }): string {
-  if (options.searchMode) return "没有找到匹配的邮件。";
-  if (options.flaggedView) return "还没有标红的邮件。在列表里点星星就能标红。";
-  if (!options.hasAccounts) return "这里还没有邮件。先在「账号与代理」里配置账号并同步。";
-  return "这里还没有邮件。";
+  if (options.searchMode) return t("没有找到匹配的邮件。");
+  if (options.flaggedView) return t("还没有标红的邮件。在列表里点星星就能标红。");
+  if (!options.hasAccounts) return t("这里还没有邮件。先在「账号与代理」里配置账号并同步。");
+  return t("这里还没有邮件。");
 }
 
 /** 同步状态里挑“最需要注意”的一个，用于统一收件箱的聚合徽标。 */
@@ -183,11 +185,11 @@ export function worstSyncStatus(list: SyncStatus[]): SyncStatus | undefined {
 
 /** 同步徽标的人话说明；鼠标悬停或键盘聚焦时可见。 */
 export function syncBadgeTitle(status: SyncStatus): string {
-  const parts = [`账号 ${status.email}`, `状态 ${status.stateLabel}`];
-  if (status.total > 0) parts.push(`进度 ${status.progress}/${status.total}`);
-  else if (status.progress > 0) parts.push(`已处理 ${status.progress} 封`);
+  const parts = [t("账号 {0}", [status.email]), t("状态 {0}", [status.stateLabel])];
+  if (status.total > 0) parts.push(t("进度 {0}/{1}", [status.progress, status.total]));
+  else if (status.progress > 0) parts.push(t("已处理 {0} 封", [status.progress]));
   if (status.message) parts.push(status.message);
-  return parts.join("；");
+  return parts.join(t("；"));
 }
 
 /** 同步徽标的状态配色类名。 */
@@ -237,7 +239,7 @@ export function formatListTime(iso: string, now: Date = new Date()): string {
     const mm = String(date.getMinutes()).padStart(2, "0");
     return `${hh}:${mm}`;
   }
-  if (dayDiff === 1) return "昨天";
+  if (dayDiff === 1) return t("昨天");
   const mm = String(date.getMonth() + 1).padStart(2, "0");
   const dd = String(date.getDate()).padStart(2, "0");
   return `${mm}-${dd}`;
@@ -357,9 +359,9 @@ function MessageRow({
           <span className="inbox-row-time">{formatListTime(message.dateUtc)}</span>
         </div>
         <div className="inbox-row-bottom">
-          <span className="inbox-row-subject">{message.subject || "（无主题）"}</span>
+          <span className="inbox-row-subject">{message.subject || t("（无主题）")}</span>
           <span className="inbox-row-marks">
-            {message.hasAttachments && <span title="有附件">📎</span>}
+            {message.hasAttachments && <span title={t("有附件")}>📎</span>}
             {onToggleFlag && (
               <FlagButton flagged={message.isFlagged} onToggle={() => onToggleFlag(message)} />
             )}
@@ -367,7 +369,7 @@ function MessageRow({
         </div>
         {child && (
           <div className="inbox-row-sub">
-            来自 {message.accountName || message.accountEmail}
+                         {t("来自 ")}{message.accountName || message.accountEmail}
           </div>
         )}
       </div>
@@ -405,9 +407,9 @@ function SearchResultRow({
           <span className="inbox-row-time">{formatListTime(message.dateUtc)}</span>
         </div>
         <div className="inbox-row-bottom">
-          <span className="inbox-row-subject">{message.subject || "（无主题）"}</span>
+          <span className="inbox-row-subject">{message.subject || t("（无主题）")}</span>
           <span className="inbox-row-marks">
-            {message.hasAttachments && <span title="有附件">📎</span>}
+            {message.hasAttachments && <span title={t("有附件")}>📎</span>}
             {onToggleFlag && (
               <FlagButton flagged={message.isFlagged} onToggle={() => onToggleFlag(message)} />
             )}
@@ -454,16 +456,16 @@ function ThreadRow({
         </div>
         <div className="inbox-row-bottom">
           <span className="inbox-row-subject">
-            {latest.subject || "（无主题）"}
+            {latest.subject || t("（无主题）")}
             <span className="thread-count">{thread.messageCount}</span>
           </span>
           <span className="inbox-row-marks">
             {thread.unreadCount > 0 && (
-              <span className="unread-badge" title={`未读 ${thread.unreadCount} 封`}>
+              <span className="unread-badge" title={t("未读 {0} 封", [thread.unreadCount])}>
                 {thread.unreadCount}
               </span>
             )}
-            {latest.hasAttachments && <span title="有附件">📎</span>}
+            {latest.hasAttachments && <span title={t("有附件")}>📎</span>}
             {onToggleFlag && (
               <FlagButton flagged={latest.isFlagged} onToggle={() => onToggleFlag(latest)} />
             )}
@@ -716,9 +718,9 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
         setSearchTotal(page.total);
         setSearchNote(
           page.deepSynced
-            ? "已联网补拉一批历史"
+            ? t("已联网补拉一批历史")
             : page.deepError
-              ? `补拉历史失败：${page.deepError}`
+              ? t("补拉历史失败：{0}", [page.deepError])
               : "",
         );
       } catch (caught) {
@@ -843,10 +845,10 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
         await api.setMessageRead(message.id, true);
         await refreshSidebar();
         await load(true);
-        if (unreadOnly) setStatusNote("已标为已读，已移出「只看未读」列表");
+        if (unreadOnly) setStatusNote(t("已标为已读，已移出「只看未读」列表"));
       } catch (caught) {
         setSelectedMessage(message);
-        setError(`标记已读失败：${describeError(caught)}`);
+        setError(t("标记已读失败：{0}", [describeError(caught)]));
         await load(true);
       }
     },
@@ -893,20 +895,20 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
         if (!result.synced) {
           setStatusNote(
             next
-              ? "已在本机标红，服务器同步失败，稍后会自动重试"
-              : "已在本机取消标红，服务器同步失败，稍后会自动重试",
+              ? t("已在本机标红，服务器同步失败，稍后会自动重试")
+              : t("已在本机取消标红，服务器同步失败，稍后会自动重试"),
           );
         }
         // 红旗视图里取消标红，这一行就该走人，和「只看未读」一个道理。
         if (effectiveFlagged && !next) {
           setMessages((old) => old.filter((item) => item.id !== message.id));
           setTotal((old) => Math.max(0, old - 1));
-          if (result.synced) setStatusNote("已取消标红，已移出「红旗邮件」");
+          if (result.synced) setStatusNote(t("已取消标红，已移出「红旗邮件」"));
         }
       } catch (caught) {
         // 本地都没写成功：回滚到点击前的状态，别让界面骗人。
         applyMessageFlag(message.id, message.isFlagged);
-        setStatusNote(`切换红旗失败：${describeError(caught)}`);
+        setStatusNote(t("切换红旗失败：{0}", [describeError(caught)]));
       }
     },
     [applyMessageFlag, effectiveFlagged],
@@ -1022,7 +1024,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
                 setUnifiedView(view.id);
               }}
             >
-              <span className="sidebar-item-title">{view.label}</span>
+              <span className="sidebar-item-title">{t(view.label)}</span>
               {badge > 0 && <span className="unread-badge">{badge}</span>}
             </button>
           );
@@ -1074,14 +1076,14 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
                           ? "sidebar-item sidebar-folder active"
                           : "sidebar-item sidebar-folder"
                       }
-                      title="这个账号里所有标红的邮件"
+                      title={t("这个账号里所有标红的邮件")}
                       onClick={() => {
                         setSelectedAccount(account.accountId);
                         setSelectedFolder(undefined);
                         setFlaggedView(true);
                       }}
                     >
-                      <span className="sidebar-item-title">红旗邮件</span>
+                      <span className="sidebar-item-title">{t("红旗邮件")}</span>
                     </button>
                   ) : (
                     <button
@@ -1114,12 +1116,12 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
           className="sidebar-item sidebar-add-account"
           onClick={() => setAddAccountOpen(true)}
         >
-          <span className="sidebar-item-title">＋ 添加邮箱</span>
+          <span className="sidebar-item-title">{t("＋ 添加邮箱")}</span>
         </button>
       </aside>
 
       <PaneResizer
-        label="邮箱栏宽度"
+        label={t("邮箱栏宽度")}
         value={widths.sidebar}
         min={paneLimits.sidebar.min}
         max={paneLimits.sidebar.max}
@@ -1135,8 +1137,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
             className="primary"
             onClick={() => setComposeRequest({ kind: "new" })}
           >
-            写邮件
-          </button>
+            {t("写邮件")}</button>
           <button
             type="button"
             disabled={selectedMessage === undefined}
@@ -1145,8 +1146,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
               setComposeRequest({ kind: "reply", sourceMessageId: selectedMessage.id })
             }
           >
-            回复
-          </button>
+            {t("回复")}</button>
           <button
             type="button"
             disabled={selectedMessage === undefined}
@@ -1155,11 +1155,10 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
               setComposeRequest({ kind: "forward", sourceMessageId: selectedMessage.id })
             }
           >
-            转发
-          </button>
+            {t("转发")}</button>
           <label
             className="checkbox"
-            title={effectiveFlagged ? "红旗邮件按时间平铺显示，不折会话" : undefined}
+            title={effectiveFlagged ? t("红旗邮件按时间平铺显示，不折会话") : undefined}
           >
             <input
               type="checkbox"
@@ -1167,11 +1166,10 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
               disabled={effectiveFlagged}
               onChange={(event) => setThreadMode(event.target.checked)}
             />
-            按会话聚合
-          </label>
+            {t("按会话聚合")}</label>
           <label
             className="checkbox"
-            title={inUnified && unifiedView === "unread" ? "「所有未读」已经只看未读了" : undefined}
+            title={inUnified && unifiedView === "unread" ? t("「所有未读」已经只看未读了") : undefined}
           >
             <input
               type="checkbox"
@@ -1179,11 +1177,9 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
               disabled={inUnified && unifiedView === "unread"}
               onChange={(event) => setUnreadOnly(event.target.checked)}
             />
-            只看未读
-          </label>
+            {t("只看未读")}</label>
           <button type="button" onClick={() => void refreshAll()} disabled={loading}>
-            刷新
-          </button>
+            {t("刷新")}</button>
           {currentSync && (
             <span
               className={syncBadgeClass(currentSync)}
@@ -1196,23 +1192,22 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
           )}
           {currentSync && (currentSync.needsReauth || currentSync.state === "error") && (
             <button type="button" onClick={() => void retrySync()}>
-              重试
-            </button>
+              {t("重试")}</button>
           )}
           <span className="hint">
             {searchMode
-              ? `共找到 ${searchTotal} 封，当前已显示 ${hits.length} 封`
-              : `共 ${total} ${listThreadMode ? "个会话" : "封邮件"}`}
-            {loading || searching ? "，正在加载……" : ""}
+              ? t("共找到 {0} 封，当前已显示 {1} 封", [searchTotal, hits.length])
+              : t("共 {0} {1}", [total, listThreadMode ? "个会话" : "封邮件"])}
+            {loading || searching ? t("，正在加载……") : ""}
           </span>
         </div>
 
         <div className="inbox-search">
           <input
             ref={searchBoxRef}
-            aria-label="搜索邮件"
+            aria-label={t("搜索邮件")}
             value={searchInput}
-            placeholder="按 Ctrl+K 聚焦；例如：发票 from:alice has:attachment"
+            placeholder={t("按 Ctrl+K 聚焦；例如：发票 from:alice has:attachment")}
             onChange={(event) => setSearchInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") void runSearch();
@@ -1220,7 +1215,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
             }}
           />
           <button type="button" onClick={() => void runSearch()} disabled={searching}>
-            {searching ? "搜索中……" : "搜索"}
+            {searching ? t("搜索中……") : t("搜索")}
           </button>
           {searchMode && (
             <>
@@ -1229,24 +1224,23 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
                 onClick={() => void runSearch({ deep: true })}
                 disabled={searching}
               >
-                {searchDeepBusy ? "联网补历史中……" : "继续联网补历史"}
+                {searchDeepBusy ? t("联网补历史中……") : t("继续联网补历史")}
               </button>
               <button type="button" onClick={clearSearch}>
-                退出搜索
-              </button>
+                {t("退出搜索")}</button>
             </>
           )}
-          <span className="hint">{SEARCH_SYNTAX_HINT}</span>
+          <span className="hint">{t(SEARCH_SYNTAX_HINT)}</span>
         </div>
 
         {error && (
           <p className="error" role="alert">
-            加载失败：{error}
+            {t("加载失败：")}{error}
           </p>
         )}
         {searchError && (
           <p className="error" role="alert">
-            搜索失败：{searchError}
+            {t("搜索失败：")}{searchError}
           </p>
         )}
         {searchNote && <p className="hint inbox-search-note">{searchNote}</p>}
@@ -1263,8 +1257,8 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
               disabled={searching}
             >
               {searching
-                ? "加载中……"
-                : `继续加载（已显示 ${hits.length} / ${searchTotal}）`}
+                ? t("加载中……")
+                : t("继续加载（已显示 {0} / {1}）", [hits.length, searchTotal])}
             </button>
           </div>
         )}
@@ -1330,7 +1324,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
       </section>
 
       <PaneResizer
-        label="邮件列表宽度"
+        label={t("邮件列表宽度")}
         value={widths.list}
         min={paneLimits.list.min}
         max={paneLimits.list.max}

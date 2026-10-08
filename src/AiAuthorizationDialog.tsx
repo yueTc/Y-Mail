@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef } from "react";
 
 import type { AiAuthorization, AiFunction } from "./api";
+import { t } from "./i18n";
 
 const FUNCTION_LABEL: Record<AiFunction, string> = {
   translate: "翻译",
@@ -116,34 +117,33 @@ export default function AiAuthorizationDialog({
         className="ai-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="确认 AI 外发"
+        aria-label={t("确认 AI 外发")}
         aria-busy={busy}
       >
-        <h3>确认 AI 调用</h3>
+        <h3>{t("确认 AI 调用")}</h3>
         <p>
-          这次要执行「{FUNCTION_LABEL[preview.function as AiFunction] ?? preview.function}」，
-          请确认目标后再发送。
-        </p>
+          {t("这次要执行「")}{t(FUNCTION_LABEL[preview.function as AiFunction] ?? preview.function)}{t("」， 请确认目标后再发送。")}</p>
         <dl className="ai-modal-targets">
-          <dt>要发给哪个域名</dt>
+          <dt>{t("要发给哪个域名")}</dt>
           <dd>{preview.host}</dd>
-          <dt>用哪个模型</dt>
+          <dt>{t("用哪个模型")}</dt>
           <dd>{preview.model}</dd>
-          <dt>是不是本地服务</dt>
-          <dd>{preview.local ? "是，本地服务，内容不离开这台电脑" : "不是，内容会发送到远程站点"}</dd>
-          <dt>站点</dt>
+          <dt>{t("是不是本地服务")}</dt>
+          <dd>{preview.local ? t("是，本地服务，内容不离开这台电脑") : t("不是，内容会发送到远程站点")}</dd>
+          <dt>{t("站点")}</dt>
           <dd>{preview.providerLabel}</dd>
         </dl>
         <p className="hint">
-          确认后这次授权在 {preview.expiresInSeconds} 秒内有效，并且只能用一次。
+          {t("确认后这次授权在 ")}
+          {preview.expiresInSeconds}
+          {t(" 秒内有效，并且只能用一次。")}
         </p>
         <div className="form-actions">
           <button type="button" className="primary" onClick={onConfirm} disabled={busy}>
-            {busy ? "正在调用……" : "确认并调用"}
+            {busy ? t("正在调用……") : t("确认并调用")}
           </button>
           <button type="button" data-autofocus onClick={requestCancel} disabled={busy}>
-            取消
-          </button>
+            {t("取消")}</button>
         </div>
       </section>
     </div>

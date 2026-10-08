@@ -1,5 +1,6 @@
 import { useCallback, useRef } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import { t } from "./i18n";
 
 type ReaderResizerProps = {
   /** 中文可读名称，读屏会念出来。 */
@@ -98,7 +99,7 @@ export default function ReaderResizer({
       aria-valuenow={Math.round(value)}
       aria-valuemin={min}
       aria-valuemax={max}
-      title={`${label}：拖动或按上下方向键调整，Home 回默认高度，双击复位`}
+      title={t("{0}：拖动或按上下方向键调整，Home 回默认高度，双击复位", [label])}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}

@@ -16,6 +16,7 @@ import {
   type ServerConfig,
 } from "./api";
 import type { AddAccountSource } from "./AddAccountDialog";
+import { t } from "./i18n";
 
 /** 表单状态；授权码只存在这个内存对象里，不写 localStorage、不回显已保存的值。 */
 interface FormState {
@@ -210,18 +211,18 @@ function toDraft(form: FormState): AccountDraft {
 
 /** 提交前的本地检查；只拦明显问题，真正的校验与自检在引擎里做。 */
 function validate(form: FormState): string | null {
-  if (!form.email.includes("@")) return "请填写完整的邮箱地址";
+  if (!form.email.includes("@")) return t("请填写完整的邮箱地址");
   if (form.authType === "oauth2" && form.oauthProvider === "") {
-    return "OAuth2 登录要先选服务商（Gmail 或 Outlook）";
+    return t("OAuth2 登录要先选服务商（Gmail 或 Outlook）");
   }
-  if (form.username.trim() === "") return "请填写登录名（多数邮箱就是完整地址）";
-  if (form.imap.host.trim() === "") return "请填写收件服务器地址";
-  if (form.smtp.host.trim() === "") return "请填写发件服务器地址";
-  if (form.imap.port < 1 || form.imap.port > 65535) return "收件端口要在 1 到 65535 之间";
-  if (form.smtp.port < 1 || form.smtp.port > 65535) return "发件端口要在 1 到 65535 之间";
-  if (form.proxyMode === "custom" && form.proxyId === "") return "选了「指定代理」就要挑一个具体代理";
+  if (form.username.trim() === "") return t("请填写登录名（多数邮箱就是完整地址）");
+  if (form.imap.host.trim() === "") return t("请填写收件服务器地址");
+  if (form.smtp.host.trim() === "") return t("请填写发件服务器地址");
+  if (form.imap.port < 1 || form.imap.port > 65535) return t("收件端口要在 1 到 65535 之间");
+  if (form.smtp.port < 1 || form.smtp.port > 65535) return t("发件端口要在 1 到 65535 之间");
+  if (form.proxyMode === "custom" && form.proxyId === "") return t("选了「指定代理」就要挑一个具体代理");
   if (form.authType !== "oauth2" && form.id === null && form.secret.trim() === "") {
-    return "请填写授权码";
+    return t("请填写授权码");
   }
   return null;
 }
@@ -345,7 +346,7 @@ export default function AccountForm({
     const { force = false, quiet = false } = options;
     const preset = presetFor(form.email);
     if (!preset) {
-      if (!quiet) setError("没认出这个邮箱服务商，请手动填写服务器参数");
+      if (!quiet) setError(t("没认出这个邮箱服务商，请手动填写服务器参数"));
       return;
     }
     // 自动填写只在新建账号、且用户没有碰过服务器参数时生效；点按钮则是明确要求覆盖。
@@ -380,21 +381,21 @@ export default function AccountForm({
     const switched = switchAuth && form.authType !== "oauth2";
     setNotice(
       switched
-        ? `已按「${preset.label}」填入服务器参数，并自动改用 OAuth2 浏览器授权；点「浏览器授权」登录即可。`
-        : `已按「${preset.label}」填入服务器参数：${preset.note}`,
+        ? t("已按「{0}」填入服务器参数，并自动改用 OAuth2 浏览器授权；点「浏览器授权」登录即可。", [t(preset.label)])
+        : t("已按「{0}」填入服务器参数：{1}", [t(preset.label), t(preset.note)]),
     );
   }
 
   async function handleTest() {
     if (form.authType === "oauth2") {
       setError(
-        "OAuth2 账号不走授权码自检：点「浏览器授权」，授权成功后引擎会自动做一次连接自检。",
+        t("OAuth2 账号不走授权码自检：点「浏览器授权」，授权成功后引擎会自动做一次连接自检。"),
       );
       return;
     }
     if (form.id !== null && form.secret.trim() === "") {
       setError(
-        "要自检这份改动，请先在「新的授权码」里填一次；不想重填就直接点「保存」，引擎会用已保存的授权码先自检、通过才写入。",
+        t("要自检这份改动，请先在「新的授权码」里填一次；不想重填就直接点「保存」，引擎会用已保存的授权码先自检、通过才写入。"),
       );
       return;
     }
@@ -410,7 +411,7 @@ export default function AccountForm({
       const result = await api.testAccountConnection(toDraft(form), form.secret);
       setReport(result);
       setVerifiedFingerprint(fingerprint);
-      setNotice("自检通过：收件和发件服务器都能正常登录。");
+      setNotice(t("自检通过：收件和发件服务器都能正常登录。"));
     } catch (err) {
       setReport(null);
       setVerifiedFingerprint(null);
@@ -427,11 +428,11 @@ export default function AccountForm({
       return;
     }
     if (form.authType === "oauth2" && form.id === null) {
-      setError("OAuth2 账号请点「浏览器授权」：授权通过后账号会自动保存，不用走「保存」。");
+      setError(t("OAuth2 账号请点「浏览器授权」：授权通过后账号会自动保存，不用走「保存」。"));
       return;
     }
     if (form.authType !== "oauth2" && form.id === null && (needsRetest || report === null)) {
-      setError("新建账号要先点「连接自检」，通过之后才能保存");
+      setError(t("新建账号要先点「连接自检」，通过之后才能保存"));
       return;
     }
     setBusy("save");
@@ -441,13 +442,13 @@ export default function AccountForm({
       const draft = toDraft(form);
       if (form.id === null) {
         const saved = await api.createAccount(draft, form.secret);
-        setNotice("账号已保存；保存前已完成连接自检。");
+        setNotice(t("账号已保存；保存前已完成连接自检。"));
         onSaved(String(saved.id));
       } else {
         const secret =
           form.authType === "oauth2" || form.secret.trim() === "" ? undefined : form.secret;
         const saved = await api.updateAccount(form.id, draft, secret);
-        setNotice("账号已更新；引擎在写入前完成了一次连接自检。");
+        setNotice(t("账号已更新；引擎在写入前完成了一次连接自检。"));
         onSaved(String(saved.id));
       }
     } catch (err) {
@@ -477,11 +478,11 @@ export default function AccountForm({
       const authorization = await api.beginOAuthAuthorize(toDraft(form), form.id ?? undefined);
       pendingState = authorization.state;
       setPendingAuth(authorization);
-      setNotice("已用系统默认浏览器打开授权页；登录并同意后，本窗口会自动收口……");
+      setNotice(t("已用系统默认浏览器打开授权页；登录并同意后，本窗口会自动收口……"));
       const outcome = await api.completeOAuthAuthorize(authorization.state);
       setPendingAuth(null);
       setNotice(
-        `授权成功：收件服务器可见 ${outcome.report.imapFolderCount} 个文件夹，发件认证方式 ${outcome.report.smtpMechanism}。`,
+        t("授权成功：收件服务器可见 {0} 个文件夹，发件认证方式 {1}。", [outcome.report.imapFolderCount, outcome.report.smtpMechanism]),
       );
       if (wasNew) {
         onSaved(String(outcome.account.id));
@@ -514,8 +515,8 @@ export default function AccountForm({
       {!editing && (
         <p className="hint">
           {source === "mailbox"
-            ? "保存后会回到收件箱，并选中这个新账号。"
-            : "保存后会刷新设置页的账号列表。"}
+            ? t("保存后会回到收件箱，并选中这个新账号。")
+            : t("保存后会刷新设置页的账号列表。")}
         </p>
       )}
 
@@ -524,16 +525,14 @@ export default function AccountForm({
 
       <div className="field-row">
         <label>
-          显示名
-          <input
+          {t("显示名")}<input
             value={form.displayName}
             onChange={(event) => patch({ displayName: event.target.value })}
-            placeholder="可留空，默认用邮箱地址"
+            placeholder={t("可留空，默认用邮箱地址")}
           />
         </label>
         <label>
-          邮箱地址
-          <input
+          {t("邮箱地址")}<input
             value={form.email}
             onChange={(event) => patch({ email: event.target.value })}
             onBlur={() => applyPreset({ quiet: true })}
@@ -548,23 +547,21 @@ export default function AccountForm({
         <label>
           &nbsp;
           <button type="button" onClick={() => applyPreset({ force: true })} disabled={!preset}>
-            {preset ? `按「${preset.label}」填服务器` : "常用邮箱自动填"}
+            {preset ? t("按「{0}」填服务器", [t(preset.label)]) : t("常用邮箱自动填")}
           </button>
         </label>
       </div>
 
       <div className="field-row">
         <label>
-          登录名
-          <input
+          {t("登录名")}<input
             value={form.username}
             onChange={(event) => patch({ username: event.target.value })}
-            placeholder="多数邮箱就是完整地址"
+            placeholder={t("多数邮箱就是完整地址")}
           />
         </label>
         <label>
-          认证方式
-          <select
+          {t("认证方式")}<select
             value={form.authType}
             onChange={(event) => {
               setAuthEdited(true);
@@ -573,14 +570,13 @@ export default function AccountForm({
           >
             {(Object.keys(AUTH_LABELS) as AuthType[]).map((value) => (
               <option key={value} value={value}>
-                {AUTH_LABELS[value]}
+                {t(AUTH_LABELS[value])}
               </option>
             ))}
           </select>
         </label>
         <label>
-          色标
-          <input
+          {t("色标")}<input
             type="color"
             value={form.color || "#3b82f6"}
             onChange={(event) => patch({ color: event.target.value })}
@@ -590,16 +586,14 @@ export default function AccountForm({
 
       <div className="field-row">
         <label>
-          收件服务器
-          <input
+          {t("收件服务器")}<input
             value={form.imap.host}
             onChange={(event) => patchServer("imap", { host: event.target.value })}
             placeholder="imap.example.com"
           />
         </label>
         <label>
-          收件端口
-          <input
+          {t("收件端口")}<input
             type="number"
             min={1}
             max={65535}
@@ -608,14 +602,13 @@ export default function AccountForm({
           />
         </label>
         <label>
-          收件加密
-          <select
+          {t("收件加密")}<select
             value={form.imap.security}
             onChange={(event) => patchServer("imap", { security: event.target.value as Security })}
           >
             {(Object.keys(SECURITY_LABELS) as Security[]).map((value) => (
               <option key={value} value={value}>
-                {SECURITY_LABELS[value]}
+                {t(SECURITY_LABELS[value])}
               </option>
             ))}
           </select>
@@ -624,16 +617,14 @@ export default function AccountForm({
 
       <div className="field-row">
         <label>
-          发件服务器
-          <input
+          {t("发件服务器")}<input
             value={form.smtp.host}
             onChange={(event) => patchServer("smtp", { host: event.target.value })}
             placeholder="smtp.example.com"
           />
         </label>
         <label>
-          发件端口
-          <input
+          {t("发件端口")}<input
             type="number"
             min={1}
             max={65535}
@@ -642,14 +633,13 @@ export default function AccountForm({
           />
         </label>
         <label>
-          发件加密
-          <select
+          {t("发件加密")}<select
             value={form.smtp.security}
             onChange={(event) => patchServer("smtp", { security: event.target.value as Security })}
           >
             {(Object.keys(SECURITY_LABELS) as Security[]).map((value) => (
               <option key={value} value={value}>
-                {SECURITY_LABELS[value]}
+                {t(SECURITY_LABELS[value])}
               </option>
             ))}
           </select>
@@ -658,26 +648,24 @@ export default function AccountForm({
 
       <div className="field-row">
         <label>
-          代理策略
-          <select
+          {t("代理策略")}<select
             value={form.proxyMode}
             onChange={(event) => patch({ proxyMode: event.target.value as AccountProxyMode })}
           >
             {(Object.keys(PROXY_MODE_LABELS) as AccountProxyMode[]).map((value) => (
               <option key={value} value={value}>
-                {PROXY_MODE_LABELS[value]}
+                {t(PROXY_MODE_LABELS[value])}
               </option>
             ))}
           </select>
         </label>
         {form.proxyMode === "custom" && (
           <label>
-            指定代理
-            <select
+            {t("指定代理")}<select
               value={form.proxyId}
               onChange={(event) => patch({ proxyId: event.target.value })}
             >
-              <option value="">请选择</option>
+              <option value="">{t("请选择")}</option>
               {proxies.map((proxy) => (
                 <option key={proxy.id} value={String(proxy.id)}>
                   {proxy.label || `${proxy.host}:${proxy.port}`}
@@ -692,58 +680,50 @@ export default function AccountForm({
             checked={form.enabled}
             onChange={(event) => patch({ enabled: event.target.checked })}
           />
-          启用这个账号
-        </label>
+          {t("启用这个账号")}</label>
       </div>
 
       {form.authType === "oauth2" ? (
         <>
           <div className="field-row">
             <label>
-              OAuth2 服务商
-              <select
+              {t("OAuth2 服务商")}<select
                 value={form.oauthProvider}
                 onChange={(event) => {
                   setAuthEdited(true);
                   patch({ oauthProvider: event.target.value as OAuthProvider | "" });
                 }}
               >
-                <option value="">请选择</option>
-                <option value="gmail">谷歌 Gmail</option>
-                <option value="microsoft">微软 Outlook</option>
+                <option value="">{t("请选择")}</option>
+                <option value="gmail">{t("谷歌 Gmail")}</option>
+                <option value="microsoft">{t("微软 Outlook")}</option>
               </select>
             </label>
           </div>
           <details className="advanced-settings">
-            <summary>高级设置：自备客户端编号（普通用户不用管）</summary>
+            <summary>{t("高级设置：自备客户端编号（普通用户不用管）")}</summary>
             <label>
-              客户端编号（client_id）
-              <input
+              {t("客户端编号（client_id）")}<input
                 value={form.oauthClientId}
                 onChange={(event) => patch({ oauthClientId: event.target.value })}
-                placeholder="留空就用软件内置的编号"
+                placeholder={t("留空就用软件内置的编号")}
               />
             </label>
             <p className="hint">
-              只有你自己注册了应用、想用自己的编号时才填。留空时软件会用它内置的编号。
-            </p>
+              {t("只有你自己注册了应用、想用自己的编号时才填。留空时软件会用它内置的编号。")}</p>
           </details>
           <p className="hint">
-            点「浏览器授权」会用系统默认浏览器打开服务商的登录页，登录并同意后自动回到本窗口；
-            访问令牌与刷新令牌只存进 Windows 凭据管理器，数据库里只留一个引用键。
-          </p>
+            {t("点「浏览器授权」会用系统默认浏览器打开服务商的登录页，登录并同意后自动回到本窗口； 访问令牌与刷新令牌只存进 Windows 凭据管理器，数据库里只留一个引用键。")}</p>
           {oauthStatus && (
             <p className="notice" role="status">
-              授权状态：{oauthStatus.authorized ? "已授权" : "尚未授权"}
-              {oauthStatus.hasRefreshToken ? "，令牌到期会自动刷新" : "，没有刷新令牌，过期后要重新授权"}
-              。
-            </p>
+              {t("授权状态：")}{oauthStatus.authorized ? t("已授权") : t("尚未授权")}
+              {oauthStatus.hasRefreshToken ? t("，令牌到期会自动刷新") : t("，没有刷新令牌，过期后要重新授权")}
+              {t("。")}</p>
           )}
           {pendingAuth && (
             <>
               <p className="hint">
-                正在等待浏览器回调。如果浏览器没有自动打开，请手工复制下面这行地址到浏览器打开：
-              </p>
+                {t("正在等待浏览器回调。如果浏览器没有自动打开，请手工复制下面这行地址到浏览器打开：")}</p>
               <textarea className="authorize-url" readOnly rows={3} value={pendingAuth.authorizeUrl} />
             </>
           )}
@@ -751,30 +731,30 @@ export default function AccountForm({
       ) : (
         <>
           <label className="secret-field">
-            {form.id === null ? "授权码 / 密码" : "新的授权码（留空表示沿用已保存的）"}
+            {form.id === null ? t("授权码 / 密码") : t("新的授权码（留空表示沿用已保存的）")}
             <input
               type="password"
               autoComplete="off"
               value={form.secret}
               onChange={(event) => patch({ secret: event.target.value })}
-              placeholder={form.id === null ? "只保存在 Windows 凭据管理器" : "不填就不改"}
+              placeholder={form.id === null ? t("只保存在 Windows 凭据管理器") : t("不填就不改")}
             />
           </label>
           <p className="hint">
-            授权码只在这个输入框和本次请求里存在，不写数据库、不进日志；数据库里只留一个引用键。
-          </p>
+            {t("授权码只在这个输入框和本次请求里存在，不写数据库、不进日志；数据库里只留一个引用键。")}</p>
         </>
       )}
 
       {report && (
         <p className="notice" role="status">
-          上次自检结果：收件服务器可见 {report.imapFolderCount} 个文件夹，发件认证方式{" "}
-          {report.smtpMechanism}。
-          {needsRetest ? "（表单已改动，请重新自检）" : ""}
+          {t("上次自检结果：收件服务器可见 ")}
+          {report.imapFolderCount}
+          {t(" 个文件夹，发件认证方式")}{" "}
+          {report.smtpMechanism}{t("。")}{needsRetest ? t("（表单已改动，请重新自检）") : ""}
         </p>
       )}
       {form.id !== null && (
-        <p className="hint">保存时会先做一次连接自检；不通过就不会写入，原来的账号保持不变。</p>
+        <p className="hint">{t("保存时会先做一次连接自检；不通过就不会写入，原来的账号保持不变。")}</p>
       )}
 
       <div className="form-actions">
@@ -786,11 +766,11 @@ export default function AccountForm({
             aria-busy={busy === "oauth"}
             disabled={busy !== null}
           >
-            {busy === "oauth" ? "等待浏览器授权……" : form.id === null ? "浏览器授权并保存" : "重新授权"}
+            {busy === "oauth" ? t("等待浏览器授权……") : form.id === null ? t("浏览器授权并保存") : t("重新授权")}
           </button>
         ) : (
           <button type="button" aria-busy={busy === "test"} onClick={() => void handleTest()} disabled={busy !== null}>
-            {busy === "test" ? "自检中……" : form.id === null ? "连接自检" : "用上面的授权码自检"}
+            {busy === "test" ? t("自检中……") : form.id === null ? t("连接自检") : t("用上面的授权码自检")}
           </button>
         )}
         <button
@@ -799,11 +779,10 @@ export default function AccountForm({
           aria-busy={busy === "save"}
           disabled={busy !== null || (form.authType === "oauth2" && form.id === null)}
         >
-          {busy === "save" ? "保存中……" : "保存"}
+          {busy === "save" ? t("保存中……") : t("保存")}
         </button>
         <button type="button" onClick={cancel} disabled={busy !== null}>
-          取消
-        </button>
+          {t("取消")}</button>
       </div>
     </form>
   );
