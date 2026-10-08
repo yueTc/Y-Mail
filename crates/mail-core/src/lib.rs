@@ -35,6 +35,7 @@ pub use contacts::{
 pub use download::SavedExternalAttachment;
 pub use engine::{EngineError, EngineInit, MailEngine, KEYRING_SERVICE};
 pub use inbox::{InboxMessagePage, InboxThreadPage};
+pub use mail_ai::{sanitize_code, sanitize_link, VerificationFinding};
 pub use mcp::{
     McpAccountView, McpAttachmentView, McpBodyView, McpDraftInput, McpError, McpFolderView,
     McpMessageDetailView, McpMessageView, McpRecipient, McpSearchPageView, McpStatus, McpThreadView,

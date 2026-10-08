@@ -18,7 +18,8 @@ vi.mock("../api", () => ({
     clearAutoContacts: vi.fn(),
     autostartStatus: vi.fn(),
     setAutostart: vi.fn(),
-    appVersion: vi.fn().mockResolvedValue("0.1.3"),
+    setTraySettings: vi.fn(),
+    appVersion: vi.fn().mockResolvedValue("0.1.2"),
     checkForUpdate: vi.fn(),
     installPendingUpdate: vi.fn(),
     relaunchApp: vi.fn(),
@@ -43,7 +44,10 @@ const SETTINGS: AppSettings = {
   dataDir: "",
   attachmentDir: "",
   notifyNewMail: true,
+  notifyAiEnabled: false,
   blockRemoteImagesByDefault: true,
+  minimizeToTrayOnClose: true,
+  startMinimizedToTray: false,
   defaultDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",
   defaultAttachmentDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop/downloads",
   activeDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",
@@ -118,12 +122,12 @@ describe("设置页分类栏", () => {
     renderSettings();
 
     // 默认是「通用」：开机启动可见，数据目录输入框不可见。
-    expect(await screen.findByRole("checkbox", { name: /开机自动启动/ })).toBeTruthy();
+    expect(await screen.findByRole("checkbox", { name: /开机自启动/ })).toBeTruthy();
     expect(screen.queryByRole("textbox")).toBeNull();
 
     await openCategory("存储与通知");
     expect(await screen.findByRole("textbox")).toBeTruthy();
-    expect(screen.queryByRole("checkbox", { name: /开机自动启动/ })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /开机自启动/ })).toBeNull();
   });
 
   it("分类栏拖动条能用方向键调宽、双击复位，并把宽度记住", async () => {
@@ -144,22 +148,23 @@ describe("设置页分类栏", () => {
 });
 
 describe("设置页通用分组", () => {
-  it("默认拦截远程图片默认打开，保存时带上当前值", async () => {
+  it("默认拦截远程图片默认打开，点一下立即保存", async () => {
     renderSettings();
 
     const box = (await screen.findByRole("checkbox", {
       name: /默认拦截邮件里的远程图片/,
     })) as HTMLInputElement;
     expect(box.checked).toBe(true);
+    expect(screen.queryByRole("button", { name: "保存设置" })).toBeNull();
 
     fireEvent.click(box);
-    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
 
     await waitFor(() =>
       expect(api.saveAppSettings).toHaveBeenCalledWith({
         dataDir: "",
         attachmentDir: "",
         notifyNewMail: true,
+        notifyAiEnabled: false,
         blockRemoteImagesByDefault: false,
       }),
     );
@@ -195,6 +200,7 @@ describe("设置页存储目录与通知", () => {
         dataDir: "",
         attachmentDir: "",
         notifyNewMail: true,
+        notifyAiEnabled: false,
         blockRemoteImagesByDefault: true,
       }),
     );

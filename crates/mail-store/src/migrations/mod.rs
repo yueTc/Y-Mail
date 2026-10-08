@@ -80,6 +80,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "0011_contact_address_book",
         sql: include_str!("sql/0011_contact_address_book.sql"),
     },
+    Migration {
+        version: 12,
+        name: "0012_ai_notification_verify",
+        sql: include_str!("sql/0012_ai_notification_verify.sql"),
+    },
 ];
 
 /// 单条迁移的执行结果。
@@ -290,8 +295,8 @@ mod tests {
         let mut store = Store::open_in_memory().expect("打开内存库");
 
         let first = store.run_migrations().expect("首次迁移");
-        assert_eq!(first.applied_count(), 11, "首次应应用 11 条迁移");
-        assert_eq!(first.current_version, 11);
+        assert_eq!(first.applied_count(), 12, "首次应应用 12 条迁移");
+        assert_eq!(first.current_version, 12);
         assert_eq!(first.applied[0].name, "0001_core_bootstrap");
         assert!(!first.applied[0].applied_at.is_empty(), "登记时间不应为空");
 
@@ -300,7 +305,7 @@ mod tests {
 
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
         );
     }
 
@@ -367,7 +372,7 @@ mod tests {
         store.run_migrations().expect("升级到三号库");
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
         );
 
         // 升级到七号库后，旧账号的授权字段应为空（NULL / 空串），不影响既有数据。
@@ -393,9 +398,65 @@ mod tests {
     }
 
     #[test]
+    fn 从十一号库升级后通知智能识别功能映射可用() {
+        let mut store = Store::open_in_memory().expect("打开内存库");
+        {
+            let conn = store.raw_connection_for_test();
+            conn.execute_batch(super::MIGRATION_TABLE_SQL).expect("建登记表");
+            for migration in &MIGRATIONS[..11] {
+                conn.execute_batch(migration.sql).expect("应用旧迁移");
+                conn.execute(
+                    "INSERT INTO schema_migration (version, name, checksum) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![migration.version, migration.name, checksum(migration.sql)],
+                )
+                .expect("登记旧迁移");
+            }
+            conn.execute(
+                "INSERT INTO ai_provider (label, kind, base_url) VALUES ('本机', 'ollama', 'http://127.0.0.1:11434/v1')",
+                [],
+            )
+            .expect("插入站点");
+            conn.execute(
+                "INSERT INTO ai_model_map (function, provider_id, model) VALUES ('translate', 1, 'qwen')",
+                [],
+            )
+            .expect("插入旧映射");
+        }
+
+        store.run_migrations().expect("升级到十二号库");
+        assert_eq!(
+            store.applied_migration_versions().expect("读取版本"),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        );
+
+        // 旧 translate 映射要保留；新增 notification_verify 要能写；非法值仍被拒。
+        let conn = store.raw_connection_for_test();
+        let kept: String = conn
+            .query_row(
+                "SELECT model FROM ai_model_map WHERE function = 'translate'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("旧映射应保留");
+        assert_eq!(kept, "qwen");
+
+        conn.execute(
+            "INSERT INTO ai_model_map (function, provider_id, model) VALUES ('notification_verify', 1, 'deepseek')",
+            [],
+        )
+        .expect("升级后应能写通知智能识别映射");
+
+        let bad = conn.execute(
+            "INSERT INTO ai_model_map (function, provider_id, model) VALUES ('nope', 1, 'x')",
+            [],
+        );
+        assert!(bad.is_err(), "非法功能值仍应被 CHECK 拒绝");
+    }
+
+    #[test]
     fn 迁移清单与校验和的基本性质() {
-        assert_eq!(MIGRATIONS.len(), 11);
-        assert_eq!(supported_version(), 11);
+        assert_eq!(MIGRATIONS.len(), 12);
+        assert_eq!(supported_version(), 12);
         assert_eq!(checksum("abc"), checksum("abc"));
         assert_ne!(checksum("abc"), checksum("abd"));
     }

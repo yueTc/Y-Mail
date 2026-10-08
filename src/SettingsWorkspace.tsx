@@ -96,7 +96,9 @@ export default function SettingsWorkspace({
   const [storage, setStorage] = useState<StorageState>({ kind: "loading" });
   const [dataDir, setDataDir] = useState("");
   const [notifyNewMail, setNotifyNewMail] = useState(true);
-  // 读信是否默认拦住远程图片；默认拦，保存后以后端返回值为准。
+  // 通知智能识别开关；由「AI功能」页负责开关，状态放在这里统一保存，避免两处设置互相覆盖。
+  const [notifyAiEnabled, setNotifyAiEnabled] = useState(false);
+  // 读信是否默认拦住远程图片；默认拦，勾选后立即保存。
   const [blockRemoteImagesByDefault, setBlockRemoteImagesByDefault] = useState(true);
   const [saving, setSaving] = useState(false);
   const [migrating, setMigrating] = useState(false);
@@ -114,6 +116,11 @@ export default function SettingsWorkspace({
   const [autostart, setAutostart] = useState(false);
   const [autostartBusy, setAutostartBusy] = useState(false);
   const [autostartError, setAutostartError] = useState<string | null>(null);
+  // 「启动与托盘」里另外两个开关：落进设置文件，改完立即生效。
+  const [minimizeToTrayOnClose, setMinimizeToTrayOnClose] = useState(true);
+  const [startMinimizedToTray, setStartMinimizedToTray] = useState(false);
+  const [trayBusy, setTrayBusy] = useState(false);
+  const [trayError, setTrayError] = useState<string | null>(null);
   // 迁移成功后的不可关闭重启选择弹窗。
   const [restartNeeded, setRestartNeeded] = useState(false);
   const [restartBusy, setRestartBusy] = useState(false);
@@ -137,7 +144,10 @@ export default function SettingsWorkspace({
         setStorage({ kind: "ready", settings });
         setDataDir(settings.dataDir);
         setNotifyNewMail(settings.notifyNewMail);
+        setNotifyAiEnabled(settings.notifyAiEnabled);
         setBlockRemoteImagesByDefault(settings.blockRemoteImagesByDefault);
+        setMinimizeToTrayOnClose(settings.minimizeToTrayOnClose);
+        setStartMinimizedToTray(settings.startMinimizedToTray);
       })
       .catch((error: unknown) => {
         if (!cancelled) setStorage({ kind: "error", message: describeError(error) });
@@ -199,38 +209,83 @@ export default function SettingsWorkspace({
   }
 
   /**
-   * 保存通知开关与「默认拦截远程图片」；数据目录只能通过“更改目录”迁移。
-   * `scope` 区分是哪个分组点的保存：两个分组同时挂着，提示只在自己那块显示。
+   * 保存「存储与通知」里的通知开关；数据目录只能通过“更改目录”迁移。
    */
-  async function saveStorage(
-    event: React.FormEvent<HTMLFormElement>,
-    scope: "general" | "storage",
-  ) {
+  async function saveStorage(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (storage.kind !== "ready") return;
-    const setGroupNotice = scope === "general" ? setGeneralNotice : setNotice;
-    const setGroupError = scope === "general" ? setGeneralSaveError : setSaveError;
     setSaving(true);
-    setGroupNotice(null);
-    setGroupError(null);
+    setNotice(null);
+    setSaveError(null);
     try {
       const saved = await api.saveAppSettings({
         dataDir: storage.settings.dataDir,
         attachmentDir: "",
         notifyNewMail,
+        notifyAiEnabled,
         blockRemoteImagesByDefault,
       });
       setStorage({ kind: "ready", settings: saved });
       setNotifyNewMail(saved.notifyNewMail);
+      setNotifyAiEnabled(saved.notifyAiEnabled);
       setBlockRemoteImagesByDefault(saved.blockRemoteImagesByDefault);
-      setGroupNotice(t("设置已保存。"));
+      setNotice(t("设置已保存。"));
     } catch (error: unknown) {
-      setGroupError(describeError(error));
+      setSaveError(describeError(error));
     } finally {
       setSaving(false);
     }
   }
 
+  /** 勾选即保存「默认拦截远程图片」；带上当前其它设置字段，避免覆盖别的设置。 */
+  async function saveBlockRemoteImages(next: boolean): Promise<void> {
+    if (storage.kind !== "ready") return;
+    const previous = blockRemoteImagesByDefault;
+    setBlockRemoteImagesByDefault(next);
+    setSaving(true);
+    setGeneralNotice(null);
+    setGeneralSaveError(null);
+    try {
+      const saved = await api.saveAppSettings({
+        dataDir: storage.settings.dataDir,
+        attachmentDir: "",
+        notifyNewMail,
+        notifyAiEnabled,
+        blockRemoteImagesByDefault: next,
+      });
+      setStorage({ kind: "ready", settings: saved });
+      setNotifyNewMail(saved.notifyNewMail);
+      setNotifyAiEnabled(saved.notifyAiEnabled);
+      setBlockRemoteImagesByDefault(saved.blockRemoteImagesByDefault);
+      setGeneralNotice(t("设置已保存。"));
+    } catch (error: unknown) {
+      setBlockRemoteImagesByDefault(previous);
+      setGeneralSaveError(describeError(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /**
+   * 保存「通知智能识别」开关。
+   *
+   * 开关在「AI功能」页展示，但设置整体只有一份，统一由这里写，避免两个页面各存一份导致互相覆盖。
+   * 保存前会带上当前其它设置字段，保证只改这一个开关。
+   */
+  async function saveNotifyAiEnabled(next: boolean): Promise<void> {
+    if (storage.kind !== "ready") {
+      throw new Error(t("设置还没读取好，请稍后再试"));
+    }
+    const saved = await api.saveAppSettings({
+      dataDir: storage.settings.dataDir,
+      attachmentDir: "",
+      notifyNewMail,
+      notifyAiEnabled: next,
+      blockRemoteImagesByDefault,
+    });
+    setStorage({ kind: "ready", settings: saved });
+    setNotifyAiEnabled(saved.notifyAiEnabled);
+  }
   /** 先弹系统目录选择框，选完再复制、校验；全部通过以后后端才写设置。 */
   async function changeDirectory() {
     setNotice(null);
@@ -318,6 +373,33 @@ export default function SettingsWorkspace({
     }
   }
 
+  /** 保存「启动与托盘」里的开关：只提交这两个字段，失败就回滚并报错。 */
+  async function saveTraySettings(patch: {
+    minimizeToTrayOnClose?: boolean;
+    startMinimizedToTray?: boolean;
+  }): Promise<void> {
+    if (trayBusy) return;
+    const previousMin = minimizeToTrayOnClose;
+    const previousStart = startMinimizedToTray;
+    const nextMin = patch.minimizeToTrayOnClose ?? minimizeToTrayOnClose;
+    const nextStart = patch.startMinimizedToTray ?? startMinimizedToTray;
+    setMinimizeToTrayOnClose(nextMin);
+    setStartMinimizedToTray(nextStart);
+    setTrayBusy(true);
+    setTrayError(null);
+    try {
+      const saved = await api.setTraySettings(nextMin, nextStart);
+      setMinimizeToTrayOnClose(saved.minimizeToTrayOnClose);
+      setStartMinimizedToTray(saved.startMinimizedToTray);
+    } catch (error: unknown) {
+      setMinimizeToTrayOnClose(previousMin);
+      setStartMinimizedToTray(previousStart);
+      setTrayError(describeError(error));
+    } finally {
+      setTrayBusy(false);
+    }
+  }
+
   /** 清掉自动收集的联系人；手动的和已隐藏的后端自己会跳过。 */
   const clearAutoContacts = async () => {
     if (contactBusy) return;
@@ -393,22 +475,65 @@ export default function SettingsWorkspace({
           >
             <h2 className="settings-group-title">{t("通用")}</h2>
 
-            <section className="panel" aria-label={t("开机自动启动")}>
-              <h3 className="settings-subtitle">{t("开机自动启动")}</h3>
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={autostart}
-                  disabled={autostartBusy}
-                  onChange={(event) => void toggleAutostart(event.target.checked)}
-                />
-                <span>{t("开机自动启动（静默进托盘，不弹主窗口）")}</span>
-              </label>
-              <p className="hint">
-                {t("打开后会把本程序写进 Windows 当前用户的启动项，开机自动在后台收信， 只留一个托盘图标。你在任务管理器的启动项里手动禁用，这里也会跟着显示成关闭。")}</p>
+            <section className="panel" aria-label={t("启动与托盘")}>
+              <h3 className="settings-subtitle">{t("启动与托盘")}</h3>
+              <div className="switch-rows">
+                <label className="switch-row">
+                  <span className="switch-row-text">
+                    <span className="switch-row-title">{t("开机自启动")}</span>
+                    <span className="switch-row-sub">{t("系统启动时自动运行 Y-Mail")}</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    className="switch-input"
+                    checked={autostart}
+                    disabled={autostartBusy}
+                    onChange={(event) => void toggleAutostart(event.target.checked)}
+                  />
+                </label>
+
+                <label className="switch-row">
+                  <span className="switch-row-text">
+                    <span className="switch-row-title">{t("关闭时最小化到托盘")}</span>
+                    <span className="switch-row-sub">
+                      {t("点击关闭按钮时隐藏到系统托盘，而非退出应用")}</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    className="switch-input"
+                    checked={minimizeToTrayOnClose}
+                    disabled={trayBusy}
+                    onChange={(event) =>
+                      void saveTraySettings({ minimizeToTrayOnClose: event.target.checked })
+                    }
+                  />
+                </label>
+
+                <label className="switch-row">
+                  <span className="switch-row-text">
+                    <span className="switch-row-title">{t("启动时最小化到托盘")}</span>
+                    <span className="switch-row-sub">
+                      {t("启动后不显示主窗口，仅托盘驻留")}</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    className="switch-input"
+                    checked={startMinimizedToTray}
+                    disabled={trayBusy}
+                    onChange={(event) =>
+                      void saveTraySettings({ startMinimizedToTray: event.target.checked })
+                    }
+                  />
+                </label>
+              </div>
               {autostartError && (
                 <p className="error" role="alert">
                   {t("开机启动设置失败：")}{autostartError}
+                </p>
+              )}
+              {trayError && (
+                <p className="error" role="alert">
+                  {t("托盘设置保存失败：")}{trayError}
                 </p>
               )}
             </section>
@@ -417,24 +542,16 @@ export default function SettingsWorkspace({
 
             <section className="panel" aria-label={t("默认拦截远程图片")}>
               {storage.kind === "ready" ? (
-                <form
-                  className="settings-form"
-                  onSubmit={(event) => void saveStorage(event, "general")}
-                >
+                <div className="settings-form">
                   <label className="checkbox">
                     <input
                       type="checkbox"
                       checked={blockRemoteImagesByDefault}
-                      onChange={(event) => setBlockRemoteImagesByDefault(event.target.checked)}
+                      disabled={saving}
+                      onChange={(event) => void saveBlockRemoteImages(event.target.checked)}
                     />
                     <span>{t("默认拦截邮件里的远程图片")}</span>
                   </label>
-                  <p className="hint">
-                    {t("远程图片会暴露你什么时候打开邮件。默认拦；关掉后读信会直接加载图片，风险自负。")}</p>
-                  <div className="actions">
-                    <button type="submit" disabled={saving} aria-busy={saving}>
-                      {t("保存设置")}</button>
-                  </div>
                   {generalNotice && (
                     <p className="hint" role="status">
                       {generalNotice}
@@ -445,7 +562,7 @@ export default function SettingsWorkspace({
                       {t("保存失败：")}{generalSaveError}
                     </p>
                   )}
-                </form>
+                </div>
               ) : (
                 <p className="hint" role="status">
                   {t("正在读取……")}</p>
@@ -487,7 +604,10 @@ export default function SettingsWorkspace({
             hidden={activeCategory !== "ai"}
           >
             <h2 className="settings-group-title">{t("AI功能")}</h2>
-            <AiPanel />
+            <AiPanel
+              notifyAiEnabled={notifyAiEnabled}
+              onNotifyAiEnabledChange={saveNotifyAiEnabled}
+            />
           </section>
 
           <section
@@ -521,7 +641,7 @@ export default function SettingsWorkspace({
               {storage.kind === "ready" && (
                 <form
                   className="settings-form"
-                  onSubmit={(event) => void saveStorage(event, "storage")}
+                  onSubmit={(event) => void saveStorage(event)}
                 >
                   <label className="field">
                     <span>{t("数据目录")}</span>

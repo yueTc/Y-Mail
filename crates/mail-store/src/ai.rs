@@ -89,6 +89,8 @@ pub enum AiFunction {
     Polish,
     /// 起草。
     Draft,
+    /// 通知识别：判断邮件正文里有没有验证码或验证链接。
+    NotificationVerify,
 }
 
 impl AiFunction {
@@ -99,6 +101,7 @@ impl AiFunction {
             Self::Summary => "summary",
             Self::Polish => "polish",
             Self::Draft => "draft",
+            Self::NotificationVerify => "notification_verify",
         }
     }
 
@@ -109,6 +112,7 @@ impl AiFunction {
             "summary" => Some(Self::Summary),
             "polish" => Some(Self::Polish),
             "draft" => Some(Self::Draft),
+            "notification_verify" => Some(Self::NotificationVerify),
             _ => None,
         }
     }
@@ -673,6 +677,22 @@ mod tests {
         assert!(cached.thinking_downgraded);
         assert_eq!(store.clear_ai_cache().expect("清缓存"), 1);
         assert!(store.get_ai_cache("k").expect("查询").is_none());
+    }
+
+    #[test]
+    fn 通知智能识别功能映射可以写读() {
+        // 回归：0008 的 CHECK 只允许 translate/summary/polish/draft，
+        // notification_verify 会被拒；0012 迁移放开后这里要能写能读。
+        let store = store();
+        let id = store.insert_ai_provider(&provider(), None).expect("新建");
+        store
+            .upsert_ai_model_map(AiFunction::NotificationVerify, id, "deepseek-v4.1-flash", None)
+            .expect("写通知智能识别映射");
+        let map = store
+            .get_ai_model_map(AiFunction::NotificationVerify)
+            .expect("查询")
+            .expect("存在");
+        assert_eq!(map.model, "deepseek-v4.1-flash");
     }
 
     #[test]

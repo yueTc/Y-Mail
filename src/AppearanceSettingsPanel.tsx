@@ -13,8 +13,6 @@ export default function AppearanceSettingsPanel() {
     <section className="panel" aria-label={t("外观")}>
       <div className="panel-head">
         <h2>{t("主题")}</h2>
-        <p className="hint">
-          {t("整个界面和读信窗格一起换色；「跟随系统」跟着 Windows 的深浅色走。")}</p>
       </div>
 
       <label className="appearance-setting">
@@ -28,7 +26,6 @@ export default function AppearanceSettingsPanel() {
           <option value="light">{t("浅色")}</option>
           <option value="dark">{t("深色")}</option>
         </select>
-        <small className="hint">{t("改完立即生效，不用保存。")}</small>
       </label>
 
       <label className="appearance-setting">
@@ -41,7 +38,6 @@ export default function AppearanceSettingsPanel() {
           <option value="zh">中文</option>
           <option value="en">English</option>
         </select>
-        <small className="hint">{t("改完立即生效，不用保存。")}</small>
       </label>
     </section>
   );

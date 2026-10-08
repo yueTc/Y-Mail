@@ -356,6 +356,106 @@ textarea:focus {
   width: auto;
 }
 
+/* 设置页里的开关：复选框画成胶囊开关，蓝色为开，灰色为关。 */
+.settings-workspace .checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-workspace .checkbox > span {
+  order: 1;
+}
+
+.settings-workspace .checkbox input[type="checkbox"],
+.settings-workspace .switch-input {
+  order: 2;
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: 0 0 auto;
+  width: 46px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text) 24%, transparent);
+  cursor: pointer;
+  transition: background-color 0.18s ease;
+}
+
+.settings-workspace .checkbox input[type="checkbox"]::after,
+.settings-workspace .switch-input::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.18s ease;
+}
+
+.settings-workspace .checkbox input[type="checkbox"]:checked,
+.settings-workspace .switch-input:checked {
+  background: var(--accent);
+}
+
+.settings-workspace .checkbox input[type="checkbox"]:checked::after,
+.settings-workspace .switch-input:checked::after {
+  transform: translateX(20px);
+}
+
+.settings-workspace .checkbox input[type="checkbox"]:disabled,
+.settings-workspace .switch-input:disabled {
+  cursor: not-allowed;
+}
+
+/* 「启动与托盘」三行：左边标题+小字，右边开关，行间用细线分隔。 */
+.switch-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 2px;
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.switch-row:first-child {
+  border-top: 0;
+  padding-top: 4px;
+}
+
+.switch-row:last-child {
+  padding-bottom: 4px;
+}
+
+.switch-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  order: 1;
+}
+
+.switch-row-title {
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.switch-row-sub {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
 .authorize-url {
   width: 100%;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

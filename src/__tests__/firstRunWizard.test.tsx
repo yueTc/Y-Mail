@@ -22,7 +22,10 @@ const SETTINGS: AppSettings = {
   dataDir: "",
   attachmentDir: "",
   notifyNewMail: true,
+  notifyAiEnabled: false,
   blockRemoteImagesByDefault: true,
+  minimizeToTrayOnClose: true,
+  startMinimizedToTray: false,
   defaultDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",
   defaultAttachmentDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop/downloads",
   activeDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",
@@ -63,6 +66,7 @@ describe("首次启动向导", () => {
         dataDir: "",
         attachmentDir: "",
         notifyNewMail: true,
+        notifyAiEnabled: false,
         blockRemoteImagesByDefault: true,
       }),
     );

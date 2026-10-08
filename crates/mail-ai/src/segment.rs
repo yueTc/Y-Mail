@@ -45,6 +45,31 @@ const BLOCK_TAGS: &[&str] = &[
 /// 这些标签里的内容不是正文，切段时整段丢掉（否则样式表会被当成段落送去翻译）。
 const SKIP_TAGS: &[&str] = &["style", "script", "head", "title", "template"];
 
+/// 表格里出现这些标签，就说明它不只是数据表：邮件常拿表格当整页排版外壳。
+const TABLE_BREAK_TAGS: &[&str] = &[
+    "p",
+    "div",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "blockquote",
+    "pre",
+    "section",
+    "article",
+    "header",
+    "footer",
+    "main",
+    "dl",
+    "dt",
+    "dd",
+    "ul",
+    "ol",
+    "table",
+];
+
 /// 没有子内容、本身也不会形成段落的空元素。
 const VOID_TAGS: &[&str] = &[
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track",
@@ -79,7 +104,7 @@ enum Token {
 /// 具体口径：
 /// - 只认最内层的块级元素，容器继续往下钻；
 /// - `<li>` 每个各自成段，译文才能逐条落在对应条目后面，嵌套列表继续下钻；
-/// - `<table>` 整块算一段，免得译文被塞进表格行里把排版顶坏。
+/// - 普通数据表格整块算一段；整封邮件套在排版表格里时继续下钻逐段切。
 pub fn split_html(html: &str) -> Vec<Segment> {
     let root = build_tree(html);
     let mut texts: Vec<String> = Vec::new();
@@ -185,15 +210,24 @@ fn walk_blocks(nodes: &[HtmlNode], out: &mut Vec<String>, loose_text: bool) {
             walk_blocks(children, out, loose_text);
             continue;
         }
-        let is_list_item = tag == "li";
-        if is_list_item || tag == "table" {
+        if tag == "li" {
             let text = element_text(node);
             if !text.trim().is_empty() {
                 out.push(text);
             }
             // 列表项里的嵌套列表还要继续往下找，但不再拆列表项自己的文字。
-            if is_list_item {
-                walk_blocks(children, out, false);
+            walk_blocks(children, out, false);
+            continue;
+        }
+        if tag == "table" {
+            if has_table_break_descendant(children) {
+                // 排版表格只当外壳，继续找里面的段落、标题和按钮文字。
+                walk_blocks(children, out, loose_text);
+            } else {
+                let text = element_text(node);
+                if !text.trim().is_empty() {
+                    out.push(text);
+                }
             }
             continue;
         }
@@ -207,6 +241,22 @@ fn walk_blocks(nodes: &[HtmlNode], out: &mut Vec<String>, loose_text: bool) {
             out.push(text);
         }
     }
+}
+
+/// 表格里有没有内容块或嵌套表格；有就说明它只是排版外壳。
+fn has_table_break_descendant(nodes: &[HtmlNode]) -> bool {
+    nodes.iter().any(|node| match node {
+        HtmlNode::Element { tag, children } => {
+            if SKIP_TAGS.contains(&tag.as_str()) {
+                false
+            } else if TABLE_BREAK_TAGS.contains(&tag.as_str()) {
+                true
+            } else {
+                has_table_break_descendant(children)
+            }
+        }
+        HtmlNode::Text(_) => false,
+    })
 }
 
 /// 直接子元素里有没有块级元素；有的话当前元素只当容器。
@@ -288,6 +338,98 @@ pub fn split_text(text: &str) -> Vec<Segment> {
         .collect()
 }
 
+/// 抽取正文里所有超链接的目标地址，按出现顺序返回。
+///
+/// 为什么单独抽：正文切段只保留可见文字，`<a href="...">` 的目标会被丢掉；
+/// 通知识别要拿到「点这里验证」背后的真实地址，否则以超链接形式出现的验证链接
+/// 根本识别不到。只认 `a` 标签的 `href`，HTML 实体先还原；地址是否可用由上层白名单再判。
+pub fn anchor_targets(html: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut index = 0usize;
+    while let Some(offset) = html[index..].find('<') {
+        let start = index + offset;
+        if html[start..].starts_with("<!--") {
+            match html[start..].find("-->") {
+                Some(end) => {
+                    index = start + end + 3;
+                    continue;
+                }
+                None => break,
+            }
+        }
+        let Some(close) = html[start..].find('>') else {
+            break;
+        };
+        let raw = &html[start + 1..start + close];
+        index = start + close + 1;
+        let trimmed = raw.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with('!')
+            || trimmed.starts_with('?')
+            || trimmed.starts_with('/')
+        {
+            continue;
+        }
+        let name: String = trimmed
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if name != "a" {
+            continue;
+        }
+        if let Some(value) = attribute_value(trimmed, "href") {
+            let decoded = decode_entities(value.trim());
+            if !decoded.is_empty() {
+                out.push(decoded);
+            }
+        }
+    }
+    out
+}
+
+/// 在单个标签体里取某个属性的值：名字不区分大小写，值可带单 / 双引号或不带引号。
+fn attribute_value(tag: &str, want: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let bytes = tag.as_bytes();
+    let mut search_from = 0usize;
+    while let Some(offset) = lower[search_from..].find(want) {
+        let at = search_from + offset;
+        let before_ok = at > 0 && bytes[at - 1].is_ascii_whitespace();
+        let after = at + want.len();
+        let after_ok = after >= bytes.len() || !bytes[after].is_ascii_alphanumeric();
+        search_from = after;
+        if !(before_ok && after_ok) {
+            continue;
+        }
+        let mut cursor = after;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() || bytes[cursor] != b'=' {
+            continue;
+        }
+        cursor += 1;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() {
+            return Some(String::new());
+        }
+        if bytes[cursor] == b'"' || bytes[cursor] == b'\'' {
+            let quote = bytes[cursor] as char;
+            let value_start = cursor + 1;
+            let end = tag[value_start..].find(quote).map(|off| value_start + off)?;
+            return Some(tag[value_start..end].to_string());
+        }
+        let value_start = cursor;
+        while cursor < bytes.len() && !bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        return Some(tag[value_start..cursor].to_string());
+    }
+    None
+}
 /// 把一行里的连续空白压成一个空格并去掉首尾空白。
 pub fn normalize_whitespace(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
@@ -482,6 +624,22 @@ mod tests {
     }
 
     #[test]
+    fn 排版表格里的内容会逐段切() {
+        let html = "<table><tbody><tr><td><table><tr><td><h1>标题</h1><p>第一段</p><div>按钮文字</div></td></tr></table></td></tr></tbody></table>";
+        let segments = split_html(html);
+        let texts: Vec<&str> = segments.iter().map(|item| item.text.as_str()).collect();
+        assert_eq!(texts, vec!["标题", "第一段", "按钮文字"]);
+    }
+
+    #[test]
+    fn 普通数据表格整块算一段() {
+        let html = "<table><tr><th>姓名</th><th>年龄</th></tr><tr><td>张三</td><td>30</td></tr></table>";
+        let segments = split_html(html);
+        assert_eq!(segments.len(), 1, "数据表应整块成段：{segments:?}");
+        assert_eq!(segments[0].text, "姓名年龄张三30");
+    }
+
+    #[test]
     fn 实体还原后和前端文本一致() {
         let html = "<p>AT&amp;T 113 &#9650; &nbsp;ok</p>";
         let segments = split_html(html);
@@ -538,5 +696,32 @@ mod tests {
         assert!(split_html("").is_empty());
         assert!(split_html("<div></div>").is_empty());
         assert!(split_text("   \n\n  ").is_empty());
+    }
+
+    #[test]
+    fn 抽出超链接目标地址() {
+        let html = r#"<p>验证请点<a href="https://example.com/verify?token=abc">这里</a></p>"#;
+        assert_eq!(
+            anchor_targets(html),
+            vec!["https://example.com/verify?token=abc".to_string()]
+        );
+    }
+
+    #[test]
+    fn 超链接目标支持单引号大写与实体() {
+        let html = "<a HREF='https://e.com/a?x=1&amp;y=2'>点</a><a href=https://e.com/b>点</a>";
+        assert_eq!(
+            anchor_targets(html),
+            vec![
+                "https://e.com/a?x=1&y=2".to_string(),
+                "https://e.com/b".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn 非超链接标签不抽地址() {
+        let html = r#"<img src="https://e.com/x.png"><p>无链接</p>"#;
+        assert!(anchor_targets(html).is_empty());
     }
 }

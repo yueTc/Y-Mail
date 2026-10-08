@@ -16,7 +16,8 @@ vi.mock("../api", () => ({
     clearAutoContacts: vi.fn(),
     autostartStatus: vi.fn(),
     setAutostart: vi.fn(),
-    appVersion: vi.fn().mockResolvedValue("0.1.3"),
+    setTraySettings: vi.fn(),
+    appVersion: vi.fn().mockResolvedValue("0.1.2"),
     checkForUpdate: vi.fn(),
     installPendingUpdate: vi.fn(),
     relaunchApp: vi.fn(),
@@ -41,7 +42,10 @@ const SETTINGS: AppSettings = {
   dataDir: "",
   attachmentDir: "",
   notifyNewMail: true,
+  notifyAiEnabled: false,
   blockRemoteImagesByDefault: true,
+  minimizeToTrayOnClose: true,
+  startMinimizedToTray: false,
   defaultDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",
   defaultAttachmentDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop/downloads",
   activeDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",
@@ -58,9 +62,9 @@ function renderSettings() {
   );
 }
 
-/** 「开机自动启动」这个复选框。 */
+/** 「开机自启动」这个复选框。 */
 function autostartBox() {
-  return screen.getByRole("checkbox", { name: /开机自动启动/ }) as HTMLInputElement;
+  return screen.getByRole("checkbox", { name: /开机自启动/ }) as HTMLInputElement;
 }
 
 describe("设置页开机启动", () => {
@@ -68,6 +72,11 @@ describe("设置页开机启动", () => {
     vi.mocked(api.getAppSettings).mockResolvedValue(SETTINGS);
     vi.mocked(api.autostartStatus).mockResolvedValue(false);
     vi.mocked(api.setAutostart).mockResolvedValue(false);
+    vi.mocked(api.setTraySettings).mockImplementation(async (min, start) => ({
+      ...SETTINGS,
+      minimizeToTrayOnClose: min,
+      startMinimizedToTray: start,
+    }));
   });
 
   afterEach(() => {
@@ -125,5 +134,33 @@ describe("设置页开机启动", () => {
     // 失败后再回读一次真实状态（第一次是进页面时读的）。
     await waitFor(() => expect(api.autostartStatus).toHaveBeenCalledTimes(2));
     expect(autostartBox().checked).toBe(false);
+  });
+
+  it("「关闭时最小化到托盘」默认开，关掉后调后端保存", async () => {
+    renderSettings();
+    await waitFor(() => expect(api.autostartStatus).toHaveBeenCalledTimes(1));
+
+    const closeBox = screen.getByRole("checkbox", {
+      name: /关闭时最小化到托盘/,
+    }) as HTMLInputElement;
+    expect(closeBox.checked).toBe(true);
+
+    fireEvent.click(closeBox);
+    await waitFor(() => expect(api.setTraySettings).toHaveBeenCalledWith(false, false));
+    await waitFor(() => expect(closeBox.checked).toBe(false));
+  });
+
+  it("「启动时最小化到托盘」默认关，打开后调后端保存", async () => {
+    renderSettings();
+    await waitFor(() => expect(api.autostartStatus).toHaveBeenCalledTimes(1));
+
+    const startBox = screen.getByRole("checkbox", {
+      name: /启动时最小化到托盘/,
+    }) as HTMLInputElement;
+    expect(startBox.checked).toBe(false);
+
+    fireEvent.click(startBox);
+    await waitFor(() => expect(api.setTraySettings).toHaveBeenCalledWith(true, true));
+    await waitFor(() => expect(startBox.checked).toBe(true));
   });
 });

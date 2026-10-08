@@ -172,8 +172,14 @@ export interface AppSettings {
   attachmentDir: string;
   /** 新邮件是否弹系统通知。 */
   notifyNewMail: boolean;
+  /** 通知智能识别开关；默认关，开启后新邮件正文会自动发往所选 AI。 */
+  notifyAiEnabled: boolean;
   /** 读信是否默认拦截远程图片；出厂与默认都是拦。 */
   blockRemoteImagesByDefault: boolean;
+  /** 关闭主窗口时收进托盘还是退出应用；默认收。 */
+  minimizeToTrayOnClose: boolean;
+  /** 启动时是不是直接进托盘、不弹主窗口；默认否。 */
+  startMinimizedToTray: boolean;
   /** 默认邮件数据目录。 */
   defaultDataDir: string;
   /** 附件目录留空时会用的默认位置。 */
@@ -191,6 +197,7 @@ export interface AppSettingsInput {
   dataDir: string;
   attachmentDir: string;
   notifyNewMail: boolean;
+  notifyAiEnabled: boolean;
   blockRemoteImagesByDefault: boolean;
 }
 
@@ -552,7 +559,7 @@ export type AiProviderKind = "openai_compatible" | "deepl" | "ollama";
 export type AiThinkingLevel = "off" | "low" | "medium" | "high";
 
 /** 可以使用 AI 的功能。 */
-export type AiFunction = "translate" | "summary" | "polish" | "draft";
+export type AiFunction = "translate" | "summary" | "polish" | "draft" | "notification_verify";
 
 /** 新建 / 修改 AI 站点时提交的配置；不包含密钥明文。 */
 export interface AiProviderDraft {
@@ -735,6 +742,12 @@ export const api = {
 
   setAutostart: (enabled: boolean) => call<boolean>("set_autostart", { enabled }),
 
+  // ===== 启动与托盘 =====
+
+  /** 保存「关闭时最小化到托盘」「启动时最小化到托盘」两个开关。 */
+  setTraySettings: (minimizeToTrayOnClose: boolean, startMinimizedToTray: boolean) =>
+    call<AppSettings>("set_tray_settings", { minimizeToTrayOnClose, startMinimizedToTray }),
+
   listAccounts: () => call<Account[]>("list_accounts"),
 
   testAccountConnection: (draft: AccountDraft, secret: string) =>
@@ -795,6 +808,9 @@ export const api = {
   listInboxMessages: (query: InboxQuery = {}) =>
     call<InboxMessagePage>("list_inbox_messages", { query }),
 
+  /** 按编号取一封邮件；通知被点击时用来定位并打开那封邮件。 */
+  getInboxMessage: (messageId: number) =>
+    call<InboxMessage | null>("get_inbox_message", { messageId }),
   listInboxThreads: (query: InboxQuery = {}) =>
     call<InboxThreadPage>("list_inbox_threads", { query }),
 

@@ -551,8 +551,15 @@ pub struct AppSettingsDto {
     pub attachment_dir: String,
     /// 新邮件是否弹系统通知。
     pub notify_new_mail: bool,
+    /// 通知智能识别开关；默认关，前端必须显式带上。
+    #[serde(default)]
+    pub notify_ai_enabled: bool,
     /// 读信是否默认拦截远程图片；出厂与默认都是拦。
     pub block_remote_images_by_default: bool,
+    /// 按关闭键时是收进托盘还是退出应用；默认收。
+    pub minimize_to_tray_on_close: bool,
+    /// 启动时是不是直接进托盘、不弹主窗口；默认否。
+    pub start_minimized_to_tray: bool,
     /// 默认邮件数据目录（界面上做提示）。
     pub default_data_dir: String,
     /// 附件目录留空时会用的默认位置。
@@ -576,6 +583,9 @@ pub struct AppSettingsInputDto {
     pub attachment_dir: String,
     /// 新邮件是否弹系统通知。
     pub notify_new_mail: bool,
+    /// 通知智能识别开关；默认关，前端必须显式带上。
+    #[serde(default)]
+    pub notify_ai_enabled: bool,
     /// 读信是否默认拦截远程图片；前端必须显式带上，防止旧调用悄悄变成放行。
     pub block_remote_images_by_default: bool,
 }
@@ -619,7 +629,11 @@ pub async fn set_app_settings(
         data_dir,
         attachment_dir: None,
         notify_new_mail: input.notify_new_mail,
+        notify_ai_enabled: input.notify_ai_enabled,
         block_remote_images_by_default: input.block_remote_images_by_default,
+        // 这两个开关由「启动与托盘」分组单独维护，这里从旧值原样带过。
+        minimize_to_tray_on_close: previous.minimize_to_tray_on_close,
+        start_minimized_to_tray: previous.start_minimized_to_tray,
         pending_cleanup_dir: previous.pending_cleanup_dir.take(),
     };
     state
@@ -733,6 +747,28 @@ pub async fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool,
     manager
         .is_enabled()
         .map_err(|error| CommandError::new(format!("确认开机启动状态失败：{error}")))
+}
+
+/// 保存「关闭时最小化到托盘」与「启动时最小化到托盘」两个开关。
+///
+/// 这两个开关只影响外壳行为：前端单独提交、不带上整份设置，免得跟别的分组互相覆盖。
+/// 写盘后外壳下一次关窗 / 启动就按新值走。
+#[tauri::command]
+pub async fn set_tray_settings(
+    state: tauri::State<'_, AppState>,
+    minimize_to_tray_on_close: bool,
+    start_minimized_to_tray: bool,
+) -> Result<AppSettingsDto, CommandError> {
+    let previous = state.settings_snapshot();
+    let settings = AppSettings {
+        minimize_to_tray_on_close,
+        start_minimized_to_tray,
+        ..previous
+    };
+    state
+        .save_settings(settings)
+        .map_err(|error| CommandError::new(format!("保存设置失败：{error}")))?;
+    Ok(build_settings_dto(state.inner()))
 }
 
 /// 重启应用：迁移完成后由界面明确选择要不要清理旧目录。
@@ -882,7 +918,10 @@ fn build_settings_dto(state: &AppState) -> AppSettingsDto {
         data_dir: path_text(settings.data_dir.as_deref()),
         attachment_dir: path_text(settings.attachment_dir.as_deref()),
         notify_new_mail: settings.notify_new_mail,
+        notify_ai_enabled: settings.notify_ai_enabled,
         block_remote_images_by_default: settings.block_remote_images_by_default,
+        minimize_to_tray_on_close: settings.minimize_to_tray_on_close,
+        start_minimized_to_tray: settings.start_minimized_to_tray,
         default_data_dir: strip_verbatim_prefix(&default_dir.to_string_lossy()),
         default_attachment_dir: strip_verbatim_prefix(
             &settings.effective_attachment_dir(default_dir).to_string_lossy(),
@@ -1109,7 +1148,7 @@ pub async fn oauth_status(
 ///
 /// 不经过 shell：地址作为参数直接交给系统打开器，避免被当成命令解析。
 #[cfg(target_os = "windows")]
-fn open_in_browser(url: &str) -> std::io::Result<()> {
+pub(crate) fn open_in_browser(url: &str) -> std::io::Result<()> {
     std::process::Command::new("rundll32.exe")
         .arg("url.dll,FileProtocolHandler")
         .arg(url)
@@ -1119,13 +1158,13 @@ fn open_in_browser(url: &str) -> std::io::Result<()> {
 
 /// 用系统默认浏览器打开一个地址（macOS）。
 #[cfg(target_os = "macos")]
-fn open_in_browser(url: &str) -> std::io::Result<()> {
+pub(crate) fn open_in_browser(url: &str) -> std::io::Result<()> {
     std::process::Command::new("open").arg(url).spawn().map(|_| ())
 }
 
 /// 用系统默认浏览器打开一个地址（Linux 等）。
 #[cfg(all(unix, not(target_os = "macos")))]
-fn open_in_browser(url: &str) -> std::io::Result<()> {
+pub(crate) fn open_in_browser(url: &str) -> std::io::Result<()> {
     std::process::Command::new("xdg-open")
         .arg(url)
         .spawn()
@@ -1149,7 +1188,7 @@ pub async fn open_external_url(url: String) -> Result<(), CommandError> {
 }
 
 /// 只认绝对 `http` / `https` / `mailto` 链接，大小写不敏感。
-fn is_external_link(url: &str) -> bool {
+pub(crate) fn is_external_link(url: &str) -> bool {
     let lowered = url.to_ascii_lowercase();
     ["http://", "https://", "mailto:"]
         .iter()
@@ -1697,6 +1736,19 @@ pub async fn set_message_read(
     Ok(())
 }
 
+/// 按编号取一封邮件；通知被点击时用来定位并打开具体邮件。
+#[tauri::command]
+pub async fn get_inbox_message(
+    state: tauri::State<'_, AppState>,
+    message_id: i64,
+) -> Result<Option<InboxMessageDto>, CommandError> {
+    if message_id <= 0 {
+        return Err(CommandError::input("邮件编号不合法"));
+    }
+    let engine = state.engine().await;
+    let message = engine.inbox_message(message_id)?;
+    Ok(message.as_ref().map(InboxMessageDto::from_message))
+}
 /// 切换一封邮件的红旗本地状态，然后尝试回写服务器。
 ///
 /// 本地写库先完成并立即返回状态；服务器这次没确认就保留「待同步」，

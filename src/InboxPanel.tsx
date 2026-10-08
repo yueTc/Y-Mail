@@ -939,6 +939,43 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
     };
   }, [refreshAll]);
 
+  // 后台弹的系统通知被点击时，外壳会推一条「打开某封邮件」的事件过来；
+  // 收到后按编号取回邮件，刷新列表并定位到它。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    const start = async () => {
+      try {
+        const off = await listen<{ messageId: number }>("inbox:open-message", (event) => {
+          const messageId = event.payload?.messageId;
+          if (typeof messageId !== "number") return;
+          void (async () => {
+            try {
+              const message = await api.getInboxMessage(messageId);
+              if (!message) return;
+              await refreshAll();
+              await openMessage(message);
+            } catch (caught) {
+              setError(describeError(caught));
+            }
+          })();
+        });
+        if (cancelled) {
+          off();
+        } else {
+          unlisten = off;
+        }
+      } catch {
+        // 单元测试与浏览器预览里没有 Tauri 事件总线，忽略即可。
+      }
+    };
+    void start();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [refreshAll, openMessage]);
+
   /** 每两秒读一次同步状态；读不到不影响收发，静默即可。 */
   useEffect(() => {
     let cancelled = false;

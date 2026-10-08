@@ -41,6 +41,7 @@ export default function FirstRunWizard({ settings, onDone }: FirstRunWizardProps
         dataDir: "",
         attachmentDir: "",
         notifyNewMail: settings.notifyNewMail,
+        notifyAiEnabled: settings.notifyAiEnabled,
         blockRemoteImagesByDefault: settings.blockRemoteImagesByDefault,
       });
       onDone();
@@ -48,7 +49,7 @@ export default function FirstRunWizard({ settings, onDone }: FirstRunWizardProps
       setError(t("保存默认位置失败：{0}", [describeError(cause)]));
       setBusy(false);
     }
-  }, [onDone, settings.notifyNewMail, settings.blockRemoteImagesByDefault]);
+  }, [onDone, settings.notifyNewMail, settings.notifyAiEnabled, settings.blockRemoteImagesByDefault]);
 
   /** 选文件夹：走迁移（复制 + 校验通过才写设置），完成后要重启。 */
   const chooseFolder = useCallback(async () => {

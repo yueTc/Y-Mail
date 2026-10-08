@@ -11,8 +11,9 @@
 use std::time::{Duration, Instant};
 
 use mail_ai::{
-    chat, is_local_host, list_models, normalize_base_url, prompt, split_html, split_text, translate, AiError,
-    ChatOutcome, Endpoint, ProviderKind, ThinkingLevel, TranslationOutcome,
+    anchor_targets, chat, is_local_host, list_models, normalize_base_url, parse_verification, prompt,
+    split_html, split_text, translate, AiError, ChatOutcome, Endpoint, ProviderKind, ThinkingLevel,
+    TranslationOutcome, VerificationFinding,
 };
 use mail_domain::account::AccountProxyMode;
 use mail_domain::proxy::Secret;
@@ -26,6 +27,9 @@ use crate::proxies::new_credential_key;
 
 /// AI 请求超时：本地模型可能较慢，给到 60 秒。
 pub const AI_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// 通知识别的单封等待上限；超了就退回普通通知。
+pub const NOTIFICATION_VERIFY_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// 一次外发授权令牌的有效期。
 pub const AI_AUTHORIZATION_TTL: Duration = Duration::from_secs(300);
@@ -206,6 +210,31 @@ pub struct AiTranslation {
     pub thinking_downgraded: bool,
     /// 是否命中本地缓存。
     pub from_cache: bool,
+}
+
+/// 把 HTML 正文整理成送检文本：先按可见文字切段，再把超链接地址按行补在后面。
+///
+/// 只做文本整理，不解析、不下载、不跳转；地址是否可信由下游白名单再判。
+fn build_notification_body(html: &str) -> String {
+    let mut text = split_html(html)
+        .into_iter()
+        .map(|segment| segment.text)
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let links = anchor_targets(html);
+    if !links.is_empty() {
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(
+            &links
+                .iter()
+                .map(|url| format!("链接：{url}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    text
 }
 
 impl MailEngine {
@@ -519,6 +548,11 @@ impl MailEngine {
                 }
             }
             AiFunction::Polish | AiFunction::Draft => text.unwrap_or_default().to_string(),
+            AiFunction::NotificationVerify => {
+                return Err(EngineError::BadRequest(
+                    "通知智能识别是后台自动功能，不走逐次授权".to_string(),
+                ));
+            }
         };
         if source.trim().is_empty() {
             return Err(EngineError::BadRequest(
@@ -714,18 +748,15 @@ impl MailEngine {
     ) -> Result<AiTextOutcome, EngineError> {
         let target = self.resolve_ai_target(AiFunction::Summary)?;
         let body = self.get_message_body(message_id, false).await?;
-        let plain = body.text_plain.clone().unwrap_or_else(|| {
-            body.html
-                .as_deref()
-                .map(|html| {
-                    split_html(html)
-                        .into_iter()
-                        .map(|segment| segment.text)
-                        .collect::<Vec<_>>()
-                        .join("\n\n")
-                })
-                .unwrap_or_default()
-        });
+        let plain = match body.text_plain.as_deref() {
+            // 纯文本正文里链接本就是明文，直接送。
+            Some(text) => text.to_string(),
+            // HTML 正文只切出可见文字，超链接地址会丢；补上 href 才能识别链接式验证。
+            None => match body.html.as_deref() {
+                Some(html) => build_notification_body(html),
+                None => String::new(),
+            },
+        };
         if plain.trim().is_empty() {
             return Err(EngineError::BadRequest("这封邮件没有可摘要的正文".to_string()));
         }
@@ -889,6 +920,60 @@ impl MailEngine {
         .await
         .map_err(|err| self.audit_ai_error(AiFunction::Draft, &target, err))?;
         self.finish_text(AiFunction::Draft, &target, None, "", &source_hash, outcome)
+    }
+
+    /// 识别一封新邮件里的验证码和验证链接（通知智能识别专用）。
+    ///
+    /// 这条路径是规格批准的长期外发例外：开关打开并确认风险后，不再逐封要一次性授权令牌。
+    /// 例外只作用于本功能，其它 AI 功能仍要逐次授权。
+    ///
+    /// AI 输出始终当不可信内容：解析出来的候选值再走一遍本地白名单校验，只有通过的值才会返回。
+    /// 正文、验证码和链接都不落库、不写日志；审计只记功能、站点、模型与结果分类。
+    pub async fn identify_notification_verification(
+        &self,
+        message_id: i64,
+        from: &str,
+        subject: &str,
+    ) -> Result<VerificationFinding, EngineError> {
+        let target = self.resolve_ai_target(AiFunction::NotificationVerify)?;
+        let body = self.get_message_body(message_id, false).await?;
+        let plain = match body.text_plain.as_deref() {
+            // 纯文本正文里链接本就是明文，直接送。
+            Some(text) => text.to_string(),
+            // HTML 正文只切出可见文字，超链接地址会丢；补上 href 才能识别链接式验证。
+            None => match body.html.as_deref() {
+                Some(html) => build_notification_body(html),
+                None => String::new(),
+            },
+        };
+        if plain.trim().is_empty() {
+            return Err(EngineError::BadRequest("这封邮件没有可识别的正文".to_string()));
+        }
+
+        let secret = self.provider_secret(&target)?;
+        let route = self.resolve_route(AccountProxyMode::InheritGlobal)?;
+        let endpoint = Endpoint {
+            kind: provider_kind(target.kind),
+            base_url: &target.base_url,
+            api_key: secret.as_ref(),
+        };
+        let outcome = chat(
+            route.as_ref(),
+            &endpoint,
+            &target.model,
+            thinking_level(target.thinking_level),
+            &prompt::notification_verify_system(),
+            &prompt::notification_verify_user(from, subject, &plain),
+            NOTIFICATION_VERIFY_TIMEOUT,
+        )
+        .await
+        .map_err(|err| self.audit_ai_error(AiFunction::NotificationVerify, &target, err))?;
+        self.audit_ai_success(
+            AiFunction::NotificationVerify,
+            &target,
+            outcome.thinking_downgraded,
+        )?;
+        Ok(parse_verification(&outcome.text))
     }
 
     /// 把一次对话结果写缓存、写审计，并转成界面结果。
@@ -1105,6 +1190,18 @@ mod tests {
         assert!(!hash.contains("邮件"));
     }
 
+    #[test]
+    fn 送检正文保留可见文字并补上超链接地址() {
+        let html =
+            r#"<p>验证码 123456</p><p>或点<a href="https://example.com/verify?token=abc">这里</a>验证</p>"#;
+        let text = build_notification_body(html);
+        assert!(text.contains("验证码 123456"), "应保留可见文字：{text}");
+        assert!(text.contains("这里"), "应保留链接可见文字：{text}");
+        assert!(
+            text.contains("链接：https://example.com/verify?token=abc"),
+            "应补上超链接地址：{text}"
+        );
+    }
     fn engine(dir: &std::path::Path) -> MailEngine {
         MailEngine::initialize_with_secrets(
             dir,

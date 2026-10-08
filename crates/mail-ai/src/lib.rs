@@ -9,11 +9,13 @@ mod http;
 pub mod prompt;
 mod provider;
 mod segment;
+pub mod verify;
 
 pub use client::{chat, list_models, translate, ChatOutcome, Endpoint, TranslationOutcome};
 pub use error::AiError;
 pub use provider::{is_local_host, join_url, normalize_base_url, ProviderKind, ThinkingLevel};
-pub use segment::{normalize_whitespace, split_html, split_text, Segment};
+pub use segment::{anchor_targets, normalize_whitespace, split_html, split_text, Segment};
+pub use verify::{parse_verification, sanitize_code, sanitize_link, VerificationFinding};
 
 /// 本 crate 的用途标识，供工作区自检与日志使用。
 pub const CRATE_PURPOSE: &str = "AI 与翻译（默认关闭，逐次授权）";

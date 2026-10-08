@@ -70,6 +70,10 @@ impl MailEngine {
         Ok(self.store().list_thread_messages(account_id, thread_key, limit)?)
     }
 
+    /// 按编号取一封邮件；不存在返回空值。供通知点击后定位到具体邮件使用。
+    pub fn inbox_message(&self, message_id: i64) -> Result<Option<InboxMessage>, EngineError> {
+        Ok(self.store().get_inbox_message(message_id)?)
+    }
     /// 每个账号的收件箱汇总（用于未读合计与账号切换）。
     pub fn inbox_account_summary(&self) -> Result<Vec<AccountInboxSummary>, EngineError> {
         Ok(self.store().account_inbox_summary()?)

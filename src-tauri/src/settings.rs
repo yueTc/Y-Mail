@@ -25,9 +25,16 @@ pub struct AppSettings {
     pub attachment_dir: Option<PathBuf>,
     /// 新邮件是否弹系统通知；默认开。
     pub notify_new_mail: bool,
+    /// 通知智能识别（高级功能）：开启后新邮件正文会自动发往所选 AI；默认关。
+    pub notify_ai_enabled: bool,
     /// 是不是默认拦截邮件里的远程图片；默认拦（true）。
     /// 关掉之后，读信时远程图片会直接放行；本封放行与「信任发件人」仍各自有效。
     pub block_remote_images_by_default: bool,
+    /// 按关闭键时是收进托盘还是退出应用；默认收（true），保持一直以来的行为。
+    pub minimize_to_tray_on_close: bool,
+    /// 启动时是不是直接进托盘、不弹主窗口；默认否，双击图标仍能看到窗口。
+    /// 被开机自启动拉起来的那一次不受这里影响，始终静默进托盘。
+    pub start_minimized_to_tray: bool,
     /// 下次启动要清理的旧数据目录；为空表示没有待清理目录。
     pub pending_cleanup_dir: Option<PathBuf>,
 }
@@ -38,7 +45,10 @@ impl Default for AppSettings {
             data_dir: None,
             attachment_dir: None,
             notify_new_mail: true,
+            notify_ai_enabled: false,
             block_remote_images_by_default: true,
+            minimize_to_tray_on_close: true,
+            start_minimized_to_tray: false,
             pending_cleanup_dir: None,
         }
     }
@@ -98,7 +108,10 @@ mod tests {
         assert_eq!(settings.data_dir, None);
         assert_eq!(settings.attachment_dir, None);
         assert!(settings.notify_new_mail);
+        assert!(!settings.notify_ai_enabled);
         assert!(settings.block_remote_images_by_default);
+        assert!(settings.minimize_to_tray_on_close, "默认按关闭键收进托盘");
+        assert!(!settings.start_minimized_to_tray, "默认启动时显示主窗口");
         assert_eq!(settings.pending_cleanup_dir, None);
         assert_eq!(
             settings.effective_data_dir(std::path::Path::new("C:/app")),
@@ -116,7 +129,10 @@ mod tests {
             data_dir: Some(std::path::PathBuf::from("D:/Mail")),
             attachment_dir: Some(std::path::PathBuf::from("E:/OldFiles")),
             notify_new_mail: false,
+            notify_ai_enabled: false,
             block_remote_images_by_default: true,
+            minimize_to_tray_on_close: true,
+            start_minimized_to_tray: false,
             pending_cleanup_dir: None,
         };
         assert_eq!(
@@ -143,7 +159,10 @@ mod tests {
             data_dir: Some(std::path::PathBuf::from("D:/Mail")),
             attachment_dir: Some(std::path::PathBuf::from("E:/Files")),
             notify_new_mail: false,
+            notify_ai_enabled: true,
             block_remote_images_by_default: false,
+            minimize_to_tray_on_close: false,
+            start_minimized_to_tray: true,
             pending_cleanup_dir: Some(std::path::PathBuf::from("C:/Old/Mail")),
         };
         settings.save(&dir).expect("保存设置");
@@ -161,6 +180,15 @@ mod tests {
         assert!(
             partial.block_remote_images_by_default,
             "老配置里缺这个字段时要按默认拦截处理"
+        );
+        assert!(!partial.notify_ai_enabled, "老配置里缺通知识别开关时要按关闭处理");
+        assert!(
+            partial.minimize_to_tray_on_close,
+            "老配置里缺这个字段时按「关闭收托盘」处理"
+        );
+        assert!(
+            !partial.start_minimized_to_tray,
+            "老配置里缺这个字段时按「启动不静默」处理"
         );
         assert_eq!(partial.data_dir, None);
         assert_eq!(partial.attachment_dir, None);

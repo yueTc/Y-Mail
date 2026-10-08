@@ -15,6 +15,7 @@ const FUNCTION_LABEL: Record<AiFunction, string> = {
   summary: "摘要",
   polish: "润色",
   draft: "起草",
+  notification_verify: "通知智能识别",
 };
 
 /** 弹窗里所有能按到的元素；浏览器里优先取真正可见的，兜底再退回全部。 */

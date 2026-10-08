@@ -242,7 +242,7 @@ const READER_SKIP_TAGS = new Set(["style", "script", "head", "title", "template"
  * 找出「一段」对应的元素，规则贴合后端 mail-ai 的 split_html：
  * - 最外层的块级元素算一段；
  * - <li> 例外，每个列表项各自成段，译文才能逐条落在对应条目后面；
- * - <table> 整块算一段，免得译文被塞进表格行里、把排版顶坏。
+ * - 普通数据表格整块算一段；整封邮件套在排版表格里时继续下钻逐段切。
  */
 function normalizeReaderText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -271,8 +271,22 @@ function locateReaderSegment(segments: Element[], cursor: number, needle: string
   return cursor;
 }
 
-/** 整块成段、不再往里钻的块级标签。 */
-const READER_LEAF_BLOCK_TAGS = new Set(["table"]);
+/**
+ * 表格里出现这些标签，就说明它不只是数据表：邮件常拿表格当整页排版外壳。
+ * 这种表格要继续下钻，否则整封邮件会被当成一大段。
+ */
+const READER_TABLE_BREAK_TAGS = new Set([
+  "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre",
+  "section", "article", "header", "footer", "main", "dl", "dt", "dd",
+  "ul", "ol", "table",
+]);
+
+const READER_TABLE_BREAK_SELECTOR = Array.from(READER_TABLE_BREAK_TAGS).join(",");
+
+/** 表格里还有段落、标题或嵌套表格，就按排版外壳继续下钻。 */
+function isReaderLayoutTable(element: Element): boolean {
+  return element.querySelector(READER_TABLE_BREAK_SELECTOR) !== null;
+}
 
 /** 直接子元素里有没有块级元素；有的话当前元素只当容器。 */
 function hasReaderBlockChild(element: Element): boolean {
@@ -314,10 +328,19 @@ function collectReaderBlocks(node: Node, out: Element[], looseText: boolean): vo
       collectReaderBlocks(element, out, looseText);
       continue;
     }
-    if (tag === "li" || READER_LEAF_BLOCK_TAGS.has(tag)) {
+    if (tag === "li") {
       if (normalizeReaderText(element.textContent ?? "")) out.push(element);
       // 列表项里的嵌套列表还要继续往下找，但不再拆列表项自己的文字。
-      if (tag === "li") collectReaderBlocks(element, out, false);
+      collectReaderBlocks(element, out, false);
+      continue;
+    }
+    if (tag === "table") {
+      if (isReaderLayoutTable(element)) {
+        // 排版表格只当外壳，继续找里面的段落、标题和按钮文字。
+        collectReaderBlocks(element, out, looseText);
+      } else if (normalizeReaderText(element.textContent ?? "")) {
+        out.push(element);
+      }
       continue;
     }
     if (hasReaderBlockChild(element)) {
@@ -357,6 +380,11 @@ function insertTranslationElement(target: Element, translated: string): void {
     cell.setAttribute("colspan", "99");
     cell.appendChild(box);
     target.appendChild(cell);
+    return;
+  }
+  if (tag === "td" || tag === "th") {
+    // 单元格里没有 <div> 的合法位置时，译文直接放进单元格末尾。
+    target.appendChild(box);
     return;
   }
   if (tag === "ul" || tag === "ol") {
@@ -930,6 +958,10 @@ export default function MessageReader({
     });
   }, [inlineApplication.html, allowRemote, dark, translation]);
 
+  /** 当前正文文档：有译文且选行内模式才用行内版；否则永远回原正文。 */
+  const viewDocument =
+    translation && translationMode === "inline" ? inlineDocument_ : document_;
+
   const { ref: readerBodyRef, height: readerBodyHeight } = useElementHeight<HTMLDivElement>();
   const {
     height: attachmentHeight,
@@ -1186,13 +1218,10 @@ export default function MessageReader({
               </div>
             ) : (
               <>
-                {(translationMode === "inline" ? inlineDocument_ : document_) && (
-                  <ReaderFrame
-                    html={translationMode === "inline" ? inlineDocument_ : document_}
-                    onOpenLink={openExternalLink}
-                  />
+                {viewDocument && (
+                  <ReaderFrame html={viewDocument} onOpenLink={openExternalLink} />
                 )}
-                {!(translationMode === "inline" ? inlineDocument_ : document_) && (
+                {!viewDocument && (
                   <p className="hint">{t("这封邮件没有可显示的正文。")}</p>
                 )}
               </>

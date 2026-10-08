@@ -2,7 +2,7 @@
 //!
 //! 渲染真实组件，只把 Tauri 命令层（../api）换成内存桩。
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import MessageReader, {
@@ -15,6 +15,8 @@ import AiPanel from "../AiPanel";
 import type {
   AccountInboxSummary,
   AiAuthorization,
+  AiModelMap,
+  AiProvider,
   AiTranslation,
   InboxMessage,
   MessageBody,
@@ -247,6 +249,22 @@ describe("翻译三种模式", () => {
     expect(frameSrcdocs()[0]).not.toContain("第一段译文");
     expect(api.translateMessage).toHaveBeenCalledTimes(1);
   });
+
+  it("行内翻译切回原文后仍显示原正文", async () => {
+    render(<MessageReader message={MESSAGE} aiEnabled />);
+    await screen.findByText(/正文/);
+    fireEvent.click(screen.getByRole("button", { name: "翻译" }));
+    await screen.findByRole("dialog", { name: "确认 AI 外发" });
+    fireEvent.click(screen.getByRole("button", { name: "确认并调用" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "行内翻译" }));
+    await waitFor(() => expect(frameSrcdocs()[0]).toContain("第一段译文"));
+    fireEvent.click(screen.getByRole("button", { name: "切回原文" }));
+
+    await waitFor(() => expect(frameSrcdocs()[0]).toContain("<p>第一段</p>"));
+    expect(frameSrcdocs()[0]).not.toContain("第一段译文");
+    expect(screen.queryByText("这封邮件没有可显示的正文。")).toBeNull();
+  });
 });
 
 describe("译文就地插回正文", () => {
@@ -265,6 +283,25 @@ describe("译文就地插回正文", () => {
     expect(annotated).toContain("打开");
     expect(annotated).toContain('href="https://example.com"');
     expect(annotated).toContain("cid:logo");
+  });
+
+  it("整封邮件套在排版表格里时逐段插译，不糊成一大段", () => {
+    const html =
+      "<table><tbody><tr><td><h1>Title</h1><p>First paragraph</p><p>Second paragraph</p></td></tr></tbody></table>";
+    const annotated = annotateEmailTranslations(html, [
+      { original: "Title", translated: "标题" },
+      { original: "First paragraph", translated: "第一段译文" },
+      { original: "Second paragraph", translated: "第二段译文" },
+    ]);
+    const parsed = document.implementation.createHTMLDocument("");
+    parsed.body.innerHTML = annotated;
+
+    const boxes = parsed.querySelectorAll('[data-em-translation="1"]');
+    expect(boxes.length).toBe(3);
+    expect(parsed.querySelector("h1")?.nextElementSibling?.getAttribute("data-em-translation")).toBe("1");
+    expect(parsed.body.textContent).toContain("标题");
+    expect(parsed.body.textContent).toContain("第一段译文");
+    expect(parsed.body.textContent).toContain("第二段译文");
   });
 
   it("模型吐出 HTML 时只当纯文字，不产生脚本节点", () => {
@@ -305,6 +342,21 @@ describe("直接翻译保留邮件排版", () => {
     expect(translated).not.toContain("Hello team");
     // 不再出现「译文」这两个字的标签。
     expect(translated).not.toContain(">译文<");
+  });
+
+  it("整封邮件套在排版表格里时逐段换字，不把整表糊成一段", () => {
+    const html =
+      "<table><tbody><tr><td><h1>Title</h1><p>First paragraph</p><p>Second paragraph</p></td></tr></tbody></table>";
+    const translated = replaceEmailTranslations(html, [
+      { original: "Title", translated: "标题" },
+      { original: "First paragraph", translated: "第一段译文" },
+      { original: "Second paragraph", translated: "第二段译文" },
+    ]);
+
+    expect(translated).toContain("<h1>标题</h1>");
+    expect(translated).toContain("<p>第一段译文</p>");
+    expect(translated).toContain("<p>第二段译文</p>");
+    expect(translated).not.toContain("First paragraph");
   });
 
   it("链接和图片留在原位，链接里的文字也换成中文", () => {
@@ -493,7 +545,7 @@ describe("写信 AI 外发闸门", () => {
 
 describe("AI 设置页密钥", () => {
   it("密钥输入默认遮挡，点眼睛后才显示明文", async () => {
-    render(<AiPanel />);
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={async () => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: "新增 AI 站点" }));
 
     const keyInput = screen.getByLabelText("CDKey / API Key") as HTMLInputElement;
@@ -505,5 +557,130 @@ describe("AI 设置页密钥", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "隐藏密钥" }));
     expect(keyInput.type).toBe("password");
+  });
+});
+
+describe("通知智能识别开关", () => {
+  const PROVIDER: AiProvider = {
+    id: 1,
+    label: "本机 Ollama",
+    kind: "ollama",
+    baseUrl: "http://127.0.0.1:11434",
+    defaultModel: "qwen",
+    models: ["qwen"],
+    thinkingLevel: "off",
+    enabled: true,
+    hasKey: false,
+  };
+
+  const VERIFY_MAP: AiModelMap = {
+    function: "notification_verify",
+    providerId: 1,
+    model: "qwen",
+    thinkingLevel: null,
+    updatedAt: "2026-10-08T00:00:00Z",
+  };
+
+  it("默认关闭", async () => {
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={async () => {}} />);
+    const box = (await screen.findByRole("checkbox", {
+      name: "开启通知智能识别",
+    })) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+  });
+
+  it("没有站点模型时不能打开，只给中文提示", async () => {
+    const onChange = vi.fn().mockResolvedValue(undefined);
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={onChange} />);
+    const box = (await screen.findByRole("checkbox", {
+      name: "开启通知智能识别",
+    })) as HTMLInputElement;
+
+    fireEvent.click(box);
+
+    await screen.findByText(/请先选择站点和模型/);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "确认开启通知智能识别" })).toBeNull();
+    expect(box.checked).toBe(false);
+  });
+
+  it("配好站点后打开要弹一次风险确认，确认才落盘", async () => {
+    const onChange = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(api.listAiProviders).mockResolvedValue([PROVIDER]);
+    vi.mocked(api.listAiModelMaps).mockResolvedValue([VERIFY_MAP]);
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={onChange} />);
+    const box = (await screen.findByRole("checkbox", {
+      name: "开启通知智能识别",
+    })) as HTMLInputElement;
+
+    fireEvent.click(box);
+
+    const dialog = await screen.findByRole("dialog", { name: "确认开启通知智能识别" });
+    expect(dialog.textContent).toContain("本机 Ollama");
+    expect(dialog.textContent).toContain("qwen");
+    expect(dialog.textContent).toContain("是，本地服务，内容不离开这台电脑");
+    expect(onChange).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认开启" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(true));
+    // 落盘开关的同时，也要把弹窗里展示的站点和模型存到通知识别功能上。
+    expect(api.setAiFeature).toHaveBeenCalledWith("notification_verify", 1, "qwen", undefined);
+  });
+
+  it("打开开关的确认弹窗取消后不落盘", async () => {
+    const onChange = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(api.listAiProviders).mockResolvedValue([PROVIDER]);
+    vi.mocked(api.listAiModelMaps).mockResolvedValue([VERIFY_MAP]);
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={onChange} />);
+    const box = (await screen.findByRole("checkbox", {
+      name: "开启通知智能识别",
+    })) as HTMLInputElement;
+
+    fireEvent.click(box);
+    const dialog = await screen.findByRole("dialog", { name: "确认开启通知智能识别" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "确认开启通知智能识别" })).toBeNull(),
+    );
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("关闭开关立刻落盘，不再弹确认", async () => {
+    const onChange = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(api.listAiProviders).mockResolvedValue([PROVIDER]);
+    vi.mocked(api.listAiModelMaps).mockResolvedValue([VERIFY_MAP]);
+    render(<AiPanel notifyAiEnabled onNotifyAiEnabledChange={onChange} />);
+    const box = (await screen.findByRole("checkbox", {
+      name: "开启通知智能识别",
+    })) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+
+    fireEvent.click(box);
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(false));
+    expect(screen.queryByRole("dialog", { name: "确认开启通知智能识别" })).toBeNull();
+  });
+
+  it("通知识别的站点、模型与思考程度保存到通知智能识别功能上", async () => {
+    vi.mocked(api.listAiProviders).mockResolvedValue([PROVIDER]);
+    vi.mocked(api.listAiModelMaps).mockResolvedValue([]);
+    vi.mocked(api.setAiFeature).mockResolvedValue(undefined);
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={async () => {}} />);
+
+    const site = (await screen.findByLabelText("通知识别站点")) as HTMLSelectElement;
+    const card = site.closest("section") as HTMLElement;
+    fireEvent.change(site, { target: { value: "1" } });
+    fireEvent.change(within(card).getByLabelText("通知识别模型"), {
+      target: { value: "qwen2" },
+    });
+    fireEvent.change(within(card).getByLabelText("通知识别思考程度"), {
+      target: { value: "high" },
+    });
+    fireEvent.click(within(card).getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() =>
+      expect(api.setAiFeature).toHaveBeenCalledWith("notification_verify", 1, "qwen2", "high"),
+    );
   });
 });

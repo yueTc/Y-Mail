@@ -26,6 +26,9 @@ describe("外观设置", () => {
     const select = screen.getByLabelText("深色模式") as HTMLSelectElement;
     expect(select.value).toBe("auto");
     expect(document.documentElement.getAttribute("data-theme")).toBeNull();
+    expect(screen.queryByText(/整个界面和读信窗格一起换色/)).toBeNull();
+    expect(screen.queryByText(/改完立即生效/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "保存设置" })).toBeNull();
   });
 
   it("选深色后整个界面的根节点都切到深色", () => {

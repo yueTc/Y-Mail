@@ -32,6 +32,8 @@ pub struct AppState {
     settings: StdMutex<AppSettings>,
     /// 新邮件通知开关；后台轮询线程直接读它，改了立刻生效。
     notify_enabled: Arc<AtomicBool>,
+    /// 通知智能识别开关；后台轮询线程直接读它，改了立刻生效。
+    notify_ai_enabled: Arc<AtomicBool>,
     /// 读信是否默认拦截远程图片；与引擎共用同一个原子开关，改设置立刻生效。
     block_remote_images: Arc<AtomicBool>,
     /// 数据目录迁移是否正在跑；防止界面重复触发。
@@ -50,6 +52,7 @@ impl AppState {
         default_data_dir: PathBuf,
         settings: AppSettings,
         notify_enabled: Arc<AtomicBool>,
+        notify_ai_enabled: Arc<AtomicBool>,
         first_run: bool,
     ) -> Self {
         let init = engine.init_summary();
@@ -63,6 +66,7 @@ impl AppState {
             default_data_dir,
             settings: StdMutex::new(settings),
             notify_enabled,
+            notify_ai_enabled,
             block_remote_images,
             migrating_data_dir: AtomicBool::new(false),
             first_run,
@@ -100,6 +104,8 @@ impl AppState {
         settings.save(&self.default_data_dir)?;
         self.notify_enabled
             .store(settings.notify_new_mail, Ordering::Relaxed);
+        self.notify_ai_enabled
+            .store(settings.notify_ai_enabled, Ordering::Relaxed);
         self.block_remote_images
             .store(settings.block_remote_images_by_default, Ordering::Relaxed);
         let mut guard = self

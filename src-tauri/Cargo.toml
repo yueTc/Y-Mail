@@ -46,6 +46,10 @@ tracing-appender.workspace = true
 fs2.workspace = true
 tauri-plugin-single-instance = "2.5.2"
 
+# 复制验证码到系统剪贴板（只在 Windows 用到）。
+[target.'cfg(windows)'.dependencies]
+arboard = { version = "3", default-features = false }
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 

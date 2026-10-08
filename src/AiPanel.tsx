@@ -63,9 +63,14 @@ const FUNCTION_LABEL: Record<AiFunction, string> = {
   summary: "摘要",
   polish: "润色",
   draft: "起草",
+  notification_verify: "通知智能识别",
 };
 
+/** 逐次确认的功能；在功能级模型列表里平铺展示。 */
 const FUNCTION_ORDER: AiFunction[] = ["translate", "summary", "polish", "draft"];
+
+/** 通知智能识别单独放在「高级功能」区，跟普通功能分开显示。 */
+const VERIFY_FUNCTION: AiFunction = "notification_verify";
 
 const KIND_LABEL: Record<AiProviderKind, string> = {
   openai_compatible: "OpenAI 兼容站点",
@@ -140,8 +145,31 @@ function featureMapFor(maps: AiModelMap[], fn: AiFunction): AiModelMap | undefin
   return maps.find((item) => item.function === fn);
 }
 
+/** 粗略判断站点是不是本机服务：本机 Ollama 或回环地址都算本地。 */
+function providerIsLocal(provider: AiProvider | undefined): boolean {
+  if (!provider) return false;
+  if (provider.kind === "ollama") return true;
+  try {
+    const host = new URL(provider.baseUrl).hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
+/** AI 设置页对外接口。
+ *
+ * 通知智能识别开关的落盘统一交给外层设置页，避免设置页和这里各存一份互相覆盖。
+ */
+export interface AiPanelProps {
+  /** 开关当前值；由外层设置快照决定。 */
+  notifyAiEnabled: boolean;
+  /** 保存开关；抛错表示失败，页面据此提示。 */
+  onNotifyAiEnabledChange: (next: boolean) => Promise<void>;
+}
+
 /** AI 设置页：站点管理、功能级配置、审计与熔断。 */
-export default function AiPanel() {
+export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: AiPanelProps) {
   const [providers, setProviders] = useState<AiProvider[]>([]);
   const [audits, setAudits] = useState<AiAudit[]>([]);
   const [loading, setLoading] = useState(true);
@@ -153,6 +181,14 @@ export default function AiPanel() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [modelsHint, setModelsHint] = useState("");
   const [featureDrafts, setFeatureDrafts] = useState<Record<string, FeatureDraftState>>({});
+  // 打开「通知智能识别」开关前的风险确认：先记下要展示的目标，用户点确认才落盘。
+  const [verifyRisk, setVerifyRisk] = useState<
+    | { providerLabel: string; model: string; local: boolean }
+    | null
+  >(null);
+  // 通知识别开关自己的保存结果；不跟站点/映射的提示串台。
+  const [verifyNotice, setVerifyNotice] = useState("");
+  const [verifyError, setVerifyError] = useState("");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -167,7 +203,7 @@ export default function AiPanel() {
       setAudits(nextAudits);
       setFeatureDrafts((old) => {
         const next: Record<string, FeatureDraftState> = {};
-        for (const fn of FUNCTION_ORDER) {
+        for (const fn of [...FUNCTION_ORDER, VERIFY_FUNCTION]) {
           const existing = old[fn];
           const map = featureMapFor(nextMaps, fn);
           next[fn] = existing ?? {
@@ -353,6 +389,73 @@ export default function AiPanel() {
     [refresh],
   );
 
+  /** 当前「通知智能识别」选中的站点与模型；没选或站点不存在时为 undefined。 */
+  const verifyDraft = featureDrafts[VERIFY_FUNCTION] ?? {
+    providerId: "",
+    model: "",
+    thinkingLevel: "" as const,
+  };
+  const verifyProvider = providers.find(
+    (provider) => String(provider.id) === verifyDraft.providerId,
+  );
+
+  /**
+   * 点开关时的入口：开 → 先检查站点模型，再弹风险确认；关 → 立即落盘。
+   *
+   * 站点或模型没配好时不放行开启，只在通知识别这一块给出中文提示，不动全局错误。
+   */
+  const toggleNotifyAi = useCallback(
+    async (next: boolean) => {
+      setVerifyNotice("");
+      setVerifyError("");
+      if (!next) {
+        try {
+          await onNotifyAiEnabledChange(false);
+          setVerifyNotice(t("已关闭通知智能识别，后续新邮件不再自动发给 AI。"));
+        } catch (caught) {
+          setVerifyError(describeError(caught));
+        }
+        return;
+      }
+      if (!verifyDraft.providerId || !verifyProvider) {
+        setVerifyError(t("请先选择站点和模型，再打开通知智能识别。"));
+        return;
+      }
+      if (!verifyProvider.enabled) {
+        setVerifyError(t("所选站点已停用，请先启用或换一个站点，再打开通知智能识别。"));
+        return;
+      }
+      setVerifyRisk({
+        providerLabel: verifyProvider.label,
+        model: verifyDraft.model.trim() || verifyProvider.defaultModel,
+        local: providerIsLocal(verifyProvider),
+      });
+    },
+    [onNotifyAiEnabledChange, verifyDraft.model, verifyDraft.providerId, verifyProvider],
+  );
+
+  /**
+   * 风险确认弹窗里点「确认开启」：这时才真正落盘。
+   *
+   * 先把弹窗里展示的站点和模型存到「通知智能识别」这个功能上，再打开开关；
+   * 否则后台拿不到这个映射，会退回站点默认，用的就不是用户刚看到的目标。
+   */
+  const confirmEnableNotifyAi = useCallback(async () => {
+    try {
+      await api.setAiFeature(
+        VERIFY_FUNCTION,
+        Number(verifyDraft.providerId),
+        verifyDraft.model,
+        verifyDraft.thinkingLevel === "" ? undefined : verifyDraft.thinkingLevel,
+      );
+      await onNotifyAiEnabledChange(true);
+      setVerifyRisk(null);
+      setVerifyNotice(t("已开启通知智能识别：新邮件正文会自动发往所选 AI，不再逐封确认。"));
+    } catch (caught) {
+      setVerifyRisk(null);
+      setVerifyError(describeError(caught));
+    }
+  }, [onNotifyAiEnabledChange, verifyDraft.model, verifyDraft.providerId, verifyDraft.thinkingLevel]);
   const disableAll = useCallback(async () => {
     if (!window.confirm(t("确定一键关闭 AI 吗？所有站点会停用，已发出的授权也会作废。"))) return;
     setBusy(true);
@@ -645,6 +748,96 @@ export default function AiPanel() {
         })}
       </div>
 
+      <h3>{t("通知智能识别（高级功能）")}</h3>
+      <p className="hint">
+        {t("开启后，新邮件正文会自动发往所选 AI，用来识别验证码和验证链接；识别到就在系统通知里给出复制或打开按钮，不再逐封确认。默认关闭。")}</p>
+      <section className="ai-feature-card">
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            aria-label={t("开启通知智能识别")}
+            checked={notifyAiEnabled}
+            onChange={(event) => void toggleNotifyAi(event.target.checked)}
+          />
+          <span>{t("开启通知智能识别")}</span>
+        </label>
+        <label className="secret-field">
+          {t("站点")}<select
+            aria-label={t("通知识别站点")}
+            value={verifyDraft.providerId}
+            onChange={(event) =>
+              setFeatureDrafts((old) => ({
+                ...old,
+                [VERIFY_FUNCTION]: {
+                  ...verifyDraft,
+                  providerId: event.target.value,
+                  model: "",
+                },
+              }))
+            }
+          >
+            <option value="">{t("请选择站点")}</option>
+            {providers.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.label}{provider.enabled ? "" : t("（已停用）")}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="secret-field">
+          {t("模型")}<input
+            aria-label={t("通知识别模型")}
+            list={`ai-models-${VERIFY_FUNCTION}`}
+            value={verifyDraft.model}
+            placeholder={verifyProvider?.defaultModel || t("留空回退站点默认模型")}
+            onChange={(event) =>
+              setFeatureDrafts((old) => ({
+                ...old,
+                [VERIFY_FUNCTION]: { ...verifyDraft, model: event.target.value },
+              }))
+            }
+          />
+        </label>
+        <datalist id={`ai-models-${VERIFY_FUNCTION}`}>
+          {(verifyProvider?.models ?? []).map((model) => (
+            <option key={model} value={model} />
+          ))}
+        </datalist>
+        <label className="secret-field">
+          {t("思考程度")}<select
+            aria-label={t("通知识别思考程度")}
+            value={verifyDraft.thinkingLevel}
+            onChange={(event) =>
+              setFeatureDrafts((old) => ({
+                ...old,
+                [VERIFY_FUNCTION]: {
+                  ...verifyDraft,
+                  thinkingLevel: event.target.value as "" | AiThinkingLevel,
+                },
+              }))
+            }
+          >
+            <option value="">{t("回退站点默认")}</option>
+            {THINKING_ORDER.map((level) => (
+              <option key={level} value={level}>
+                {t(THINKING_LABEL[level], undefined, "ai")}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="form-actions">
+          <button type="button" onClick={() => void saveFeature(VERIFY_FUNCTION)} disabled={busy}>
+            {t("保存设置")}</button>
+        </div>
+        <p className="hint">
+          {t("开关默认关闭；打开时会要求确认发往哪个站点、用哪个模型、是不是本地。")}</p>
+        {verifyNotice && <p className="notice" role="status">{verifyNotice}</p>}
+        {verifyError && (
+          <p className="error" role="alert">
+            {t("操作失败：")}{verifyError}
+          </p>
+        )}
+      </section>
       <h3>{t("AI 调用审计")}</h3>
       <p className="hint">{t("只记录时间、功能、站点、模型、是否外发和结果，不记录邮件正文或密钥。")}</p>
       {audits.length === 0 ? (
@@ -677,6 +870,35 @@ export default function AiPanel() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {verifyRisk && (
+        <div className="ai-modal-backdrop" role="presentation">
+          <section
+            className="ai-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("确认开启通知智能识别")}
+          >
+            <h3>{t("确认开启通知智能识别")}</h3>
+            <p>{t("开启后，每一封新邮件正文都会自动发往下面的目标识别验证码和链接，不再逐封确认。")}</p>
+            <dl className="ai-modal-targets">
+              <dt>{t("站点")}</dt>
+              <dd>{verifyRisk.providerLabel}</dd>
+              <dt>{t("用哪个模型")}</dt>
+              <dd>{verifyRisk.model}</dd>
+              <dt>{t("是不是本地服务")}</dt>
+              <dd>{verifyRisk.local ? t("是，本地服务，内容不离开这台电脑") : t("不是，内容会发送到远程站点")}</dd>
+            </dl>
+            <p className="hint">{t("关掉这个开关会立刻停止自动外发；已经弹出的通知按钮不受影响。")}</p>
+            <div className="form-actions">
+              <button type="button" className="primary" onClick={() => void confirmEnableNotifyAi()}>
+                {t("确认开启")}</button>
+              <button type="button" onClick={() => setVerifyRisk(null)}>
+                {t("取消")}</button>
+            </div>
+          </section>
         </div>
       )}
     </section>

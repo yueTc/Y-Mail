@@ -60,6 +60,8 @@ pub fn run() {
             // 开机启动：读真实状态、写 / 删启动项。
             commands::autostart_status,
             commands::set_autostart,
+            // 启动与托盘：关闭收托盘 / 启动静默，写进设置文件。
+            commands::set_tray_settings,
             commands::download_external_attachment,
             commands::open_downloaded_file,
             commands::open_downloaded_file_dir,
@@ -90,6 +92,7 @@ pub fn run() {
             commands::list_thread_messages,
             commands::set_message_read,
             commands::set_message_flagged,
+            commands::get_inbox_message,
             commands::get_message_body,
             commands::download_attachment,
             commands::remember_remote_sender,
@@ -168,6 +171,8 @@ pub fn run() {
             // 2) 读设置：邮件数据目录与附件目录都允许单独配置。
             let mut settings = AppSettings::load(&default_dir);
             let data_dir = settings.effective_data_dir(&default_dir);
+            // 启动时要不要直接进托盘：设置持久化，读到后固定下来供下面第 7 步用。
+            let start_minimized_to_tray = settings.start_minimized_to_tray;
 
             // 3) 日志先就绪，初始化过程本身也能留下记录。
             let logging = Logging::init(data_dir.join("logs"));
@@ -209,12 +214,14 @@ pub fn run() {
 
             // 6) 把引擎、设置与摘要交给命令层；日志句柄随之进入应用状态，保证写线程存活。
             let notify_enabled = Arc::new(AtomicBool::new(settings.notify_new_mail));
+            let notify_ai_enabled = Arc::new(AtomicBool::new(settings.notify_ai_enabled));
             app.manage(AppState::new(
                 engine,
                 logging,
                 default_dir,
                 settings,
                 notify_enabled.clone(),
+                notify_ai_enabled.clone(),
                 first_run,
             ));
 
@@ -232,10 +239,12 @@ pub fn run() {
             // 6) 托盘常驻：关窗只是收起来，后台继续收信。
             setup_tray(app)?;
 
-            // 7) 主窗口在 tauri.conf.json 里默认不显示：
-            //    被开机启动项拉起来（参数带 --autostart）就静默进托盘，
-            //    手动双击打开才把窗口亮出来。
-            if started_by_autostart() {
+            // 7) 主窗口在 tauri.conf.json 里默认不显示，由这里决定亮不亮：
+            //    勾了「启动时最小化到托盘」，或被开机启动项拉起来（带 --autostart），
+            //    就静默进托盘；否则把窗口亮出来。
+            if start_minimized_to_tray {
+                tracing::info!("已开启「启动时最小化到托盘」，本次静默启动，只进托盘");
+            } else if started_by_autostart() {
                 tracing::info!("检测到 --autostart，本次静默启动，只进托盘");
             } else {
                 show_main_window(app.handle());
@@ -246,18 +255,26 @@ pub fn run() {
             //    先把通知里的应用名登记成「Y-Mail」，否则 Windows 会写成拉起本程序的
             //    PowerShell（开发模式、未安装场景都这样）。
             notify::register_notification_identity(app.handle());
-            notify::spawn(app.handle().clone(), notify_enabled);
+            notify::spawn(app.handle().clone(), notify_enabled, notify_ai_enabled);
 
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 主窗口按关闭键时收进托盘，不退出进程；真要退出走托盘菜单的「退出」。
+            // 主窗口按关闭键：默认收进托盘不退出（可在「启动与托盘」里关掉）；
+            // 关掉「关闭时最小化到托盘」后才真退出，真要退出也能走托盘菜单的「退出」。
             if window.label() != "main" {
                 return;
             }
             if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+                let minimize = window
+                    .app_handle()
+                    .state::<AppState>()
+                    .settings_snapshot()
+                    .minimize_to_tray_on_close;
+                if minimize {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
         })
         .run(tauri::generate_context!())
@@ -303,7 +320,7 @@ fn started_by_autostart() -> bool {
 }
 
 /// 显示主窗口并置前。
-fn show_main_window(app: &tauri::AppHandle) {
+pub(crate) fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
