@@ -59,7 +59,7 @@ Grab the latest version from [**GitHub Releases**](https://github.com/yueTc/Y-Ma
 
 | Platform | Installer |
 |---|---|
-| **Windows 10 / 11 (x64)** | [`Y-Mail_0.1.1_x64_en-US.msi`](https://github.com/yueTc/Y-Mail/releases/download/v0.1.1/Y-Mail_0.1.1_x64_en-US.msi) (MSI, ~12 MB) |
+| **Windows 10 / 11 (x64)** | [`Y-Mail_0.1.2_x64_en-US.msi`](https://github.com/yueTc/Y-Mail/releases/download/v0.1.2/Y-Mail_0.1.2_x64_en-US.msi) (MSI, ~12 MB) |
 
 So far only the Windows x64 MSI is published; an NSIS installer can be built locally with `npm run tauri build` (see [Build from source](#build-from-source) below).
 
