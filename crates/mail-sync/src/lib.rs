@@ -11,6 +11,7 @@
 pub mod crypto;
 pub mod envelope;
 mod error;
+pub mod gist;
 pub mod github;
 pub mod http;
 
