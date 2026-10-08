@@ -14,6 +14,7 @@ members = [
   "crates/mail-oauth",
   "crates/mail-ai",
   "crates/mail-mcp",
+  "crates/mail-sync",
   "crates/mail-core",
   "src-tauri",
 ]
@@ -36,6 +37,7 @@ mail-oauth = { path = "crates/mail-oauth" }
 mail-ai = { path = "crates/mail-ai" }
 mail-core = { path = "crates/mail-core" }
 mail-mcp = { path = "crates/mail-mcp" }
+mail-sync = { path = "crates/mail-sync" }
 
 # 外部依赖（统一版本，避免各 crate 版本漂移）
 tauri = { version = "2.12.1", features = ["tray-icon"] }
@@ -59,6 +61,9 @@ tokio = { version = "1.44", features = ["net", "io-util", "time", "macros", "rt"
 tokio-native-tls = "0.3.1"
 native-tls = "0.2.14"
 base64 = "0.22.1"
+aes-gcm = "0.10"
+argon2 = "0.5"
+zeroize = "1"
 winreg = "0.55"
 notify-rust = "4.18"
 keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
