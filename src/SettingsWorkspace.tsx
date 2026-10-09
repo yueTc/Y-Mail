@@ -11,6 +11,7 @@ import PaneResizer from "./PaneResizer";
 import ProxyPanel from "./ProxyPanel";
 import ReaderSettingsPanel from "./ReaderSettingsPanel";
 import SettingsSyncPanel from "./SettingsSyncPanel";
+import SyncPollSettingsPanel from "./SyncPollSettingsPanel";
 import RestartChoiceDialog from "./RestartChoiceDialog";
 import SyncPanel from "./SyncPanel";
 import { RAIL_WIDTH, RESIZER_WIDTH } from "./usePaneWidths";
@@ -669,6 +670,7 @@ export default function SettingsWorkspace({
             hidden={activeCategory !== "accounts"}
           >
             <h2 className="settings-group-title">{t("账号与同步")}</h2>
+            <SyncPollSettingsPanel />
             <SyncPanel />
             <AccountPanel proxiesVersion={proxiesVersion} />
             <SettingsSyncPanel />

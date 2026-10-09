@@ -28,6 +28,7 @@ const SETTINGS: AppSettings = {
   startMinimizedToTray: false,
   autoCheckUpdate: false,
   updateCheckIntervalHours: 24,
+  syncPollIntervalSeconds: 60,
   defaultDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",
   defaultAttachmentDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop/downloads",
   activeDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",

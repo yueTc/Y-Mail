@@ -16,7 +16,7 @@ use crate::engine::MailEngine;
 use crate::secrets::{MemorySecretStore, SecretStore};
 
 use super::fetcher::sync_folder;
-use super::state::{AccountSyncStatus, CancelFlag, SyncConfig, SyncService, SyncState};
+use super::state::{AccountSyncStatus, CancelFlag, PollInterval, SyncConfig, SyncService, SyncState};
 use super::worker::{refresh_progress, run, sync_once, syncable_folders, WorkerContext};
 
 /// 假服务器每连接一次的参数。
@@ -246,6 +246,7 @@ fn context(engine: &MailEngine, account_id: i64) -> Arc<WorkerContext> {
         store: engine.store.clone(),
         secrets: Arc::new(MemorySecretStore::new()),
         config: SyncConfig::default(),
+        poll_interval: Arc::new(PollInterval::new(Duration::from_millis(20))),
         status: Arc::new(Mutex::new(AccountSyncStatus::new(
             account_id,
             "tester@example.com",
@@ -261,11 +262,13 @@ fn worker_ctx(
     secrets: Arc<dyn SecretStore>,
     config: SyncConfig,
 ) -> Arc<WorkerContext> {
+    let poll_interval = Arc::new(PollInterval::new(config.poll_interval));
     Arc::new(WorkerContext {
         account_id,
         store: engine.store.clone(),
         secrets,
         config,
+        poll_interval,
         status: Arc::new(Mutex::new(AccountSyncStatus::new(
             account_id,
             "tester@example.com",
@@ -601,6 +604,46 @@ async fn 一个账号连不上不影响另一个账号() {
         2,
         "坏账号不应影响好账号已入库的数据"
     );
+}
+
+#[tokio::test]
+async fn 改短轮询间隔会叫醒正在等的那一轮() {
+    // 间隔先设得足够长，保证等待方真的在睡；改小后应按新值很快醒来并重跑。
+    let interval = Arc::new(PollInterval::new(Duration::from_secs(3600)));
+    let cancel = Arc::new(CancelFlag::new());
+    let waiter_interval = interval.clone();
+    let waiter_cancel = cancel.clone();
+    let waiting = tokio::spawn(async move {
+        // 每次睡醒都记一次，用来确认不是等满 3600 秒才返回。
+        waiter_interval.sleep(&waiter_cancel).await
+    });
+
+    // 让它先进入等待，再把间隔改短，并给足重新计时的余量。
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    interval.set_duration(Duration::from_millis(30));
+
+    let woke = tokio::time::timeout(Duration::from_millis(500), waiting)
+        .await
+        .expect("改小间隔后应被叫醒，而不是继续睡满旧值")
+        .expect("等待任务");
+    assert!(!woke, "没收到取消信号时应正常返回 false");
+    assert_eq!(
+        interval.duration(),
+        Duration::from_millis(30),
+        "句柄上的当前间隔应是改后的值"
+    );
+}
+
+#[tokio::test]
+async fn 改值后下一轮按新值计时() {
+    // 还没开始等就改过值：随后的等待要用新值，不能再用创建时的旧值。
+    let interval = Arc::new(PollInterval::new(Duration::from_secs(3600)));
+    let cancel = Arc::new(CancelFlag::new());
+    interval.set_duration(Duration::from_millis(10));
+    let woke = tokio::time::timeout(Duration::from_millis(500), interval.sleep(&cancel))
+        .await
+        .expect("应按改后的新值醒来，而不是等满旧值");
+    assert!(!woke, "没取消应返回 false");
 }
 
 #[tokio::test]

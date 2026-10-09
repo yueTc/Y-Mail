@@ -15,7 +15,7 @@ use crate::proxies::resolve_route_with;
 use crate::secrets::SecretStore;
 
 use super::fetcher::{align_folders, sync_folder};
-use super::state::{AccountSyncStatus, CancelFlag, SyncConfig, SyncState};
+use super::state::{AccountSyncStatus, CancelFlag, PollInterval, SyncConfig, SyncState};
 
 /// 一条命令里最多抓几封，避免单次应答太大。
 pub(super) const FETCH_BATCH: usize = 200;
@@ -28,8 +28,10 @@ pub(super) struct WorkerContext {
     pub store: Arc<Mutex<Store>>,
     /// 凭据保险箱。
     pub secrets: Arc<dyn SecretStore>,
-    /// 节流参数。
+    /// 节流参数（不含会变的轮询间隔）。
     pub config: SyncConfig,
+    /// 不支持推送时的轮询间隔；共享句柄，改值立刻生效。
+    pub poll_interval: Arc<PollInterval>,
     /// 状态快照。
     pub status: Arc<Mutex<AccountSyncStatus>>,
     /// 取消旗标。
@@ -398,7 +400,7 @@ async fn live_loop(
                 IdleOutcome::Cancelled => return Ok(()),
                 IdleOutcome::Changed | IdleOutcome::Timeout => {}
             }
-        } else if ctx.cancel.sleep(ctx.config.poll_interval).await {
+        } else if ctx.poll_interval.sleep(&ctx.cancel).await {
             return Ok(());
         }
         if ctx.cancel.is_cancelled() {

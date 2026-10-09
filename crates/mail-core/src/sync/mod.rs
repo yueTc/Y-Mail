@@ -17,16 +17,18 @@ use crate::secrets::SecretStore;
 
 pub use state::{AccountSyncStatus, SyncConfig, SyncService, SyncState};
 
-use state::{CancelFlag, WorkerHandle};
+use state::{CancelFlag, PollInterval, WorkerHandle};
 use worker::WorkerContext;
 
 impl SyncService {
     /// 组装服务；存储与保险箱句柄由引擎传入，保证只有一条写库路径。
     pub fn new(store: Arc<Mutex<Store>>, secrets: Arc<dyn SecretStore>, config: SyncConfig) -> Self {
+        let poll_interval = Arc::new(PollInterval::new(config.poll_interval));
         Self {
             store,
             secrets,
             config,
+            poll_interval,
             workers: Mutex::new(HashMap::new()),
             statuses: Mutex::new(HashMap::new()),
         }
@@ -45,6 +47,7 @@ impl SyncService {
             store: self.store.clone(),
             secrets: self.secrets.clone(),
             config: self.config.clone(),
+            poll_interval: self.poll_interval.clone(),
             status: status.clone(),
             cancel: cancel.clone(),
         });
@@ -112,6 +115,7 @@ impl SyncService {
             store: self.store.clone(),
             secrets: self.secrets.clone(),
             config: self.config.clone(),
+            poll_interval: self.poll_interval.clone(),
             status,
             cancel,
         });
@@ -136,6 +140,7 @@ impl SyncService {
             store: self.store.clone(),
             secrets: self.secrets.clone(),
             config: self.config.clone(),
+            poll_interval: self.poll_interval.clone(),
             status,
             cancel,
         });
@@ -144,6 +149,10 @@ impl SyncService {
             .map_err(|failure| EngineError::Sync(failure.message))
     }
 
+    /// 改「不支持推送时的轮询间隔」；正在等的那一轮会被叫醒，按新秒数重新计时。
+    pub fn set_poll_interval_seconds(&self, seconds: u64) {
+        self.poll_interval.set_seconds(seconds);
+    }
     /// 面向界面的全部账号状态（按编号排序）。
     pub fn statuses(&self) -> Vec<AccountSyncStatus> {
         let mut list: Vec<AccountSyncStatus> = {
@@ -234,6 +243,10 @@ impl MailEngine {
         self.sync.statuses()
     }
 
+    /// 改「不支持推送时的轮询间隔」；只影响正在等待的轮询账号。
+    pub fn set_sync_poll_interval_seconds(&self, seconds: u64) {
+        self.sync.set_poll_interval_seconds(seconds);
+    }
     /// 打开一次连接，把某封邮件所属账号的待同步红旗写回服务器。
     ///
     /// 返回 `true` 表示服务器已确认（本地不再有待同步）。

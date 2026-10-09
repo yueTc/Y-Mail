@@ -1,7 +1,7 @@
 //! 同步服务的共享状态：取消旗标、配置、状态快照与服务句柄。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -68,6 +68,72 @@ impl CancelFlag {
     }
 }
 
+/// 不支持推送时的轮询间隔：一个原子时长加一个变更通知通道。
+///
+/// 改值时把新时长写进原子值，再通过 `watch` 通道推一个递增的版本号。
+/// 用 `watch` 而不是 `Notify`，是因为它会在订阅时记住已读的位置：即使改值恰好
+/// 发生在「订阅」和「开始等」之间，等待方下一轮也能立刻读到变更，不会漏醒。
+pub struct PollInterval {
+    /// 当前间隔，按毫秒存，避免测试里用秒级等待拖慢整套测试。
+    millis: AtomicU64,
+    /// 间隔变更的版本号；只要发过新值，等在旧值上的一轮就会被叫醒。
+    changed: tokio::sync::watch::Sender<u64>,
+}
+
+impl PollInterval {
+    /// 用初始时长新建句柄；小于 1 毫秒时按 1 毫秒处理。
+    pub fn new(duration: Duration) -> Self {
+        Self {
+            millis: AtomicU64::new(duration_millis(duration)),
+            changed: tokio::sync::watch::channel(0).0,
+        }
+    }
+
+    /// 当前等待时长。
+    pub fn duration(&self) -> Duration {
+        Duration::from_millis(self.millis.load(Ordering::SeqCst))
+    }
+
+    /// 改成新的秒数并叫醒正在等的那一轮。
+    pub fn set_seconds(&self, seconds: u64) {
+        self.set_duration(Duration::from_secs(seconds.max(1)));
+    }
+
+    /// 改成新的等待时长并叫醒正在等的那一轮。
+    pub(crate) fn set_duration(&self, duration: Duration) {
+        self.millis.store(duration_millis(duration), Ordering::SeqCst);
+        // 推递增版本号；没人订阅也不会报错，订阅者下一轮能读到最新值。
+        let next = (*self.changed.borrow()).wrapping_add(1);
+        self.changed.send_replace(next);
+    }
+
+    /// 按当前间隔睡一觉；被取消返回 `true`，间隔变更则按新值重新计时。
+    ///
+    /// 先订阅再读当前值：若改值发生在两者之间，`changed` 会立刻返回，不丢通知。
+    pub async fn sleep(&self, cancel: &CancelFlag) -> bool {
+        loop {
+            let mut changed = self.changed.subscribe();
+            if cancel.is_cancelled() {
+                return true;
+            }
+            let duration = self.duration();
+            tokio::select! {
+                result = changed.changed() => {
+                    // 发送端没了说明服务在收尾，当成取消处理，别原地空转。
+                    if result.is_err() {
+                        return true;
+                    }
+                }
+                cancelled = cancel.sleep(duration) => return cancelled,
+            }
+        }
+    }
+}
+
+/// 把时长换成毫秒数，至少 1 毫秒，避免零等长导致忙转。
+fn duration_millis(duration: Duration) -> u64 {
+    duration.as_millis().max(1) as u64
+}
 impl Default for CancelFlag {
     fn default() -> Self {
         Self::new()
@@ -232,8 +298,10 @@ pub struct SyncService {
     pub(crate) store: Arc<Mutex<Store>>,
     /// 凭据保险箱。
     pub(crate) secrets: Arc<dyn SecretStore>,
-    /// 节流参数。
+    /// 节流参数（不含会变的轮询间隔）。
     pub(crate) config: SyncConfig,
+    /// 不支持推送时的轮询间隔；共享句柄，改值立刻生效。
+    pub(crate) poll_interval: Arc<PollInterval>,
     /// 正在运行的工作线程。
     pub(crate) workers: Mutex<HashMap<i64, WorkerHandle>>,
     /// 各账号的最新状态。

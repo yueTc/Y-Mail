@@ -24,7 +24,10 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt;
 
-use crate::settings::{AppSettings, UPDATE_CHECK_INTERVAL_MAX_HOURS, UPDATE_CHECK_INTERVAL_MIN_HOURS};
+use crate::settings::{
+    AppSettings, SYNC_POLL_INTERVAL_MAX_SECONDS, SYNC_POLL_INTERVAL_MIN_SECONDS,
+    UPDATE_CHECK_INTERVAL_MAX_HOURS, UPDATE_CHECK_INTERVAL_MIN_HOURS,
+};
 use crate::state::AppState;
 use crate::storage_dir::{self, ChangeDataDirResult, MigrationStart};
 
@@ -565,6 +568,8 @@ pub struct AppSettingsDto {
     pub auto_check_update: bool,
     /// 自动检测更新的间隔小时数；默认 24。
     pub update_check_interval_hours: u32,
+    /// 服务器不支持推送时的轮询间隔秒数；默认 60。
+    pub sync_poll_interval_seconds: u32,
     /// 默认邮件数据目录（界面上做提示）。
     pub default_data_dir: String,
     /// 附件目录留空时会用的默认位置。
@@ -642,6 +647,8 @@ pub async fn set_app_settings(
         // 自动检测更新由「关于」分组单独维护，这里也从旧值带过。
         auto_check_update: previous.auto_check_update,
         update_check_interval_hours: previous.update_check_interval_hours,
+        // 拉信间隔由「账号与同步」分组单独维护，这里从旧值带过。
+        sync_poll_interval_seconds: previous.sync_poll_interval_seconds,
         pending_cleanup_dir: previous.pending_cleanup_dir.take(),
     };
     state
@@ -805,6 +812,28 @@ pub async fn set_update_settings(
     Ok(build_settings_dto(state.inner()))
 }
 
+/// 保存「服务器不支持推送时的拉信间隔」。
+///
+/// 只动这一个字段；写盘成功后立刻写进同步引擎的共享句柄，正在等待的轮询会被叫醒。
+#[tauri::command]
+pub async fn set_sync_poll_settings(
+    state: tauri::State<'_, AppState>,
+    seconds: u32,
+) -> Result<AppSettingsDto, CommandError> {
+    if !(SYNC_POLL_INTERVAL_MIN_SECONDS..=SYNC_POLL_INTERVAL_MAX_SECONDS).contains(&seconds) {
+        return Err(CommandError::input(format!(
+            "拉信间隔要填 {SYNC_POLL_INTERVAL_MIN_SECONDS} 到 {SYNC_POLL_INTERVAL_MAX_SECONDS} 秒"
+        )));
+    }
+    let mut settings = state.settings_snapshot();
+    settings.sync_poll_interval_seconds = seconds;
+    state
+        .save_settings(settings)
+        .map_err(|error| CommandError::new(format!("保存设置失败：{error}")))?;
+    let engine = state.engine().await;
+    engine.set_sync_poll_interval_seconds(u64::from(seconds));
+    Ok(build_settings_dto(state.inner()))
+}
 /// 重启应用：迁移完成后由界面明确选择要不要清理旧目录。
 ///
 /// 待清理路径只从后端内存里取，界面只能传“清不清”，不能传路径。
@@ -979,6 +1008,7 @@ fn build_settings_dto(state: &AppState) -> AppSettingsDto {
         start_minimized_to_tray: settings.start_minimized_to_tray,
         auto_check_update: settings.auto_check_update,
         update_check_interval_hours: settings.update_check_interval_hours,
+        sync_poll_interval_seconds: settings.sync_poll_interval_seconds,
         default_data_dir: strip_verbatim_prefix(&default_dir.to_string_lossy()),
         default_attachment_dir: strip_verbatim_prefix(
             &settings.effective_attachment_dir(default_dir).to_string_lossy(),

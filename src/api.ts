@@ -184,6 +184,8 @@ export interface AppSettings {
   autoCheckUpdate: boolean;
   /** 自动检测更新的间隔小时数；默认 24，允许 1–168。 */
   updateCheckIntervalHours: number;
+  /** 服务器不支持推送时的拉信间隔秒数；默认 60，允许 10–3600。 */
+  syncPollIntervalSeconds: number;
   /** 默认邮件数据目录。 */
   defaultDataDir: string;
   /** 附件目录留空时会用的默认位置。 */
@@ -770,6 +772,10 @@ export const api = {
   /** 保存自动检测更新设置；只动这两个字段，别的设置不受影响。 */
   setUpdateSettings: (autoCheckUpdate: boolean, intervalHours: number) =>
     call<AppSettings>("set_update_settings", { autoCheckUpdate, intervalHours }),
+
+  /** 保存「不支持推送时的拉信间隔」；只动这一个字段，改完立刻生效。 */
+  setSyncPollSettings: (seconds: number) =>
+    call<AppSettings>("set_sync_poll_settings", { seconds }),
 
   listAccounts: () => call<Account[]>("list_accounts"),
 

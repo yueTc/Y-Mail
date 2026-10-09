@@ -66,6 +66,7 @@ pub fn run() {
             // 启动与托盘：关闭收托盘 / 启动静默，写进设置文件。
             commands::set_tray_settings,
             commands::set_update_settings,
+            commands::set_sync_poll_settings,
             commands::download_external_attachment,
             commands::open_downloaded_file,
             commands::open_downloaded_file_dir,
@@ -212,6 +213,8 @@ pub fn run() {
                 "外壳初始化完成"
             );
 
+            // 4.4) 拉信间隔只影响不支持推送的账号；启动时先灌进同步引擎。
+            engine.set_sync_poll_interval_seconds(u64::from(settings.sync_poll_interval_seconds));
             // 4.5) 把会参与同步的界面开关种进 setting 表：运行值在外壳，同步包从表里导出，
             //      两份先对齐；导入远端时才有地方回填，也不会被默认值覆盖。
             if let Err(error) = engine.store_synced_toggles(&mail_core::SyncedToggles {

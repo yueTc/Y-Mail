@@ -20,6 +20,11 @@ pub const UPDATE_CHECK_INTERVAL_MIN_HOURS: u32 = 1;
 pub const UPDATE_CHECK_INTERVAL_MAX_HOURS: u32 = 168;
 pub const UPDATE_CHECK_INTERVAL_DEFAULT_HOURS: u32 = 24;
 
+/// 服务器不支持推送时的轮询间隔允许范围（秒）与默认值。
+pub const SYNC_POLL_INTERVAL_MIN_SECONDS: u32 = 10;
+pub const SYNC_POLL_INTERVAL_MAX_SECONDS: u32 = 3600;
+pub const SYNC_POLL_INTERVAL_DEFAULT_SECONDS: u32 = 60;
+
 /// 存进 `settings.json` 的内容。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -44,6 +49,8 @@ pub struct AppSettings {
     pub auto_check_update: bool,
     /// 自动检测更新的间隔小时数；默认 24，允许 1–168，越界读回时按默认处理。
     pub update_check_interval_hours: u32,
+    /// 服务器不支持推送时的轮询间隔秒数；默认 60，允许 10–3600。
+    pub sync_poll_interval_seconds: u32,
     /// 下次启动要清理的旧数据目录；为空表示没有待清理目录。
     pub pending_cleanup_dir: Option<PathBuf>,
 }
@@ -60,6 +67,7 @@ impl Default for AppSettings {
             start_minimized_to_tray: false,
             auto_check_update: false,
             update_check_interval_hours: UPDATE_CHECK_INTERVAL_DEFAULT_HOURS,
+            sync_poll_interval_seconds: SYNC_POLL_INTERVAL_DEFAULT_SECONDS,
             pending_cleanup_dir: None,
         }
     }
@@ -73,7 +81,7 @@ impl AppSettings {
             return Self::default();
         };
         match serde_json::from_str::<AppSettings>(&raw) {
-            Ok(settings) => settings.normalize_interval(),
+            Ok(settings) => settings.normalize_intervals(),
             Err(error) => {
                 tracing::warn!(error = %error, path = %path.display(), "设置文件解析失败，改用默认设置");
                 Self::default()
@@ -89,11 +97,16 @@ impl AppSettings {
     }
 
     /// 把越界的检测间隔拉回默认值；老配置缺字段或手改坏了都不能拦启动。
-    fn normalize_interval(mut self) -> Self {
+    fn normalize_intervals(mut self) -> Self {
         if !(UPDATE_CHECK_INTERVAL_MIN_HOURS..=UPDATE_CHECK_INTERVAL_MAX_HOURS)
             .contains(&self.update_check_interval_hours)
         {
             self.update_check_interval_hours = UPDATE_CHECK_INTERVAL_DEFAULT_HOURS;
+        }
+        if !(SYNC_POLL_INTERVAL_MIN_SECONDS..=SYNC_POLL_INTERVAL_MAX_SECONDS)
+            .contains(&self.sync_poll_interval_seconds)
+        {
+            self.sync_poll_interval_seconds = SYNC_POLL_INTERVAL_DEFAULT_SECONDS;
         }
         self
     }
@@ -122,7 +135,7 @@ pub fn is_first_run(base_dir: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, UPDATE_CHECK_INTERVAL_DEFAULT_HOURS};
+    use super::{AppSettings, SYNC_POLL_INTERVAL_DEFAULT_SECONDS, UPDATE_CHECK_INTERVAL_DEFAULT_HOURS};
     #[test]
     fn defaults_keep_current_behaviour() {
         let settings = AppSettings::default();
@@ -135,6 +148,10 @@ mod tests {
         assert!(!settings.start_minimized_to_tray, "默认启动时显示主窗口");
         assert!(!settings.auto_check_update, "默认不自动检测更新");
         assert_eq!(settings.update_check_interval_hours, 24, "默认每 24 小时查一次");
+        assert_eq!(
+            settings.sync_poll_interval_seconds, SYNC_POLL_INTERVAL_DEFAULT_SECONDS,
+            "默认每 60 秒拉一次信"
+        );
         assert_eq!(settings.pending_cleanup_dir, None);
         assert_eq!(
             settings.effective_data_dir(std::path::Path::new("C:/app")),
@@ -158,6 +175,7 @@ mod tests {
             start_minimized_to_tray: false,
             auto_check_update: false,
             update_check_interval_hours: UPDATE_CHECK_INTERVAL_DEFAULT_HOURS,
+            sync_poll_interval_seconds: SYNC_POLL_INTERVAL_DEFAULT_SECONDS,
             pending_cleanup_dir: None,
         };
         assert_eq!(
@@ -190,6 +208,7 @@ mod tests {
             start_minimized_to_tray: true,
             auto_check_update: true,
             update_check_interval_hours: 6,
+            sync_poll_interval_seconds: 120,
             pending_cleanup_dir: Some(std::path::PathBuf::from("C:/Old/Mail")),
         };
         settings.save(&dir).expect("保存设置");
@@ -222,6 +241,10 @@ mod tests {
             partial.update_check_interval_hours, 24,
             "老配置缺检测间隔时按 24 小时"
         );
+        assert_eq!(
+            partial.sync_poll_interval_seconds, SYNC_POLL_INTERVAL_DEFAULT_SECONDS,
+            "老配置缺拉信间隔时按 60 秒"
+        );
         assert_eq!(partial.data_dir, None);
         assert_eq!(partial.attachment_dir, None);
         assert_eq!(partial.pending_cleanup_dir, None);
@@ -229,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn out_of_range_update_interval_falls_back_to_default() {
+    fn out_of_range_intervals_fall_back_to_default() {
         let dir = std::env::temp_dir().join(format!(
             "ymail-settings-interval-test-{}-{}",
             std::process::id(),
@@ -241,12 +264,13 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("建目录");
         std::fs::write(
             dir.join(super::SETTINGS_FILE),
-            "{ \"autoCheckUpdate\": true, \"updateCheckIntervalHours\": 999 }",
+            "{ \"autoCheckUpdate\": true, \"updateCheckIntervalHours\": 999, \"syncPollIntervalSeconds\": 9 }",
         )
         .expect("写文件");
         let loaded = AppSettings::load(&dir);
         assert!(loaded.auto_check_update);
         assert_eq!(loaded.update_check_interval_hours, 24);
+        assert_eq!(loaded.sync_poll_interval_seconds, 60);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
