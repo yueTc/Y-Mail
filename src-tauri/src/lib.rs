@@ -280,11 +280,23 @@ pub fn run() {
                         .unwrap_or(false)
                 };
                 if enabled {
-                    match state.engine().await.pull_settings_sync().await {
+                    // 取结果前先把引擎锁放掉：写成一个临时变量再 match，
+                    // 否则守卫会活到整个 match 结束，Ok 分支里再取锁就会自己等自己，启动后永久卡死。
+                    let pulled = {
+                        let engine = state.engine().await;
+                        engine.pull_settings_sync().await
+                    };
+                    match pulled {
                         Ok(_) => {
-                            let toggles = state.engine().await.read_synced_toggles();
+                            let toggles = {
+                                let engine = state.engine().await;
+                                engine.read_synced_toggles()
+                            };
                             match toggles {
-                                Ok(toggles) => apply_synced_toggles(&state, toggles),
+                                Ok(toggles) => {
+                                    apply_synced_toggles(&state, toggles);
+                                    tracing::info!("启动时设置同步拉取完成，界面开关已回填");
+                                }
                                 Err(error) => {
                                     tracing::warn!(error = %error, "读取同步回来的界面开关失败")
                                 }
