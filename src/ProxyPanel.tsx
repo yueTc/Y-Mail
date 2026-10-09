@@ -322,7 +322,6 @@ export default function ProxyPanel({ onChanged }: Props) {
             placeholder={DEFAULT_TARGET}
           />
         </label>
-        <span className="hint">{t("点每个代理后面的「测试」按钮，就用这个目标真连一次网站；绿色数字是往返耗时，红色 timeout 是连不上。")}</span>
       </div>
 
       {proxies === null ? (

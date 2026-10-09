@@ -739,15 +739,7 @@ export default function SettingsWorkspace({
                       onChange={(event) => setDataDir(event.target.value)}
                       spellCheck={false}
                     />
-                    <small className="hint">
-                      {t("数据库和日志放这里。改目录会先复制并校验，重启后生效。留空用默认：")}{storage.settings.defaultDataDir}
-                    </small>
                   </label>
-
-                  <p className="hint">
-                    {t("下载文件保存在：")}<span className="path">{storage.settings.defaultAttachmentDir}</span>
-                  </p>
-
 
                   <dl className="status">
                     <dt>{t("当前生效的数据目录")}</dt>

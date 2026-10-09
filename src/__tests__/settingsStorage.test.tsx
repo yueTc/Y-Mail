@@ -198,16 +198,15 @@ describe("设置页通用分组", () => {
 });
 
 describe("设置页存储目录", () => {
-  it("只显示一个可编辑目录输入框，并只读展示下载目录", async () => {
+  it("只显示一个可编辑目录输入框，并只读展示当前生效目录", async () => {
     renderSettings();
     await openCategory("存储");
 
     const inputs = await screen.findAllByRole("textbox");
     expect(inputs).toHaveLength(1);
     expect((inputs[0] as HTMLInputElement).value).toBe("");
-    expect(screen.getByText(/下载文件保存在：/)).toBeTruthy();
-    expect(screen.getAllByText(SETTINGS.defaultAttachmentDir).length).toBeGreaterThan(0);
     expect(screen.getByText(SETTINGS.activeDataDir)).toBeTruthy();
+    expect(screen.getByText(SETTINGS.activeAttachmentDir)).toBeTruthy();
   });
 
   it("保存时带上通知与远程图片开关，不提交单独附件目录", async () => {
