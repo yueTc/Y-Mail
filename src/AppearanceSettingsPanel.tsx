@@ -3,6 +3,12 @@
 //! 界面语言、页面缩放、字体大小、字体样式也放在这里：都只读写本地偏好，
 //! 不碰邮件数据，也不发任何网络请求。
 
+import {
+  ACCENT_PRESETS,
+  isPresetId,
+  useAccentColor,
+  type AccentPresetId,
+} from "./accentColor";
 import { t, useLanguage, type Language } from "./i18n";
 import { useReaderTheme, type ReaderTheme } from "./readerTheme";
 import {
@@ -17,6 +23,7 @@ import {
 export default function AppearanceSettingsPanel() {
   const [theme, setTheme] = useReaderTheme();
   const [language, setLanguage] = useLanguage();
+  const [accent, setAccent] = useAccentColor();
   const { zoom, font, fontFamily, setZoom, setFont, setFontFamily } = useUiScale();
 
   return (
@@ -25,6 +32,32 @@ export default function AppearanceSettingsPanel() {
         <h2>{t("主题")}</h2>
       </div>
 
+      <fieldset className="appearance-fieldset">
+        <span>{t("主色调")}</span>
+        <div className="appearance-swatches">
+          {ACCENT_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              className="accent-swatch"
+              style={{ background: preset.light }}
+              aria-label={t(preset.label)}
+              aria-pressed={accent === preset.id}
+              title={t(preset.label)}
+              onClick={() => setAccent(preset.id as AccentPresetId)}
+            />
+          ))}
+          <label className="appearance-custom-color">
+            <input
+              type="color"
+              aria-label={t("自己调色")}
+              value={isPresetId(accent) ? ACCENT_PRESETS.find((preset) => preset.id === accent)!.light : accent}
+              onChange={(event) => setAccent(event.target.value)}
+            />
+            <span>{t("自己调色")}</span>
+          </label>
+        </div>
+      </fieldset>
       <label className="appearance-setting">
         <span>{t("深色模式")}</span>
         <select

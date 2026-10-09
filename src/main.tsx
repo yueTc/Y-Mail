@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import ScreenshotOverlay from "./ScreenshotOverlay";
 import { applyStoredLanguage, readStoredLanguage, t } from "./i18n";
+import { applyStoredAccent } from "./accentColor";
 import { applyStoredTheme } from "./readerTheme";
 import { applyStoredUiScale, installUiZoomShortcuts } from "./uiScale";
 import "./index.css";
@@ -14,6 +15,8 @@ const isScreenshotWindow = new URLSearchParams(window.location.search).get("wind
 
 // 先把存过的深色 / 浅色偏好写到 <html>，界面首帧就是对的。
 applyStoredTheme();
+// 主色调也在这时上一次色，避免加载完才跳色。
+applyStoredAccent();
 // 界面语言同理：先读本地偏好，首帧就是对的。
 applyStoredLanguage();
 document.documentElement.lang = readStoredLanguage() === "zh" ? "zh-CN" : "en";

@@ -15,8 +15,13 @@
   --border: var(--line);
   --text: #1f2328;
   --text-muted: #5b6470;
-  --accent: #2f6fed;
-  --accent-fg: #ffffff;
+  /* 主色调：真正取哪个色由 accentColor.ts 写到这四个变量上；这里是默认蓝色。 */
+  --accent-light: #2f6fed;
+  --accent-fg-light: #ffffff;
+  --accent-dark: #6b9dff;
+  --accent-fg-dark: #10131a;
+  --accent: var(--accent-light);
+  --accent-fg: var(--accent-fg-light);
   --ok: #1a7f4b;
   --warn: #9a6700;
   --warn-border: color-mix(in srgb, var(--warn) 45%, transparent);
@@ -89,8 +94,8 @@ body {
     --border: var(--line);
     --text: #e6e8ea;
     --text-muted: #a9b1ba;
-    --accent: #6b9dff;
-    --accent-fg: #10131a;
+    --accent: var(--accent-dark);
+    --accent-fg: var(--accent-fg-dark);
     --ok: #6fd39b;
     --warn: #e2b04a;
     --danger: #ff9c92;
@@ -117,8 +122,8 @@ body {
   --border: var(--line);
   --text: #e6e8ea;
   --text-muted: #a9b1ba;
-  --accent: #6b9dff;
-  --accent-fg: #10131a;
+  --accent: var(--accent-dark);
+  --accent-fg: var(--accent-fg-dark);
   --ok: #6fd39b;
   --warn: #e2b04a;
   --danger: #ff9c92;
@@ -913,6 +918,55 @@ textarea:focus {
 
 .appearance-setting .hint {
   margin: 0;
+}
+
+/* 主色调选择行：五个预设色块加一个自己调色；色块用内联背景色，不引远程资源。 */
+.appearance-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  max-width: 420px;
+}
+
+.appearance-fieldset > span {
+  font-size: 0.88rem;
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.appearance-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.accent-swatch {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 2px solid var(--line);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.accent-swatch:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.accent-swatch[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.appearance-custom-color {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88rem;
 }
 
 .reader-meta {
