@@ -13,6 +13,7 @@ pub mod notify;
 pub mod settings;
 pub mod state;
 pub mod storage_dir;
+pub mod sync_commands;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -154,6 +155,18 @@ pub fn run() {
             mcp_commands::mcp_set_write_tools,
             mcp_commands::mcp_tools,
             mcp_commands::mcp_audit,
+            // Wave S6：GitHub 登录与设置同步。放在末尾，减少与其它工序的冲突。
+            sync_commands::github_login_start,
+            sync_commands::github_login_poll,
+            sync_commands::github_login_sign_out,
+            sync_commands::github_login_profile,
+            sync_commands::settings_sync_status,
+            sync_commands::settings_sync_enable,
+            sync_commands::settings_sync_disable,
+            sync_commands::settings_sync_now,
+            sync_commands::settings_sync_reset_password,
+            sync_commands::settings_sync_join,
+            sync_commands::settings_sync_resolve_conflict,
         ])
         .setup(|app| {
             // 1) 默认应用数据目录。Windows 下形如 %APPDATA%\com.ymail.desktop。

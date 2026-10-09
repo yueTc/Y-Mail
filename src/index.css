@@ -2691,3 +2691,156 @@ body.screenshot-body {
 .first-run-error {
   color: var(--danger);
 }
+
+/* ===== GitHub 登录与设置同步（Wave S6） ===== */
+
+/* 登录面板：一排账号卡或一个登录按钮，整体留白跟别的面板一致。 */
+.github-login {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* 账号卡：头像 + 名字 + 退出登录排一行。 */
+.github-account {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
+}
+
+.github-account-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  margin-right: auto;
+}
+
+.github-account-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 头像：圆形裁切；没图时用首字母占位。 */
+.github-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.github-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+/* 设备码区：码放大显示，方便照着输入。 */
+.github-device {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
+}
+
+.github-code-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.github-code {
+  padding: 4px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text-muted) 16%, transparent);
+  font-family: var(--font-mono);
+  font-size: var(--font-heading);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+/* 权限升级：弱权限时的提示与按钮。 */
+.github-upgrade {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* 设置同步面板：表单字段竖向排，勾选项自带缩进。 */
+.settings-sync label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--font-small);
+}
+
+.settings-sync label.settings-sync-check {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.settings-sync label.settings-sync-check input {
+  margin-top: 3px;
+  flex: 0 0 auto;
+}
+
+.settings-sync-enable,
+.settings-sync-join,
+.settings-sync-reset {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
+.settings-sync details > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.settings-sync-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: var(--space-2) 0;
+  color: var(--text-muted);
+  font-size: var(--font-small);
+}
+
+/* 冲突提示：醒目一点，但不用红色吓人。 */
+.settings-sync-conflict {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: 10px 12px;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-md);
+  background: var(--danger-bg);
+}
+
+.settings-sync-conflict p {
+  margin: 0;
+}

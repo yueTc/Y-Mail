@@ -19,6 +19,7 @@ use crate::paths::SqlitePaths;
 use crate::secrets::{ChunkedSecretStore, KeyringSecretStore, SecretStore, SecretStoreError};
 use crate::settings_sync::SettingsSyncLive;
 use crate::sync::{SyncConfig, SyncService};
+use crate::sync_settings::GitHubLoginRegistry;
 
 /// Windows 凭据管理器里，本应用使用的服务名。
 pub const KEYRING_SERVICE: &str = "com.ymail.desktop";
@@ -164,6 +165,8 @@ pub struct MailEngine {
     pub(crate) block_remote_images: Arc<AtomicBool>,
     /// 设置同步的「待同步」标记与唤醒（规格 3.6 / 3.9）。
     pub(crate) settings_sync_live: Arc<SettingsSyncLive>,
+    /// 还没确认的 GitHub 设备码登录；设备码只在本进程内存里，退出即清。
+    pub(crate) github_login_registry: Arc<GitHubLoginRegistry>,
 }
 
 impl std::fmt::Debug for MailEngine {
@@ -263,6 +266,7 @@ impl MailEngine {
             ai_authorizations: std::sync::Mutex::new(HashMap::new()),
             block_remote_images: Arc::new(AtomicBool::new(true)),
             settings_sync_live: Arc::new(SettingsSyncLive::new()),
+            github_login_registry: Arc::new(GitHubLoginRegistry::new()),
         })
     }
 

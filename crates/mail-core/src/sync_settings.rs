@@ -7,6 +7,8 @@
 //! - 退出登录两处一起清。
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Mutex as StdMutex;
+use std::time::{Duration, Instant};
 
 use mail_domain::account::{AccountDraft, AccountProxyMode, AuthType, OAuthProvider, Security, ServerConfig};
 use mail_domain::proxy::{GlobalProxyMode, Secret};
@@ -16,7 +18,8 @@ use mail_store::{
     SETTING_BLOCK_REMOTE_IMAGES, SETTING_MINIMIZE_TO_TRAY, SETTING_NOTIFY_AI_ENABLED,
     SETTING_NOTIFY_NEW_MAIL, SETTING_START_MINIMIZED,
 };
-use mail_sync::github::GitHubProfile;
+use mail_sync::crypto::random_bytes;
+use mail_sync::github::{self, Endpoints, GitHubProfile, DEFAULT_CLIENT_ID, SCOPE_LOGIN, SCOPE_SYNC};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{EngineError, MailEngine};
@@ -31,9 +34,15 @@ pub const GITHUB_LOGIN_KEY: &str = "sync.github-login";
 pub const GITHUB_NAME_KEY: &str = "sync.github-name";
 /// 头像地址在 `setting` 表里的键。
 pub const GITHUB_AVATAR_KEY: &str = "sync.github-avatar";
+/// 本次登录申请到哪一档权限（只要身份 / 连 Gist）在 `setting` 表里的键。
+pub const GITHUB_SCOPE_KEY: &str = "sync.github-scope";
+
+/// 设备码登录各次网络请求的超时。
+const GITHUB_LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 界面要的一份登录信息（不含令牌）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GitHubLoginView {
     /// 登录名（账号名）。
     pub login: String,
@@ -41,6 +50,8 @@ pub struct GitHubLoginView {
     pub name: Option<String>,
     /// 头像地址；用户没设就是空。
     pub avatar_url: Option<String>,
+    /// 本次登录申请到哪一档权限；界面据此判断要不要再授权 Gist。
+    pub scope: GitHubScope,
 }
 
 impl GitHubLoginView {
@@ -53,14 +64,143 @@ impl GitHubLoginView {
     }
 }
 
+/// 登录时申请哪一档权限。
+///
+/// 规格 3.7：要头像与昵称只申请 `read:user`；开启设置同步时再申请 `gist`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GitHubScope {
+    /// 只要 `read:user`：头像与昵称。
+    Login,
+    /// `read:user` + `gist`：开启设置同步要用的权限。
+    Sync,
+}
+
+impl GitHubScope {
+    /// 存进 `setting` 表的文本。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Login => "login",
+            Self::Sync => "sync",
+        }
+    }
+
+    /// 从 `setting` 表读回；认不出按「只要身份」处理，老数据不受影响。
+    fn parse(text: &str) -> Self {
+        if text.trim() == "sync" {
+            Self::Sync
+        } else {
+            Self::Login
+        }
+    }
+
+    /// 对应 GitHub 的权限集。
+    fn scopes(self) -> &'static [&'static str] {
+        match self {
+            Self::Login => SCOPE_LOGIN,
+            Self::Sync => SCOPE_SYNC,
+        }
+    }
+}
+
+/// 一次设备码登录给界面看的公开信息。
+///
+/// 设备码本身留在后端（见 [`GitHubLoginRegistry`]），界面只拿 [`Self::login_id`]
+/// 轮询，避免把能换令牌的凭据放到前端。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubDeviceLoginView {
+    /// 本次登录的临时编号；轮询时带回来。
+    pub login_id: String,
+    /// 显示给用户输入的短码。
+    pub user_code: String,
+    /// 让用户打开的确认页地址。
+    pub verification_uri: String,
+    /// 这组码的有效秒数。
+    pub expires_in: u64,
+    /// GitHub 要求的轮询间隔（秒）。
+    pub interval: u64,
+}
+
+/// 轮询一次设备码登录的结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum GitHubLoginPoll {
+    /// 用户还没确认，继续轮询。
+    Pending,
+    /// GitHub 让慢一点，下次拉长间隔。
+    SlowDown,
+    /// 这组码已过期，要重新发起。
+    Expired,
+    /// 用户在浏览器里拒绝了授权。
+    Denied,
+    /// 登录成功，带上登录资料。
+    Authorized(GitHubLoginView),
+}
+
+/// 一条待确认的设备码登录；设备码只在本进程内存里待着。
+#[derive(Debug, Clone)]
+struct PendingDeviceLogin {
+    device_code: String,
+    scope: GitHubScope,
+    expires_at: Instant,
+}
+
+/// 设备码登录的临时登记表。
+///
+/// 进程退出即清空，不落盘；成功、取消或过期后对应条目立刻删掉，
+/// 不长期攥着设备码。
+#[derive(Debug, Default)]
+pub struct GitHubLoginRegistry {
+    pending: StdMutex<HashMap<String, PendingDeviceLogin>>,
+}
+
+impl GitHubLoginRegistry {
+    /// 新建一份空登记表。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, PendingDeviceLogin>> {
+        self.pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn insert(&self, login_id: String, login: PendingDeviceLogin) {
+        self.lock().insert(login_id, login);
+    }
+
+    fn clone_entry(&self, login_id: &str) -> Option<PendingDeviceLogin> {
+        self.lock().get(login_id).cloned()
+    }
+
+    fn remove(&self, login_id: &str) {
+        self.lock().remove(login_id);
+    }
+}
+
 impl MailEngine {
-    /// 登录成功后落盘：令牌进保险箱，资料进库。
+    /// 登录成功后落盘（只申请了身份权限的那一档）。
     ///
     /// 先写保险箱、再写库；写库中途失败会把保险箱恢复成写之前的样子。
     pub fn save_github_login(
         &self,
         token: &Secret,
         profile: &GitHubProfile,
+    ) -> Result<GitHubLoginView, EngineError> {
+        self.save_github_login_with_scope(token, profile, GitHubScope::Login)
+    }
+
+    /// 登录成功后落盘，并按实际申请的权限档位记下来。
+    ///
+    /// 开启设置同步走的是 [`GitHubScope::Sync`]（多要 `gist`），
+    /// 界面据此判断要不要重新授权。
+    pub fn save_github_login_with_scope(
+        &self,
+        token: &Secret,
+        profile: &GitHubProfile,
+        scope: GitHubScope,
     ) -> Result<GitHubLoginView, EngineError> {
         if token.is_empty() {
             return Err(EngineError::BadRequest("登录令牌为空".to_string()));
@@ -73,11 +213,12 @@ impl MailEngine {
             login: profile.login.trim().to_string(),
             name: text_field(profile.name.as_deref()),
             avatar_url: text_field(profile.avatar_url.as_deref()),
+            scope,
         };
 
         let previous = self.secrets().get(GITHUB_TOKEN_KEY)?;
         self.secrets().set(GITHUB_TOKEN_KEY, token)?;
-        match self.write_login_settings(&view) {
+        match self.write_login_settings(&view, scope) {
             Ok(()) => Ok(view),
             Err(err) => {
                 // 回滚：有旧令牌就还原，没有就删掉，别留半登录态。
@@ -107,10 +248,12 @@ impl MailEngine {
         let Some(login) = non_empty(login) else {
             return Ok(None);
         };
+        let scope = self.github_login_scope()?.unwrap_or(GitHubScope::Login);
         Ok(Some(GitHubLoginView {
             login,
             name: non_empty(name),
             avatar_url: non_empty(avatar),
+            scope,
         }))
     }
 
@@ -126,15 +269,112 @@ impl MailEngine {
         guard.set_setting(GITHUB_LOGIN_KEY, "")?;
         guard.set_setting(GITHUB_NAME_KEY, "")?;
         guard.set_setting(GITHUB_AVATAR_KEY, "")?;
+        guard.set_setting(GITHUB_SCOPE_KEY, "")?;
         Ok(())
     }
 
+    /// 本机这次登录申请到哪一档权限；没登录返回 `None`。
+    pub fn github_login_scope(&self) -> Result<Option<GitHubScope>, EngineError> {
+        let guard = self.store();
+        Ok(guard
+            .get_setting(GITHUB_SCOPE_KEY)?
+            .filter(|text| !text.trim().is_empty())
+            .map(|text| GitHubScope::parse(&text)))
+    }
+
+    /// 发起一次设备码登录：向 GitHub 要一组设备码与用户码，登记一条待确认记录。
+    ///
+    /// 设备码本体只留在本进程登记表里，返回给界面的视图不含设备码；
+    /// 界面拿 `login_id` 轮询，避免把能换令牌的凭据放到前端。
+    pub async fn start_github_login(&self, scope: GitHubScope) -> Result<GitHubDeviceLoginView, EngineError> {
+        let route = self.resolve_route(AccountProxyMode::InheritGlobal)?;
+        let device = github::request_device_code(
+            route.as_ref(),
+            &Endpoints::github(),
+            DEFAULT_CLIENT_ID,
+            scope.scopes(),
+            GITHUB_LOGIN_TIMEOUT,
+        )
+        .await?;
+        let login_id = random_bytes(16)?
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let expires_at = Instant::now() + Duration::from_secs(device.expires_in.max(1));
+        self.github_login_registry.insert(
+            login_id.clone(),
+            PendingDeviceLogin {
+                device_code: device.device_code,
+                scope,
+                expires_at,
+            },
+        );
+        Ok(GitHubDeviceLoginView {
+            login_id,
+            user_code: device.user_code,
+            verification_uri: device.verification_uri,
+            expires_in: device.expires_in,
+            interval: device.interval,
+        })
+    }
+
+    /// 轮询一次设备码登录结果。
+    ///
+    /// 「还没确认」「慢一点」交回界面按间隔重试；成功后落盘资料并删掉这条登记。
+    pub async fn poll_github_login(&self, login_id: &str) -> Result<GitHubLoginPoll, EngineError> {
+        let Some(entry) = self.github_login_registry.clone_entry(login_id) else {
+            return Err(EngineError::BadRequest(
+                "这次登录已经结束，请重新发起".to_string(),
+            ));
+        };
+        if Instant::now() >= entry.expires_at {
+            self.github_login_registry.remove(login_id);
+            return Ok(GitHubLoginPoll::Expired);
+        }
+        let route = self.resolve_route(AccountProxyMode::InheritGlobal)?;
+        let endpoints = Endpoints::github();
+        match github::poll_token_once(
+            route.as_ref(),
+            &endpoints,
+            DEFAULT_CLIENT_ID,
+            &entry.device_code,
+            GITHUB_LOGIN_TIMEOUT,
+        )
+        .await
+        {
+            Ok(token) => {
+                let profile =
+                    github::fetch_profile(route.as_ref(), &endpoints, &token, GITHUB_LOGIN_TIMEOUT).await?;
+                let view = self.save_github_login_with_scope(&Secret::new(token), &profile, entry.scope)?;
+                self.github_login_registry.remove(login_id);
+                Ok(GitHubLoginPoll::Authorized(view))
+            }
+            Err(mail_sync::SyncError::AuthorizationPending) => Ok(GitHubLoginPoll::Pending),
+            Err(mail_sync::SyncError::SlowDown) => Ok(GitHubLoginPoll::SlowDown),
+            Err(mail_sync::SyncError::DeviceCodeExpired) => {
+                self.github_login_registry.remove(login_id);
+                Ok(GitHubLoginPoll::Expired)
+            }
+            Err(mail_sync::SyncError::AccessDenied) => {
+                self.github_login_registry.remove(login_id);
+                Ok(GitHubLoginPoll::Denied)
+            }
+            Err(other) => Err(EngineError::SettingsSync(other)),
+        }
+    }
+
+    /// 用户取消或重新发起时，主动清掉这条待确认记录。
+    pub fn cancel_github_login(&self, login_id: &str) {
+        self.github_login_registry.remove(login_id);
+    }
+
     /// 把资料写进 `setting` 表；任一条失败由调用方回滚保险箱。
-    fn write_login_settings(&self, view: &GitHubLoginView) -> Result<(), EngineError> {
+    fn write_login_settings(&self, view: &GitHubLoginView, scope: GitHubScope) -> Result<(), EngineError> {
         let guard = self.store();
         guard.set_setting(GITHUB_LOGIN_KEY, &view.login)?;
         guard.set_setting(GITHUB_NAME_KEY, view.name.as_deref().unwrap_or(""))?;
         guard.set_setting(GITHUB_AVATAR_KEY, view.avatar_url.as_deref().unwrap_or(""))?;
+        guard.set_setting(GITHUB_SCOPE_KEY, scope.as_str())?;
         Ok(())
     }
 }

@@ -10,6 +10,7 @@ import McpPanel from "./McpPanel";
 import PaneResizer from "./PaneResizer";
 import ProxyPanel from "./ProxyPanel";
 import ReaderSettingsPanel from "./ReaderSettingsPanel";
+import SettingsSyncPanel from "./SettingsSyncPanel";
 import RestartChoiceDialog from "./RestartChoiceDialog";
 import SyncPanel from "./SyncPanel";
 import { RAIL_WIDTH, RESIZER_WIDTH } from "./usePaneWidths";
@@ -649,6 +650,7 @@ export default function SettingsWorkspace({
             <h2 className="settings-group-title">{t("账号与同步")}</h2>
             <SyncPanel />
             <AccountPanel proxiesVersion={proxiesVersion} />
+            <SettingsSyncPanel />
           </section>
 
           <section

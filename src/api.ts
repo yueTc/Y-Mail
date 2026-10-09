@@ -1062,6 +1062,47 @@ export const api = {
   mcpTools: () => call<McpTool[]>("mcp_tools"),
 
   mcpAudit: (limit?: number) => call<McpAuditPage>("mcp_audit", limit === undefined ? {} : { limit }),
+
+  // ===== GitHub 登录与设置同步（Wave S6）=====
+
+  /** 发起一次设备码登录；`scope` 传 `sync` 时多要 Gist 权限。 */
+  githubLoginStart: (scope: GitHubScope) =>
+    call<GitHubDeviceLoginView>("github_login_start", { scope }),
+
+  /** 轮询一次设备码登录结果。 */
+  githubLoginPoll: (loginId: string) => call<GitHubLoginPoll>("github_login_poll", { loginId }),
+
+  /** 退出 GitHub 登录：清令牌与资料。 */
+  githubLoginSignOut: () => call<void>("github_login_sign_out"),
+
+  /** 读本机已登录的 GitHub 资料；没登录返回 null。 */
+  githubLoginProfile: () => call<GitHubLoginView | null>("github_login_profile"),
+
+  /** 当前设置同步状态。 */
+  settingsSyncStatus: () => call<SettingsSyncStatus>("settings_sync_status"),
+
+  /** 开启设置同步。 */
+  settingsSyncEnable: (password: string, confirm: string, deviceLabel: string) =>
+    call<SettingsSyncStatus>("settings_sync_enable", { password, confirm, deviceLabel }),
+
+  /** 关闭设置同步；`deleteRemote` 为真时连云端那份一起删。 */
+  settingsSyncDisable: (deleteRemote: boolean) =>
+    call<SettingsSyncStatus>("settings_sync_disable", { deleteRemote }),
+
+  /** 立即同步。 */
+  settingsSyncNow: () => call<SettingsSyncStatus>("settings_sync_now"),
+
+  /** 重设同步密码。 */
+  settingsSyncResetPassword: (newPassword: string, confirm: string) =>
+    call<SettingsSyncStatus>("settings_sync_reset_password", { newPassword, confirm }),
+
+  /** 新设备加入：输同步密码解密云端配置并导入。 */
+  settingsSyncJoin: (password: string, deviceLabel: string, confirmOverwrite: boolean) =>
+    call<SettingsSyncStatus>("settings_sync_join", { password, deviceLabel, confirmOverwrite }),
+
+  /** 解决冲突：保留本机或按远端导入。 */
+  settingsSyncResolveConflict: (choice: ConflictChoice) =>
+    call<SettingsSyncStatus>("settings_sync_resolve_conflict", { choice }),
   // ===== 关于与更新 =====
 
   /**
@@ -1151,4 +1192,65 @@ export interface McpAudit {
 export interface McpAuditPage {
   items: McpAudit[];
   total: number;
+}
+
+// ============================ GitHub 登录与设置同步（Wave S6） ============================
+
+/** GitHub 这次登录申请到哪一档权限：只要身份，或再加 Gist。 */
+export type GitHubScope = "login" | "sync";
+
+/** 一次设备码登录给界面看的公开信息；不含能换令牌的设备码。 */
+export interface GitHubDeviceLoginView {
+  /** 本次登录的临时编号；轮询时带回去。 */
+  loginId: string;
+  /** 显示给用户输入的短码。 */
+  userCode: string;
+  /** 让用户打开的确认页地址。 */
+  verificationUri: string;
+  /** 这组码的有效秒数。 */
+  expiresIn: number;
+  /** GitHub 要求的轮询间隔（秒）。 */
+  interval: number;
+}
+
+/** GitHub 账号资料；不含令牌。 */
+export interface GitHubLoginView {
+  login: string;
+  name?: string | null;
+  avatarUrl?: string | null;
+  /** 本次登录申请到哪一档权限；据此判断要不要再授权 Gist。 */
+  scope: GitHubScope;
+}
+
+/** 轮询一次设备码登录的结果；`status` 就是后端那个松散的枚举。 */
+export type GitHubLoginPoll =
+  | { status: "pending" }
+  | { status: "slowDown" }
+  | { status: "expired" }
+  | { status: "denied" }
+  | ({ status: "authorized" } & GitHubLoginView);
+
+/** 冲突的公开信息：哪台设备、什么时间、哪个版本。 */
+export interface SettingsSyncConflict {
+  remoteDeviceId: string;
+  remoteDeviceLabel: string;
+  remoteRevision: number;
+  updatedAt: string;
+}
+
+/** 冲突处理选择。 */
+export type ConflictChoice = "keepLocal" | "keepRemote";
+
+/** 给界面看的一份同步状态（不含任何密钥）。 */
+export interface SettingsSyncStatus {
+  enabled: boolean;
+  deviceId?: string | null;
+  deviceLabel?: string | null;
+  gistId?: string | null;
+  gistUrl?: string | null;
+  revision: number;
+  remoteRevision: number;
+  lastSyncAt?: string | null;
+  lastError?: string | null;
+  conflict?: SettingsSyncConflict | null;
 }
