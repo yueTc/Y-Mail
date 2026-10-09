@@ -26,7 +26,7 @@ _163、QQ、企业微信、Gmail、Outlook —— 收进同一个收件箱_
 
 ---
 
-> 当前版本 `0.2.2`。产品名 `Y-Mail`，机器标识 `com.ymail.desktop`。
+> 当前版本 `0.2.3`。产品名 `Y-Mail`，机器标识 `com.ymail.desktop`。
 
 ## 亮点
 
@@ -61,7 +61,7 @@ _163、QQ、企业微信、Gmail、Outlook —— 收进同一个收件箱_
 
 | 平台 | 安装包 |
 |---|---|
-| **Windows 10 / 11（x64）** | [`Y-Mail_0.2.2_x64_en-US.msi`](https://github.com/yueTc/Y-Mail/releases/download/v0.2.2/Y-Mail_0.2.2_x64_en-US.msi)（MSI，约 12 MB） |
+| **Windows 10 / 11（x64）** | [`Y-Mail_0.2.3_x64_en-US.msi`](https://github.com/yueTc/Y-Mail/releases/download/v0.2.3/Y-Mail_0.2.3_x64_en-US.msi)（MSI，约 12 MB） |
 
 仓库目前只发布 Windows x64 的 MSI；NSIS 安装包可在本地用 `npm run tauri build` 生成（见下文「从源码构建」）。
 
