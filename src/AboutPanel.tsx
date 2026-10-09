@@ -199,9 +199,6 @@ export default function AboutPanel({ onUpdateFound, onUpdateSettingsChanged }: A
           <label className="switch-row">
             <span className="switch-row-text">
               <span className="switch-row-title">{t("自动检测更新")}</span>
-              <span className="switch-row-sub">
-                {t("打开后启动满 30 秒查一次，之后每隔设定的小时数再查一次；只在本机生效，不跟着账号同步。")}
-              </span>
             </span>
             <input
               type="checkbox"
@@ -217,9 +214,6 @@ export default function AboutPanel({ onUpdateFound, onUpdateSettingsChanged }: A
           <label className="switch-row">
             <span className="switch-row-text">
               <span className="switch-row-title">{t("检测间隔（小时）")}</span>
-              <span className="switch-row-sub">
-                {t("允许 1 到 168 之间的整数，默认 24。开关没打开时也能先设好。")}
-              </span>
             </span>
             <input
               type="number"
@@ -306,7 +300,6 @@ export default function AboutPanel({ onUpdateFound, onUpdateSettingsChanged }: A
         <div className="panel-head">
           <h3 className="settings-subtitle">{t("项目主页")}</h3>
         </div>
-        <p className="hint">{t("源码、问题反馈和每次发布的更新说明都在这里。")}</p>
         <div className="actions">
           <button type="button" onClick={() => void openUrl(GITHUB_HOME)} disabled={opening}>
             {t("打开 GitHub 页面")}
