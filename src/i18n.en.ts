@@ -872,4 +872,11 @@ export const EN: Record<string, string> = {
   "这是第二台设备？输入同步密码加入": "Is this your second device? Enter the sync password to join",
   "例如：公司的笔记本": "e.g. laptop at work",
   "用同步密码加入": "Join with sync password",
+  "自动检测更新": "Check for updates automatically",
+  "检测间隔（小时）": "Check interval (hours)",
+  "打开后启动满 30 秒查一次，之后每隔设定的小时数再查一次；只在本机生效，不跟着账号同步。": "Once on, it checks 30 seconds after startup and then every set number of hours. This setting stays on this device and is not synced with your account.",
+  "允许 1 到 168 之间的整数，默认 24。开关没打开时也能先设好。": "Whole numbers from 1 to 168; default is 24. You can set this even while the switch is off.",
+  "检测间隔要填 1 到 168 之间的整数小时。": "The check interval must be a whole number of hours between 1 and 168.",
+  "保存自动检测设置失败：{0}": "Failed to save automatic update settings: {0}",
+  "有新版本": "New version available",
 };

@@ -473,6 +473,14 @@ textarea:focus {
   color: var(--text-muted);
 }
 
+/* 「关于」里的检测间隔输入框：窄一点，靠右和开关对齐。 */
+.settings-workspace .update-interval-input {
+  order: 2;
+  flex: 0 0 auto;
+  width: 88px;
+  text-align: right;
+}
+
 .authorize-url {
   width: 100%;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -1669,7 +1677,9 @@ textarea:focus {
 }
 
 .settings-nav-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 8px 10px;
   border: 1px solid transparent;
@@ -1677,6 +1687,16 @@ textarea:focus {
   background: transparent;
   color: inherit;
   text-align: left;
+}
+
+/* 左栏「关于」有新版本时的小红点；只做提示，不挡点击。 */
+.settings-nav-badge {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--danger);
 }
 
 .settings-nav-item:hover:not(.active) {

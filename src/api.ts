@@ -180,6 +180,10 @@ export interface AppSettings {
   minimizeToTrayOnClose: boolean;
   /** 启动时是不是直接进托盘、不弹主窗口；默认否。 */
   startMinimizedToTray: boolean;
+  /** 是否自动检测更新；默认关。 */
+  autoCheckUpdate: boolean;
+  /** 自动检测更新的间隔小时数；默认 24，允许 1–168。 */
+  updateCheckIntervalHours: number;
   /** 默认邮件数据目录。 */
   defaultDataDir: string;
   /** 附件目录留空时会用的默认位置。 */
@@ -747,6 +751,10 @@ export const api = {
   /** 保存「关闭时最小化到托盘」「启动时最小化到托盘」两个开关。 */
   setTraySettings: (minimizeToTrayOnClose: boolean, startMinimizedToTray: boolean) =>
     call<AppSettings>("set_tray_settings", { minimizeToTrayOnClose, startMinimizedToTray }),
+
+  /** 保存自动检测更新设置；只动这两个字段，别的设置不受影响。 */
+  setUpdateSettings: (autoCheckUpdate: boolean, intervalHours: number) =>
+    call<AppSettings>("set_update_settings", { autoCheckUpdate, intervalHours }),
 
   listAccounts: () => call<Account[]>("list_accounts"),
 

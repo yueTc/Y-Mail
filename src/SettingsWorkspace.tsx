@@ -83,6 +83,14 @@ function persistNavWidth(value: number): void {
 type SettingsWorkspaceProps = {
   proxiesVersion: number;
   onProxiesChanged: () => void;
+  /** 左栏「关于」是否显示小红点（有待提醒的新版本）。 */
+  hasUpdateNotice?: boolean;
+  /** 用户点开「关于」时上报一次；清红点、记已提醒版本由外层统一做。 */
+  onAboutOpened?: () => void;
+  /** 手动检查查到新版本时上报版本号，用来点亮红点。 */
+  onUpdateFound?: (version: string) => void;
+  /** 自动检测开关或间隔改动后上报，用来重排定时器。 */
+  onUpdateSettingsChanged?: (enabled: boolean, intervalHours: number) => void;
 };
 
 /**
@@ -93,6 +101,10 @@ type SettingsWorkspaceProps = {
 export default function SettingsWorkspace({
   proxiesVersion,
   onProxiesChanged,
+  hasUpdateNotice = false,
+  onAboutOpened,
+  onUpdateFound,
+  onUpdateSettingsChanged,
 }: SettingsWorkspaceProps) {
   const [storage, setStorage] = useState<StorageState>({ kind: "loading" });
   const [dataDir, setDataDir] = useState("");
@@ -194,6 +206,12 @@ export default function SettingsWorkspace({
     ),
   );
   const effectiveNavWidth = Math.min(navMax, clampNavWidth(navWidth));
+
+  /** 切左栏分类；点开「关于」时顺手告诉外层清红点、记已提醒版本。 */
+  function selectCategory(category: SettingsCategoryId) {
+    setActiveCategory(category);
+    if (category === "about") onAboutOpened?.();
+  }
 
   /** 拖动中只改内存，够快；松手时再落盘。 */
   function changeNavWidth(next: number) {
@@ -480,9 +498,14 @@ export default function SettingsWorkspace({
                     type="button"
                     className={active ? "settings-nav-item active" : "settings-nav-item"}
                     aria-current={active ? "true" : undefined}
-                    onClick={() => setActiveCategory(category.id)}
+                    onClick={() => selectCategory(category.id)}
                   >
                     {t(category.label)}
+                    {category.id === "about" && hasUpdateNotice && (
+                      <span className="settings-nav-badge">
+                        <span className="visually-hidden">{t("有新版本")}</span>
+                      </span>
+                    )}
                   </button>
                 </li>
               );
@@ -807,7 +830,10 @@ export default function SettingsWorkspace({
             hidden={activeCategory !== "about"}
           >
             <h2 className="settings-group-title">{t("关于")}</h2>
-            <AboutPanel />
+            <AboutPanel
+              onUpdateFound={onUpdateFound}
+              onUpdateSettingsChanged={onUpdateSettingsChanged}
+            />
           </section>
         </div>
       </div>

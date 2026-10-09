@@ -26,6 +26,8 @@ const SETTINGS: AppSettings = {
   blockRemoteImagesByDefault: true,
   minimizeToTrayOnClose: true,
   startMinimizedToTray: false,
+  autoCheckUpdate: false,
+  updateCheckIntervalHours: 24,
   defaultDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",
   defaultAttachmentDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop/downloads",
   activeDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",

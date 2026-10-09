@@ -15,6 +15,11 @@ use crate::storage_dir::DATABASE_NAME;
 /// 设置文件名。
 pub const SETTINGS_FILE: &str = "settings.json";
 
+/// 自动检测更新的间隔允许范围（小时）与默认值。
+pub const UPDATE_CHECK_INTERVAL_MIN_HOURS: u32 = 1;
+pub const UPDATE_CHECK_INTERVAL_MAX_HOURS: u32 = 168;
+pub const UPDATE_CHECK_INTERVAL_DEFAULT_HOURS: u32 = 24;
+
 /// 存进 `settings.json` 的内容。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -35,6 +40,10 @@ pub struct AppSettings {
     /// 启动时是不是直接进托盘、不弹主窗口；默认否，双击图标仍能看到窗口。
     /// 被开机自启动拉起来的那一次不受这里影响，始终静默进托盘。
     pub start_minimized_to_tray: bool,
+    /// 是否自动检测更新；默认关，打开后才会定期联网查有没有新版本。
+    pub auto_check_update: bool,
+    /// 自动检测更新的间隔小时数；默认 24，允许 1–168，越界读回时按默认处理。
+    pub update_check_interval_hours: u32,
     /// 下次启动要清理的旧数据目录；为空表示没有待清理目录。
     pub pending_cleanup_dir: Option<PathBuf>,
 }
@@ -49,6 +58,8 @@ impl Default for AppSettings {
             block_remote_images_by_default: true,
             minimize_to_tray_on_close: true,
             start_minimized_to_tray: false,
+            auto_check_update: false,
+            update_check_interval_hours: UPDATE_CHECK_INTERVAL_DEFAULT_HOURS,
             pending_cleanup_dir: None,
         }
     }
@@ -62,7 +73,7 @@ impl AppSettings {
             return Self::default();
         };
         match serde_json::from_str::<AppSettings>(&raw) {
-            Ok(settings) => settings,
+            Ok(settings) => settings.normalize_interval(),
             Err(error) => {
                 tracing::warn!(error = %error, path = %path.display(), "设置文件解析失败，改用默认设置");
                 Self::default()
@@ -75,6 +86,16 @@ impl AppSettings {
         std::fs::create_dir_all(base_dir)?;
         let raw = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(base_dir.join(SETTINGS_FILE), raw)
+    }
+
+    /// 把越界的检测间隔拉回默认值；老配置缺字段或手改坏了都不能拦启动。
+    fn normalize_interval(mut self) -> Self {
+        if !(UPDATE_CHECK_INTERVAL_MIN_HOURS..=UPDATE_CHECK_INTERVAL_MAX_HOURS)
+            .contains(&self.update_check_interval_hours)
+        {
+            self.update_check_interval_hours = UPDATE_CHECK_INTERVAL_DEFAULT_HOURS;
+        }
+        self
     }
 
     /// 邮件数据目录的生效值：没单独配置就用传入的默认目录。
@@ -101,7 +122,7 @@ pub fn is_first_run(base_dir: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::AppSettings;
+    use super::{AppSettings, UPDATE_CHECK_INTERVAL_DEFAULT_HOURS};
     #[test]
     fn defaults_keep_current_behaviour() {
         let settings = AppSettings::default();
@@ -112,6 +133,8 @@ mod tests {
         assert!(settings.block_remote_images_by_default);
         assert!(settings.minimize_to_tray_on_close, "默认按关闭键收进托盘");
         assert!(!settings.start_minimized_to_tray, "默认启动时显示主窗口");
+        assert!(!settings.auto_check_update, "默认不自动检测更新");
+        assert_eq!(settings.update_check_interval_hours, 24, "默认每 24 小时查一次");
         assert_eq!(settings.pending_cleanup_dir, None);
         assert_eq!(
             settings.effective_data_dir(std::path::Path::new("C:/app")),
@@ -133,6 +156,8 @@ mod tests {
             block_remote_images_by_default: true,
             minimize_to_tray_on_close: true,
             start_minimized_to_tray: false,
+            auto_check_update: false,
+            update_check_interval_hours: UPDATE_CHECK_INTERVAL_DEFAULT_HOURS,
             pending_cleanup_dir: None,
         };
         assert_eq!(
@@ -163,6 +188,8 @@ mod tests {
             block_remote_images_by_default: false,
             minimize_to_tray_on_close: false,
             start_minimized_to_tray: true,
+            auto_check_update: true,
+            update_check_interval_hours: 6,
             pending_cleanup_dir: Some(std::path::PathBuf::from("C:/Old/Mail")),
         };
         settings.save(&dir).expect("保存设置");
@@ -190,9 +217,36 @@ mod tests {
             !partial.start_minimized_to_tray,
             "老配置里缺这个字段时按「启动不静默」处理"
         );
+        assert!(!partial.auto_check_update, "老配置缺自动检测开关时按关闭处理");
+        assert_eq!(
+            partial.update_check_interval_hours, 24,
+            "老配置缺检测间隔时按 24 小时"
+        );
         assert_eq!(partial.data_dir, None);
         assert_eq!(partial.attachment_dir, None);
         assert_eq!(partial.pending_cleanup_dir, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn out_of_range_update_interval_falls_back_to_default() {
+        let dir = std::env::temp_dir().join(format!(
+            "ymail-settings-interval-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("建目录");
+        std::fs::write(
+            dir.join(super::SETTINGS_FILE),
+            "{ \"autoCheckUpdate\": true, \"updateCheckIntervalHours\": 999 }",
+        )
+        .expect("写文件");
+        let loaded = AppSettings::load(&dir);
+        assert!(loaded.auto_check_update);
+        assert_eq!(loaded.update_check_interval_hours, 24);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

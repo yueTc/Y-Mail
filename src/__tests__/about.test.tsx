@@ -19,6 +19,7 @@ vi.mock("../api", () => ({
     autostartStatus: vi.fn(),
     setAutostart: vi.fn(),
     setTraySettings: vi.fn(),
+    setUpdateSettings: vi.fn(),
     appVersion: vi.fn(),
     checkForUpdate: vi.fn(),
     installPendingUpdate: vi.fn(),
@@ -48,6 +49,8 @@ const SETTINGS: AppSettings = {
   blockRemoteImagesByDefault: true,
   minimizeToTrayOnClose: true,
   startMinimizedToTray: false,
+  autoCheckUpdate: false,
+  updateCheckIntervalHours: 24,
   defaultDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",
   defaultAttachmentDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop/downloads",
   activeDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",
@@ -71,6 +74,11 @@ beforeEach(() => {
   vi.mocked(api.installPendingUpdate).mockResolvedValue(undefined);
   vi.mocked(api.relaunchApp).mockResolvedValue(undefined);
   vi.mocked(api.openExternalUrl).mockResolvedValue(undefined);
+  vi.mocked(api.setUpdateSettings).mockImplementation(async (autoCheckUpdate, hours) => ({
+    ...SETTINGS,
+    autoCheckUpdate,
+    updateCheckIntervalHours: hours,
+  }));
 });
 
 afterEach(cleanup);
@@ -152,5 +160,71 @@ describe("关于页", () => {
 
     expect(navItem.getAttribute("aria-current")).toBe("true");
     expect(await screen.findByText("Y-Mail 0.1.2")).toBeTruthy();
+  });
+
+  it("自动检测更新默认关闭，间隔显示 24", async () => {
+    render(<AboutPanel />);
+
+    const toggle = (await screen.findByRole("checkbox", {
+      name: /自动检测更新/,
+    })) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    const interval = screen.getByRole("spinbutton") as HTMLInputElement;
+    expect(interval.value).toBe("24");
+  });
+
+  it("打开自动检测开关会按当前间隔保存", async () => {
+    render(<AboutPanel />);
+
+    const toggle = await screen.findByRole("checkbox", { name: /自动检测更新/ });
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(api.setUpdateSettings).toHaveBeenCalledWith(true, 24));
+  });
+
+  it("间隔填合法值立即保存", async () => {
+    render(<AboutPanel />);
+
+    const interval = (await screen.findByRole("spinbutton")) as HTMLInputElement;
+    fireEvent.change(interval, { target: { value: "6" } });
+
+    await waitFor(() => expect(api.setUpdateSettings).toHaveBeenCalledWith(false, 6));
+  });
+
+  it("间隔超出范围给中文提示且不保存", async () => {
+    render(<AboutPanel />);
+
+    const interval = (await screen.findByRole("spinbutton")) as HTMLInputElement;
+    fireEvent.change(interval, { target: { value: "200" } });
+
+    expect(await screen.findByText("检测间隔要填 1 到 168 之间的整数小时。")).toBeTruthy();
+    expect(api.setUpdateSettings).not.toHaveBeenCalled();
+  });
+
+  it("手动检查发现新版本会上报版本号", async () => {
+    vi.mocked(api.checkForUpdate).mockResolvedValue(UPDATE_INFO);
+    const onUpdateFound = vi.fn();
+    render(<AboutPanel onUpdateFound={onUpdateFound} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "检查更新" }));
+
+    await waitFor(() => expect(onUpdateFound).toHaveBeenCalledWith("0.1.3"));
+  });
+
+  it("有待提醒的新版本时左栏「关于」显示小红点，点开上报已读", async () => {
+    const onAboutOpened = vi.fn();
+    render(
+      <SettingsWorkspace
+        proxiesVersion={1}
+        onProxiesChanged={() => {}}
+        hasUpdateNotice
+        onAboutOpened={onAboutOpened}
+      />,
+    );
+
+    expect(await screen.findByText("有新版本")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /关于/ }));
+
+    expect(onAboutOpened).toHaveBeenCalledTimes(1);
   });
 });

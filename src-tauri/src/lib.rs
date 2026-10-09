@@ -63,6 +63,7 @@ pub fn run() {
             commands::set_autostart,
             // 启动与托盘：关闭收托盘 / 启动静默，写进设置文件。
             commands::set_tray_settings,
+            commands::set_update_settings,
             commands::download_external_attachment,
             commands::open_downloaded_file,
             commands::open_downloaded_file_dir,

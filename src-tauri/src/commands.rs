@@ -23,7 +23,7 @@ use mail_domain::proxy::{GlobalProxyMode, ProxyConfig, ProxyId, ProxyKind, Secre
 use serde::{Deserialize, Serialize};
 use tauri_plugin_autostart::ManagerExt;
 
-use crate::settings::AppSettings;
+use crate::settings::{AppSettings, UPDATE_CHECK_INTERVAL_MAX_HOURS, UPDATE_CHECK_INTERVAL_MIN_HOURS};
 use crate::state::AppState;
 use crate::storage_dir::{self, ChangeDataDirResult, MigrationStart};
 
@@ -560,6 +560,10 @@ pub struct AppSettingsDto {
     pub minimize_to_tray_on_close: bool,
     /// 启动时是不是直接进托盘、不弹主窗口；默认否。
     pub start_minimized_to_tray: bool,
+    /// 是否自动检测更新；默认关。
+    pub auto_check_update: bool,
+    /// 自动检测更新的间隔小时数；默认 24。
+    pub update_check_interval_hours: u32,
     /// 默认邮件数据目录（界面上做提示）。
     pub default_data_dir: String,
     /// 附件目录留空时会用的默认位置。
@@ -634,6 +638,9 @@ pub async fn set_app_settings(
         // 这两个开关由「启动与托盘」分组单独维护，这里从旧值原样带过。
         minimize_to_tray_on_close: previous.minimize_to_tray_on_close,
         start_minimized_to_tray: previous.start_minimized_to_tray,
+        // 自动检测更新由「关于」分组单独维护，这里也从旧值带过。
+        auto_check_update: previous.auto_check_update,
+        update_check_interval_hours: previous.update_check_interval_hours,
         pending_cleanup_dir: previous.pending_cleanup_dir.take(),
     };
     state
@@ -770,6 +777,30 @@ pub async fn set_tray_settings(
         .save_settings(settings.clone())
         .map_err(|error| CommandError::new(format!("保存设置失败：{error}")))?;
     bridge_synced_toggles(state.inner(), &settings).await;
+    Ok(build_settings_dto(state.inner()))
+}
+
+/// 保存「自动检测更新」开关与间隔小时数。
+///
+/// 这两个设置只在本机生效，不参与账号同步；单独提交也免得跟别的分组互相覆盖。
+/// 间隔只接受 1–168 的整数小时，越界直接报错、不写盘。
+#[tauri::command]
+pub async fn set_update_settings(
+    state: tauri::State<'_, AppState>,
+    auto_check_update: bool,
+    interval_hours: u32,
+) -> Result<AppSettingsDto, CommandError> {
+    if !(UPDATE_CHECK_INTERVAL_MIN_HOURS..=UPDATE_CHECK_INTERVAL_MAX_HOURS).contains(&interval_hours) {
+        return Err(CommandError::input(format!(
+            "检测间隔要填 {UPDATE_CHECK_INTERVAL_MIN_HOURS} 到 {UPDATE_CHECK_INTERVAL_MAX_HOURS} 小时"
+        )));
+    }
+    let mut settings = state.settings_snapshot();
+    settings.auto_check_update = auto_check_update;
+    settings.update_check_interval_hours = interval_hours;
+    state
+        .save_settings(settings)
+        .map_err(|error| CommandError::new(format!("保存设置失败：{error}")))?;
     Ok(build_settings_dto(state.inner()))
 }
 
@@ -945,6 +976,8 @@ fn build_settings_dto(state: &AppState) -> AppSettingsDto {
         block_remote_images_by_default: settings.block_remote_images_by_default,
         minimize_to_tray_on_close: settings.minimize_to_tray_on_close,
         start_minimized_to_tray: settings.start_minimized_to_tray,
+        auto_check_update: settings.auto_check_update,
+        update_check_interval_hours: settings.update_check_interval_hours,
         default_data_dir: strip_verbatim_prefix(&default_dir.to_string_lossy()),
         default_attachment_dir: strip_verbatim_prefix(
             &settings.effective_attachment_dir(default_dir).to_string_lossy(),
