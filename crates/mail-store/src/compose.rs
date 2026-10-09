@@ -481,6 +481,25 @@ impl Store {
         }))
     }
 
+    /// 列出所有已存在的签名行（设置同步导出用；无签名的账号不会出现）。
+    pub fn list_signatures(&self) -> Result<Vec<StoredSignature>, StoreError> {
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT account_id, html, enabled, updated_at FROM signature ORDER BY account_id ASC")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(StoredSignature {
+                account_id: row.get(0)?,
+                html: row.get(1)?,
+                enabled: row.get::<_, i64>(2)? != 0,
+                updated_at: row.get(3)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
     /// 写入或更新一个账号的签名。
     pub fn save_signature(&self, account_id: i64, html: &str, enabled: bool) -> Result<(), StoreError> {
         self.conn().execute(

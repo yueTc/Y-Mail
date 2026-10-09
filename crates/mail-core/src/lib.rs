@@ -62,7 +62,10 @@ pub use paths::SqlitePaths;
 pub use secrets::{ChunkedSecretStore, KeyringSecretStore, MemorySecretStore, SecretStore, SecretStoreError};
 pub use sync::{AccountSyncStatus, SyncConfig, SyncService, SyncState};
 pub use sync_settings::{
-    GitHubLoginView, GITHUB_AVATAR_KEY, GITHUB_LOGIN_KEY, GITHUB_NAME_KEY, GITHUB_TOKEN_KEY,
+    account_logical_key, ai_logical_key, proxy_logical_key, GitHubLoginView, SettingsSnapshot,
+    SnapshotAccount, SnapshotAiModelMap, SnapshotAiProvider, SnapshotGlobalProxy, SnapshotProxy,
+    SnapshotProxyRef, SnapshotServer, SnapshotSettings, SnapshotSignature, GITHUB_AVATAR_KEY,
+    GITHUB_LOGIN_KEY, GITHUB_NAME_KEY, GITHUB_TOKEN_KEY, SNAPSHOT_SCHEMA_VERSION,
 };
 
 /// 本 crate 的用途标识，供工作区自检与日志使用。

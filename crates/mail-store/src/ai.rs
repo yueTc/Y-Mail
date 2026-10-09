@@ -6,12 +6,14 @@
 //! - 邮件正文与模型输出都只作为不可信字符串存取，绝不在这里解释或执行。
 
 use rusqlite::OptionalExtension;
+use serde::{Deserialize, Serialize};
 
 use crate::connection::Store;
 use crate::error::StoreError;
 
 /// AI 站点类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AiProviderKind {
     /// OpenAI 兼容站点。
     OpenAiCompatible,
@@ -43,7 +45,8 @@ impl AiProviderKind {
 }
 
 /// 思考程度四档。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AiThinkingLevel {
     /// 关闭。
     #[default]
@@ -79,7 +82,8 @@ impl AiThinkingLevel {
 }
 
 /// 可以使用 AI 的功能。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AiFunction {
     /// 翻译。
     Translate,

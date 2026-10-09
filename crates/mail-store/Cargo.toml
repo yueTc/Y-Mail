@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 mail-domain.workspace = true
 rusqlite.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true

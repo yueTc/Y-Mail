@@ -18,6 +18,7 @@ pub mod migrations;
 pub mod proxies;
 pub mod reading;
 pub mod search;
+pub mod settings_import;
 pub mod sync;
 
 pub use ai::{
@@ -39,6 +40,11 @@ pub use reading::{
     AttachmentState, BodyState, MessageLocation, NewAttachment, StoredAttachment, StoredMessageBody,
 };
 pub use search::{SearchHit, SearchPage, SearchQuery, SnippetSegment};
+pub use settings_import::{
+    AccountImport, AiModelMapImport, AiProviderImport, GlobalProxyImport, ProxyImport, SettingsImportPlan,
+    SettingsImportValues, SignatureImport, SETTING_BLOCK_REMOTE_IMAGES, SETTING_MINIMIZE_TO_TRAY,
+    SETTING_NOTIFY_AI_ENABLED, SETTING_NOTIFY_NEW_MAIL, SETTING_START_MINIMIZED,
+};
 pub use sync::{NewFolder, NewMessage, PendingFlag, StoredFolder, StoredSyncJob};
 
 /// 本 crate 的用途标识，供工作区自检与日志使用。

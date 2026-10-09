@@ -3174,6 +3174,7 @@ version = "0.1.4"
 dependencies = [
  "mail-domain",
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",
