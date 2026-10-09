@@ -279,6 +279,13 @@ textarea:focus {
   flex: none;
 }
 
+/* 账号管理页卡片左侧账号色标：同样用竖细条。 */
+.card > .dot {
+  width: 3px;
+  height: 34px;
+  border-radius: 999px;
+}
+
 .card-main {
   flex: 1;
   min-width: 0;
@@ -671,6 +678,13 @@ textarea:focus {
   font-weight: 600;
 }
 
+/* 账号色标：竖细条，与邮件列表左侧保持一致。 */
+.sidebar-account-item .dot {
+  width: 3px;
+  height: 22px;
+  border-radius: 999px;
+}
+
 .sidebar-folders {
   margin: 2px 0 4px 18px;
   display: flex;
@@ -745,6 +759,13 @@ textarea:focus {
 
 .inbox-row[role="button"] {
   cursor: pointer;
+}
+
+/* 邮件行左侧账号色标：竖细条，比圆点更贴合列表。 */
+.inbox-row .dot {
+  width: 3px;
+  height: 34px;
+  border-radius: 999px;
 }
 
 .inbox-row:hover {
