@@ -10,7 +10,8 @@ pub mod client;
 pub mod probe;
 
 pub use client::{
-    Address, ClientConfig, Envelope, FolderInfo, IdleOutcome, ImapClient, MailboxStatus, MessageMeta,
+    Address, ClientConfig, Envelope, FolderInfo, IdleInterrupt, IdleOutcome, ImapClient, MailboxStatus,
+    MessageMeta,
 };
 pub use probe::{probe, ProbeReport, ProbeRequest};
 

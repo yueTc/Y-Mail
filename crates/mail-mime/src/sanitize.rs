@@ -494,9 +494,12 @@ fn replace_attribute(tag: &str, attr: &AttributeSpan<'_>, replacement: &str) -> 
 }
 
 /// 属性值写回 HTML 前做最小转义。
+///
+/// 只处理会破坏属性边界的引号与尖括号，**不碰 &**：
+/// 属性值在 HTML 里本来就用实体表示（&amp;），再转一次会让浏览器拿到
+/// 多出来的 &amp;，带查询串的图片地址就会因为签名对不上而被拒绝。
 fn escape_attribute(value: &str) -> String {
     value
-        .replace('&', "&amp;")
         .replace('"', "&quot;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -1004,6 +1007,20 @@ mod tests {
         let restored = restore_remote_images(&html);
         assert!(restored.contains(r#"src="https://tracker.example/1x1.gif""#));
         assert!(!restored.contains("data-em-original-src"));
+    }
+
+    #[test]
+    fn 放行还原后带查询串的地址不会被重复转义() {
+        let (html, blocked) = sanitize_html(
+            r#"<img src="https://cdn.example.com/logo.png?key=1&amp;Expires=1808215120347&amp;Signature=Kl%2By%3D" alt="logo">"#,
+        );
+        assert_eq!(blocked, 1);
+        let restored = restore_remote_images(&html);
+        assert!(
+            restored.contains(r#"src="https://cdn.example.com/logo.png?key=1&amp;Expires=1808215120347&amp;Signature=Kl%2By%3D""#),
+            "{restored}"
+        );
+        assert!(!restored.contains("&amp;amp;"), "{restored}");
     }
 
     #[test]

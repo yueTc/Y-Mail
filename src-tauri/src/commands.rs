@@ -1446,8 +1446,14 @@ pub async fn stop_sync(
     state: tauri::State<'_, AppState>,
     account_id: Option<i64>,
 ) -> Result<(), CommandError> {
-    let engine = state.engine().await;
-    engine.stop_sync(account_id).await;
+    // 只借引擎锁取出同步句柄，取到就放锁。
+    // 等线程退出（最长一次 IDLE 收尾可达 4 分钟）期间不能再攥着引擎，
+    // 否则收件箱列表、读信、同步状态轮询都会一起卡成「正在加载」。
+    let sync = {
+        let engine = state.engine().await;
+        engine.sync_handle()
+    };
+    sync.stop(account_id).await;
     Ok(())
 }
 
@@ -3195,6 +3201,18 @@ impl AiModelMapDto {
     }
 }
 
+/// 通知识别「检查延迟」的结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationLatencyDto {
+    /// 一次外发往返的毫秒数。
+    pub elapsed_ms: u64,
+    /// 有没有认出验证码。
+    pub found_code: bool,
+    /// 有没有认出验证链接。
+    pub found_link: bool,
+}
+
 /// 外发授权弹窗展示的目标信息。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -3336,6 +3354,23 @@ fn parse_ai_function(value: &str) -> Result<AiFunction, CommandError> {
         .ok_or_else(|| CommandError::input("AI 功能只能是 translate、summary、polish 或 draft"))
 }
 
+/// 解析界面传来的思考程度；空串按「跟随站点默认」处理。
+fn parse_thinking_level(value: Option<String>) -> Result<Option<AiThinkingLevel>, CommandError> {
+    match value {
+        Some(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                Ok(None)
+            } else if matches!(normalized.as_str(), "off" | "low" | "medium" | "high") {
+                Ok(Some(AiThinkingLevel::parse(&normalized)))
+            } else {
+                Err(CommandError::input("思考程度只能是 off、low、medium 或 high"))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
 /// 列出全部 AI 站点；不含密钥明文。
 #[tauri::command]
 pub async fn list_ai_providers(
@@ -3410,6 +3445,28 @@ pub async fn refresh_ai_provider_models(
     Ok(engine.refresh_ai_provider_models(id).await?)
 }
 
+/// 用当前选的站点和模型发一封固定的假邮件，量一次通知识别的实际往返耗时。
+///
+/// 内容全部由程序编造，不含任何真实邮件；只在用户点按钮并确认后调用。
+#[tauri::command]
+pub async fn check_notification_latency(
+    state: tauri::State<'_, AppState>,
+    provider_id: i64,
+    model: String,
+    thinking_level: Option<String>,
+) -> Result<NotificationLatencyDto, CommandError> {
+    let level = parse_thinking_level(thinking_level)?;
+    let engine = state.engine().await;
+    let result = engine
+        .check_notification_latency(provider_id, &model, level)
+        .await?;
+    Ok(NotificationLatencyDto {
+        elapsed_ms: result.elapsed_ms,
+        found_code: result.found_code,
+        found_link: result.found_link,
+    })
+}
+
 /// 列出功能级模型与思考程度配置。
 #[tauri::command]
 pub async fn list_ai_model_maps(
@@ -3436,19 +3493,7 @@ pub async fn set_ai_feature(
         return Err(CommandError::input("请选择 AI 站点"));
     }
     let function = parse_ai_function(&function)?;
-    let level = match thinking_level {
-        Some(value) => {
-            let normalized = value.trim().to_ascii_lowercase();
-            if normalized.is_empty() {
-                None
-            } else if matches!(normalized.as_str(), "off" | "low" | "medium" | "high") {
-                Some(AiThinkingLevel::parse(&normalized))
-            } else {
-                return Err(CommandError::input("思考程度只能是 off、low、medium 或 high"));
-            }
-        }
-        None => None,
-    };
+    let level = parse_thinking_level(thinking_level)?;
     let engine = state.engine().await;
     engine.set_ai_feature(function, provider_id, &model, level)?;
     Ok(())

@@ -9,11 +9,14 @@ mod session;
 mod tests;
 pub(crate) mod utf7;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use mail_domain::account::Security;
 use mail_domain::auth::AuthMaterial;
 use mail_net::Stream;
+use tokio::sync::Notify;
 
 /// 连一条 IMAP 连接所需的全部信息。
 #[derive(Clone, PartialEq, Eq)]
@@ -124,6 +127,55 @@ pub enum IdleOutcome {
     Changed,
     /// 等到超时都没有变化。
     Timeout,
+    /// 被上层要求提前收尾（停止同步）。
+    Cancelled,
+}
+
+/// 打断一次 IDLE 等待的信号。
+///
+/// 停止同步时，后台线程可能正挂在「等新邮件」上；发一次 [IdleInterrupt::interrupt]
+/// 就能让那次 IDLE 立刻发 DONE 收尾返回，不必等满超时（默认 4 分钟）。
+#[derive(Clone, Default)]
+pub struct IdleInterrupt {
+    inner: Arc<IdleInterruptInner>,
+}
+
+#[derive(Default)]
+struct IdleInterruptInner {
+    flag: AtomicBool,
+    notify: Notify,
+}
+
+impl IdleInterrupt {
+    /// 新建一个未打断的信号。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 标记打断并唤醒等待者；重复调用无副作用。
+    pub fn interrupt(&self) {
+        self.inner.flag.store(true, Ordering::SeqCst);
+        self.inner.notify.notify_one();
+    }
+
+    /// 是否已经被打断。
+    pub fn is_interrupted(&self) -> bool {
+        self.inner.flag.load(Ordering::SeqCst)
+    }
+
+    /// 等到被打断为止；已经打断过就立刻返回。
+    pub async fn wait(&self) {
+        if self.is_interrupted() {
+            return;
+        }
+        let notified = self.inner.notify.notified();
+        tokio::pin!(notified);
+        // 先把等待注册好再复查一次，堵住「检查完才打断」的窗口。
+        if self.is_interrupted() {
+            return;
+        }
+        notified.await;
+    }
 }
 
 /// 手写的 Debug：只显示能力清单与超时，连接与敏感值一律不进日志。

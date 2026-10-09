@@ -58,6 +58,7 @@ vi.mock("../api", () => ({
     listAiAudit: vi.fn(),
     disableAllAi: vi.fn(),
     clearAiCache: vi.fn(),
+    checkNotificationLatency: vi.fn(),
   },
 }));
 
@@ -682,5 +683,57 @@ describe("通知智能识别开关", () => {
     await waitFor(() =>
       expect(api.setAiFeature).toHaveBeenCalledWith("notification_verify", 1, "qwen2", "high"),
     );
+  });
+
+  it("检查延迟先弹确认，再用当前选的模型连测三次", async () => {
+    vi.mocked(api.listAiProviders).mockResolvedValue([PROVIDER]);
+    vi.mocked(api.listAiModelMaps).mockResolvedValue([VERIFY_MAP]);
+    vi.mocked(api.checkNotificationLatency).mockResolvedValue({
+      elapsedMs: 700,
+      foundCode: true,
+      foundLink: false,
+    });
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={async () => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "检查延迟" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "确认检查延迟" });
+    expect(dialog.textContent).toContain("本机 Ollama");
+    expect(dialog.textContent).toContain("qwen");
+    expect(dialog.textContent).toContain("是，本地服务，内容不离开这台电脑");
+    // 没点「开始测试」之前，一次都不能发。
+    expect(api.checkNotificationLatency).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "开始测试" }));
+
+    await waitFor(() => expect(api.checkNotificationLatency).toHaveBeenCalledTimes(3));
+    expect(api.checkNotificationLatency).toHaveBeenCalledWith(1, "qwen", undefined);
+    await screen.findByText(/平均耗时：700 毫秒/);
+    expect(screen.getAllByText(/认出验证码/).length).toBe(3);
+  });
+
+  it("检查延迟的确认框点取消后不发任何请求", async () => {
+    vi.mocked(api.listAiProviders).mockResolvedValue([PROVIDER]);
+    vi.mocked(api.listAiModelMaps).mockResolvedValue([VERIFY_MAP]);
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={async () => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "检查延迟" }));
+    const dialog = await screen.findByRole("dialog", { name: "确认检查延迟" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "确认检查延迟" })).toBeNull(),
+    );
+    expect(api.checkNotificationLatency).not.toHaveBeenCalled();
+  });
+
+  it("没选站点时点检查延迟只给中文提示，不发任何请求", async () => {
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={async () => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "检查延迟" }));
+
+    await screen.findByText(/请先选择站点和模型，再检查延迟。/);
+    expect(screen.queryByRole("dialog", { name: "确认检查延迟" })).toBeNull();
+    expect(api.checkNotificationLatency).not.toHaveBeenCalled();
   });
 });

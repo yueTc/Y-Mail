@@ -13,7 +13,7 @@ use mail_mime::decode_encoded_words;
 use mail_store::{NewFolder, NewMessage, StoredFolder};
 
 use super::state::SyncState;
-use super::worker::{lock_store, set_status, Failure, WorkerContext, FETCH_BATCH};
+use super::worker::{lock_store, refresh_progress, Failure, WorkerContext, FETCH_BATCH};
 
 /// 一次唤醒里最多补几批历史，避免长时间占着连接不处理新邮件。
 const BACKFILL_BATCHES_PER_CYCLE: usize = 8;
@@ -144,19 +144,12 @@ async fn refresh_attachment_flags(
         store.set_setting(&key, "empty").map_err(Failure::store)?;
         return Ok(());
     }
-    let total = uids.len();
-    for (index, chunk) in uids.chunks(ctx.config.backfill_batch).enumerate() {
+    // 这里不再单独改状态：账号级进度只由 refresh_progress 维护，
+    // 免得这次一次性的老库附件扫描把「共多少封」冲掉。
+    for chunk in uids.chunks(ctx.config.backfill_batch) {
         if ctx.cancel.is_cancelled() {
             return Ok(());
         }
-        let scanned = (index * ctx.config.backfill_batch).min(total);
-        set_status(
-            ctx,
-            SyncState::Syncing,
-            scanned as i64,
-            total as i64,
-            "正在补齐附件标记",
-        );
         let metas = fetch_all(ctx, client, chunk).await?;
         insert_metas(ctx, folder_id, metas)?;
     }
@@ -167,7 +160,6 @@ async fn refresh_attachment_flags(
 
 /// 首次快照：近若干天里取最新的若干封，并把断点落在这一批的最小 UID 上。
 async fn snapshot(ctx: &Arc<WorkerContext>, client: &mut ImapClient, folder_id: i64) -> Result<(), Failure> {
-    set_status(ctx, SyncState::Syncing, 0, 0, "正在建立最近邮件快照");
     let date = format_imap_date(ctx.config.snapshot_days);
     let mut uids = client
         .uid_search_since(&date)
@@ -180,11 +172,10 @@ async fn snapshot(ctx: &Arc<WorkerContext>, client: &mut ImapClient, folder_id: 
     if uids.is_empty() {
         return Ok(());
     }
-    let total = uids.len() as i64;
-    set_status(ctx, SyncState::Syncing, 0, total, "正在拉取最近邮件");
+    refresh_progress(ctx, SyncState::Syncing, false);
     let metas = fetch_all(ctx, client, &uids).await?;
-    let inserted = insert_metas(ctx, folder_id, metas)?;
-    set_status(ctx, SyncState::Syncing, inserted, total, "正在拉取最近邮件");
+    let capped = insert_metas(ctx, folder_id, metas)?;
+    refresh_progress(ctx, SyncState::Syncing, capped);
     let min_uid = uids.first().copied();
     let store = lock_store(&ctx.store);
     store
@@ -211,11 +202,10 @@ async fn incremental(
     if uids.is_empty() {
         return Ok(());
     }
-    let total = uids.len() as i64;
-    set_status(ctx, SyncState::Syncing, 0, total, "正在拉取新邮件");
+    refresh_progress(ctx, SyncState::Syncing, false);
     let metas = fetch_all(ctx, client, &uids).await?;
-    let inserted = insert_metas(ctx, folder_id, metas)?;
-    set_status(ctx, SyncState::Syncing, inserted, total, "正在拉取新邮件");
+    let capped = insert_metas(ctx, folder_id, metas)?;
+    refresh_progress(ctx, SyncState::Syncing, capped);
     Ok(())
 }
 
@@ -257,11 +247,10 @@ async fn backfill(
             let start = uids.len() - ctx.config.backfill_batch;
             uids = uids.split_off(start);
         }
-        let total = uids.len() as i64;
-        set_status(ctx, SyncState::Backfilling, 0, total, "正在补齐历史邮件");
+        refresh_progress(ctx, SyncState::Backfilling, false);
         let metas = fetch_all(ctx, client, &uids).await?;
-        let inserted = insert_metas(ctx, folder_id, metas)?;
-        set_status(ctx, SyncState::Backfilling, inserted, total, "正在补齐历史邮件");
+        let capped = insert_metas(ctx, folder_id, metas)?;
+        refresh_progress(ctx, SyncState::Backfilling, capped);
         let next_cursor = uids.first().copied().unwrap_or(floor);
         let store = lock_store(&ctx.store);
         store
@@ -307,10 +296,12 @@ async fn fetch_all(
     Ok(metas)
 }
 
-/// 组装并写入一批元数据；超过账号容量上限时不再写，但仍让断点前进。
-fn insert_metas(ctx: &Arc<WorkerContext>, folder_id: i64, metas: Vec<MessageMeta>) -> Result<i64, Failure> {
+/// 组装并写入一批元数据。
+///
+/// 返回是否因为达到账号容量上限而没写；撞上限也照常让断点前进，不反复重试同一批。
+fn insert_metas(ctx: &Arc<WorkerContext>, folder_id: i64, metas: Vec<MessageMeta>) -> Result<bool, Failure> {
     if metas.is_empty() {
-        return Ok(0);
+        return Ok(false);
     }
     // 先把本次邮件的收发件人收集出来，写入正文前顺手登记地址簿。
     let mut contacts: Vec<(String, String)> = Vec::new();
@@ -340,13 +331,13 @@ fn insert_metas(ctx: &Arc<WorkerContext>, folder_id: i64, metas: Vec<MessageMeta
         .map_err(Failure::store)?;
     if count >= ctx.config.max_messages_per_account || bytes >= ctx.config.max_bytes_per_account {
         tracing::warn!(account = ctx.account_id, "本地已达账号容量上限，暂停写入新邮件");
-        return Ok(0);
+        return Ok(true);
     }
     let inserted = store.insert_messages(&messages).map_err(Failure::store)?;
     if inserted > 0 {
         store.upsert_contacts(&contacts).map_err(Failure::store)?;
     }
-    Ok(inserted as i64)
+    Ok(false)
 }
 
 /// 一条服务器元数据 → 一行本地邮件。

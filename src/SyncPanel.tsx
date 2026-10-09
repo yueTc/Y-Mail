@@ -11,9 +11,9 @@ import { t } from "./i18n";
 const POLL_MS = 2000;
 
 /** 把进度数字整理成一句人话。 */
-function progressText(status: SyncStatus): string {
-  if (status.total > 0) return t("进度 {0} / {1}", [status.progress, status.total]);
-  if (status.progress > 0) return t("已处理 {0} 封", [status.progress]);
+export function progressText(status: SyncStatus): string {
+  if (status.total > 0) return t("已同步 {0} 封 / 共 {1} 封", [status.progress, status.total]);
+  if (status.progress > 0) return t("已同步 {0} 封", [status.progress]);
   return "";
 }
 

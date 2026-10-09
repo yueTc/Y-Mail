@@ -17,6 +17,7 @@ import {
   type AiProviderDraft,
   type AiProviderKind,
   type AiThinkingLevel,
+  type NotificationLatency,
 } from "./api";
 import { t } from "./i18n";
 
@@ -71,6 +72,9 @@ const FUNCTION_ORDER: AiFunction[] = ["translate", "summary", "polish", "draft"]
 
 /** 通知智能识别单独放在「高级功能」区，跟普通功能分开显示。 */
 const VERIFY_FUNCTION: AiFunction = "notification_verify";
+
+/** 「检查延迟」连测几次，用来抵消网络抖动。 */
+const LATENCY_ROUNDS = 3;
 
 const KIND_LABEL: Record<AiProviderKind, string> = {
   openai_compatible: "OpenAI 兼容站点",
@@ -189,6 +193,14 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   // 通知识别开关自己的保存结果；不跟站点/映射的提示串台。
   const [verifyNotice, setVerifyNotice] = useState("");
   const [verifyError, setVerifyError] = useState("");
+  // 「检查延迟」：确认框、测试中标记、每次结果和错误。
+  const [latencyRisk, setLatencyRisk] = useState<
+    | { providerLabel: string; model: string; local: boolean }
+    | null
+  >(null);
+  const [latencyRunning, setLatencyRunning] = useState(false);
+  const [latencyResults, setLatencyResults] = useState<NotificationLatency[]>([]);
+  const [latencyError, setLatencyError] = useState("");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -456,6 +468,58 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       setVerifyError(describeError(caught));
     }
   }, [onNotifyAiEnabledChange, verifyDraft.model, verifyDraft.providerId, verifyDraft.thinkingLevel]);
+
+  /** 点「检查延迟」：先按当前草稿做前置检查，通过才弹确认框。 */
+  const startLatencyCheck = useCallback(() => {
+    setLatencyError("");
+    setLatencyResults([]);
+    if (!verifyDraft.providerId || !verifyProvider) {
+      setLatencyError(t("请先选择站点和模型，再检查延迟。"));
+      return;
+    }
+    if (!verifyProvider.enabled) {
+      setLatencyError(t("所选站点已停用，请先启用或换一个站点，再检查延迟。"));
+      return;
+    }
+    setLatencyRisk({
+      providerLabel: verifyProvider.label,
+      model: verifyDraft.model.trim() || verifyProvider.defaultModel,
+      local: providerIsLocal(verifyProvider),
+    });
+  }, [verifyDraft.model, verifyDraft.providerId, verifyProvider]);
+
+  /**
+   * 确认框里点「开始测试」：连测三次，每测完一次就把结果贴出来。
+   *
+   * 用界面当前草稿里的站点和模型，不要求先保存；每封信都由后端写死，不含真实内容。
+   */
+  const runLatencyCheck = useCallback(async () => {
+    const providerId = Number(verifyDraft.providerId);
+    const level = verifyDraft.thinkingLevel === "" ? undefined : verifyDraft.thinkingLevel;
+    setLatencyRisk(null);
+    setLatencyRunning(true);
+    setLatencyError("");
+    setLatencyResults([]);
+    try {
+      for (let round = 0; round < LATENCY_ROUNDS; round += 1) {
+        const sample = await api.checkNotificationLatency(providerId, verifyDraft.model, level);
+        setLatencyResults((old) => [...old, sample]);
+      }
+    } catch (caught) {
+      setLatencyError(describeError(caught));
+    } finally {
+      setLatencyRunning(false);
+    }
+  }, [verifyDraft.model, verifyDraft.providerId, verifyDraft.thinkingLevel]);
+
+  /** 三次结果的平均耗时；还没结果时是 0。 */
+  const latencyAverage =
+    latencyResults.length === 0
+      ? 0
+      : Math.round(
+          latencyResults.reduce((sum, one) => sum + one.elapsedMs, 0) / latencyResults.length,
+        );
+
   const disableAll = useCallback(async () => {
     if (!window.confirm(t("确定一键关闭 AI 吗？所有站点会停用，已发出的授权也会作废。"))) return;
     setBusy(true);
@@ -829,9 +893,40 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
         <div className="form-actions">
           <button type="button" onClick={() => void saveFeature(VERIFY_FUNCTION)} disabled={busy}>
             {t("保存设置")}</button>
+          <button
+            type="button"
+            onClick={startLatencyCheck}
+            disabled={busy || latencyRunning}
+            aria-label={t("检查延迟")}
+          >
+            {latencyRunning ? t("测试中…") : t("检查延迟")}</button>
         </div>
         <p className="hint">
           {t("开关默认关闭；打开时会要求确认发往哪个站点、用哪个模型、是不是本地。")}</p>
+        {latencyError && (
+          <p className="error" role="alert">
+            {t("检查延迟失败：")}{latencyError}
+          </p>
+        )}
+        {latencyResults.length > 0 && (
+          <div className="latency-report" role="status">
+            {latencyResults.map((sample, index) => (
+              <p key={`round-${index + 1}`}>
+                {t("第 {0} 次：", [index + 1])}
+                {t("{0} 毫秒", [sample.elapsedMs])}
+                {" · "}
+                {sample.foundCode ? t("认出验证码") : t("没认出验证码")}
+                {" · "}
+                {sample.foundLink ? t("认出验证链接") : t("没认出验证链接")}
+              </p>
+            ))}
+            {latencyRunning ? (
+              <p>{t("继续测试中…")}</p>
+            ) : (
+              <p>{t("平均耗时：{0} 毫秒", [latencyAverage])}</p>
+            )}
+          </div>
+        )}
         {verifyNotice && <p className="notice" role="status">{verifyNotice}</p>}
         {verifyError && (
           <p className="error" role="alert">
@@ -897,6 +992,34 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
               <button type="button" className="primary" onClick={() => void confirmEnableNotifyAi()}>
                 {t("确认开启")}</button>
               <button type="button" onClick={() => setVerifyRisk(null)}>
+                {t("取消")}</button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {latencyRisk && (
+        <div className="ai-modal-backdrop" role="presentation">
+          <section
+            className="ai-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("确认检查延迟")}
+          >
+            <h3>{t("确认检查延迟")}</h3>
+            <p>{t("会发送一封系统编造的测试邮件，不包含你的任何真实邮件内容，连测三次。")}</p>
+            <dl className="ai-modal-targets">
+              <dt>{t("站点")}</dt>
+              <dd>{latencyRisk.providerLabel}</dd>
+              <dt>{t("用哪个模型")}</dt>
+              <dd>{latencyRisk.model}</dd>
+              <dt>{t("是不是本地服务")}</dt>
+              <dd>{latencyRisk.local ? t("是，本地服务，内容不离开这台电脑") : t("不是，内容会发送到远程站点")}</dd>
+            </dl>
+            <div className="form-actions">
+              <button type="button" className="primary" onClick={() => void runLatencyCheck()}>
+                {t("开始测试")}</button>
+              <button type="button" onClick={() => setLatencyRisk(null)}>
                 {t("取消")}</button>
             </div>
           </section>

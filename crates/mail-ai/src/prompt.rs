@@ -73,6 +73,15 @@ pub fn notification_verify_user(from: &str, subject: &str, body: &str) -> String
     format!("发件人：{from}\n主题：{subject}\n\n请从下面这封邮件里提取验证码和验证链接。\n\n<mail>\n{body}\n</mail>")
 }
 
+/// 「检查延迟」用的固定测试邮件；发件人、主题和正文全是编的，不含任何真实数据。
+pub fn notification_verify_probe_mail() -> (&'static str, &'static str, &'static str) {
+    (
+        "Example Security",
+        "Your verification code",
+        "您的验证码是 482913，10 分钟内有效。也可以打开 https://example.com/verify?token=abc123 完成验证。",
+    )
+}
+
 /// 把语言代码翻成提示词里用的名字。
 pub fn target_language_label(code: &str) -> &'static str {
     match code.trim().to_ascii_lowercase().as_str() {
@@ -100,6 +109,18 @@ mod tests {
         assert!(user.contains("这 2 段"));
         assert!(user.contains("英语"));
         assert!(user.contains(r#"["第一段","第二段"]"#));
+    }
+
+    #[test]
+    fn 检查延迟的测试邮件带着写死的验证码和链接() {
+        let (from, subject, body) = notification_verify_probe_mail();
+        assert_eq!(from, "Example Security");
+        assert!(subject.contains("verification code"), "{subject}");
+        assert!(body.contains("482913"), "应包含写死的验证码：{body}");
+        assert!(
+            body.contains("https://example.com/verify"),
+            "应包含验证链接：{body}"
+        );
     }
 
     #[test]

@@ -92,6 +92,16 @@ pub struct AiTarget {
     pub api_key_ref: Option<String>,
 }
 
+/// 「检查延迟」的结果：一次测试外发花了多久、认出了什么。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationLatency {
+    /// 一次外发往返的毫秒数。
+    pub elapsed_ms: u64,
+    /// 有没有认出验证码。
+    pub found_code: bool,
+    /// 有没有认出验证链接。
+    pub found_link: bool,
+}
 /// 界面展示的站点信息（不含密钥本体）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AiProviderView {
@@ -998,6 +1008,51 @@ impl MailEngine {
         Ok(parse_verification(&outcome.text))
     }
 
+    /// 用指定站点和模型发一封固定的假邮件，量一次通知识别的实际往返耗时。
+    ///
+    /// 这是用户手动点出来的诊断：内容全部是编的，不含任何真实邮件；
+    /// 走和正常识别相同的外发路径，同样写一条 AI 审计。
+    pub async fn check_notification_latency(
+        &self,
+        provider_id: i64,
+        model: &str,
+        level: Option<AiThinkingLevel>,
+    ) -> Result<NotificationLatency, EngineError> {
+        let target = self.resolve_probe_target(provider_id, model, level)?;
+        let secret = self.provider_secret(&target)?;
+        let route = self.resolve_route(AccountProxyMode::InheritGlobal)?;
+        let endpoint = Endpoint {
+            kind: provider_kind(target.kind),
+            base_url: &target.base_url,
+            api_key: secret.as_ref(),
+        };
+        let (from, subject, body) = prompt::notification_verify_probe_mail();
+        let started = Instant::now();
+        let outcome = chat(
+            route.as_ref(),
+            &endpoint,
+            &target.model,
+            thinking_level(target.thinking_level),
+            &prompt::notification_verify_system(),
+            &prompt::notification_verify_user(from, subject, body),
+            NOTIFICATION_VERIFY_TIMEOUT,
+        )
+        .await
+        .map_err(|err| self.audit_ai_error(AiFunction::NotificationVerify, &target, err))?;
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        self.audit_ai_success(
+            AiFunction::NotificationVerify,
+            &target,
+            outcome.thinking_downgraded,
+        )?;
+        let finding = parse_verification(&outcome.text);
+        Ok(NotificationLatency {
+            elapsed_ms,
+            found_code: finding.code.is_some(),
+            found_link: finding.link.is_some(),
+        })
+    }
+
     /// 把一次对话结果写缓存、写审计，并转成界面结果。
     fn finish_text(
         &self,
@@ -1067,6 +1122,43 @@ impl MailEngine {
             kind: provider.kind,
             model,
             thinking_level: thinking,
+            local: is_local_host(&host_of(&provider.base_url)),
+            api_key_ref: provider.api_key_ref.clone(),
+        })
+    }
+
+    /// 按界面当前选的站点和模型构造测试目标；站点必须存在且启用。
+    fn resolve_probe_target(
+        &self,
+        provider_id: i64,
+        model: &str,
+        level: Option<AiThinkingLevel>,
+    ) -> Result<AiTarget, EngineError> {
+        if provider_id <= 0 {
+            return Err(EngineError::BadRequest("请选择 AI 站点".to_string()));
+        }
+        let provider = self
+            .store()
+            .get_ai_provider(provider_id)?
+            .filter(|provider| provider.enabled)
+            .ok_or(EngineError::AiProviderNotFound(provider_id))?;
+        let model = if model.trim().is_empty() {
+            provider.default_model.trim().to_string()
+        } else {
+            model.trim().to_string()
+        };
+        if model.is_empty() {
+            return Err(EngineError::BadRequest(
+                "这个站点还没有可用的模型，请先填写模型".to_string(),
+            ));
+        }
+        Ok(AiTarget {
+            provider_id: provider.id,
+            provider_label: provider.label.clone(),
+            base_url: provider.base_url.clone(),
+            kind: provider.kind,
+            model,
+            thinking_level: level.unwrap_or(provider.thinking_level),
             local: is_local_host(&host_of(&provider.base_url)),
             api_key_ref: provider.api_key_ref.clone(),
         })
@@ -1249,6 +1341,111 @@ mod tests {
             )
             .expect("保存站点")
             .id
+    }
+
+    /// 假 HTTP 服务：收一次请求，回固定 JSON；用来测「检查延迟」的完整往返。
+    async fn fake_chat_server(payload: &'static str) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+        let port = listener.local_addr().expect("地址").port();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("接受连接");
+            let mut buf = vec![0u8; 8192];
+            let _ = socket.read(&mut buf).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                payload.len()
+            );
+            socket.write_all(response.as_bytes()).await.expect("写响应");
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn 检查延迟能量出耗时并解析识别结果() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let port = fake_chat_server(
+            r#"{"choices":[{"message":{"role":"assistant","content":"{\"code\":\"482913\",\"link\":\"\"}"}}]}"#,
+        )
+        .await;
+        let provider_id = engine
+            .save_ai_provider(
+                &AiProviderInput {
+                    id: None,
+                    label: "本机测速".to_string(),
+                    kind: AiProviderKind::Ollama,
+                    base_url: format!("http://127.0.0.1:{port}/v1"),
+                    default_model: "qwen".to_string(),
+                    models: Vec::new(),
+                    thinking_level: AiThinkingLevel::Off,
+                    enabled: true,
+                },
+                None,
+            )
+            .expect("保存站点")
+            .id;
+        let result = engine
+            .check_notification_latency(provider_id, "", None)
+            .await
+            .expect("应能测出结果");
+        assert!(result.found_code, "应认出验证码");
+        assert!(!result.found_link, "邮件里没有链接就不该报有");
+        assert!(result.elapsed_ms < 10_000, "本机假服务不该慢过十秒");
+    }
+
+    #[tokio::test]
+    async fn 检查延迟拒绝没选的站点() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let err = engine
+            .check_notification_latency(0, "", None)
+            .await
+            .expect_err("编号不合法应拒绝");
+        assert!(matches!(err, EngineError::BadRequest(_)));
+    }
+
+    #[test]
+    fn 检查延迟拒绝已停用的站点() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let provider_id = engine
+            .save_ai_provider(
+                &AiProviderInput {
+                    id: None,
+                    label: "停用站点".to_string(),
+                    kind: AiProviderKind::Ollama,
+                    base_url: "http://127.0.0.1:11434/v1".to_string(),
+                    default_model: "qwen".to_string(),
+                    models: Vec::new(),
+                    thinking_level: AiThinkingLevel::Off,
+                    enabled: false,
+                },
+                None,
+            )
+            .expect("保存站点")
+            .id;
+        let err = engine
+            .resolve_probe_target(provider_id, "", None)
+            .expect_err("停用站点应拒绝");
+        assert!(matches!(err, EngineError::AiProviderNotFound(_)));
+    }
+
+    #[test]
+    fn 检查延迟留空模型时回退站点默认() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let provider_id = add_ollama(&engine);
+        let fallback = engine
+            .resolve_probe_target(provider_id, "   ", None)
+            .expect("应能构造目标");
+        assert_eq!(fallback.model, "qwen");
+        assert_eq!(fallback.thinking_level, AiThinkingLevel::Off);
+        let explicit = engine
+            .resolve_probe_target(provider_id, " qwen2 ", Some(AiThinkingLevel::High))
+            .expect("应能构造目标");
+        assert_eq!(explicit.model, "qwen2");
+        assert_eq!(explicit.thinking_level, AiThinkingLevel::High);
     }
 
     #[test]

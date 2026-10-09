@@ -140,6 +140,7 @@ pub fn run() {
             commands::save_ai_provider,
             commands::delete_ai_provider,
             commands::test_ai_provider,
+            commands::check_notification_latency,
             commands::refresh_ai_provider_models,
             commands::list_ai_model_maps,
             commands::set_ai_feature,

@@ -17,7 +17,8 @@ use super::parse::{
     parse_select_line, quote_imap_string, trailing_literal, SelectEvent, Value,
 };
 use super::{
-    Address, ClientConfig, Envelope, FolderInfo, IdleOutcome, ImapClient, MailboxStatus, MessageMeta,
+    Address, ClientConfig, Envelope, FolderInfo, IdleInterrupt, IdleOutcome, ImapClient, MailboxStatus,
+    MessageMeta,
 };
 
 /// 单行上限。
@@ -368,6 +369,27 @@ impl ImapClient {
 
     /// 在收件箱挂一次 IDLE，最多等 `wait`。
     pub async fn idle_wait(&mut self, wait: Duration) -> Result<IdleOutcome, ConnectionError> {
+        self.idle_wait_inner(wait, None).await
+    }
+
+    /// 同 [`ImapClient::idle_wait`]，但被 `interrupt` 命中时立刻收尾。
+    ///
+    /// 停止同步用它把「等新邮件」喊醒：不再等满超时；连接会正常发 `DONE` 收尾，
+    /// 之后仍可继续使用。
+    pub async fn idle_wait_interruptible(
+        &mut self,
+        wait: Duration,
+        interrupt: &IdleInterrupt,
+    ) -> Result<IdleOutcome, ConnectionError> {
+        self.idle_wait_inner(wait, Some(interrupt)).await
+    }
+
+    /// IDLE 的公共实现；`interrupt` 为 `None` 表示不响应打断。
+    async fn idle_wait_inner(
+        &mut self,
+        wait: Duration,
+        interrupt: Option<&IdleInterrupt>,
+    ) -> Result<IdleOutcome, ConnectionError> {
         let tag = self.next_tag();
         write_crlf_line(&mut self.stream, &format!("{tag} IDLE")).await?;
         let deadline = tokio::time::Instant::now() + wait;
@@ -395,23 +417,32 @@ impl ImapClient {
         }
 
         let outcome = loop {
-            match tokio::time::timeout_at(deadline, read_response(&mut self.stream, MAX_LINE, MAX_TOTAL))
-                .await
-            {
-                Ok(result) => {
-                    let line = result?;
-                    if is_change_line(&line) {
-                        break IdleOutcome::Changed;
-                    }
-                    if line.starts_with(b"* BYE") {
-                        return Err(ConnectionError::rejected("服务器中断了连接"));
-                    }
-                }
-                Err(_) => break IdleOutcome::Timeout,
+            let reading =
+                tokio::time::timeout_at(deadline, read_response(&mut self.stream, MAX_LINE, MAX_TOTAL));
+            tokio::pin!(reading);
+            let line = match interrupt {
+                Some(signal) => tokio::select! {
+                    biased;
+                    _ = signal.wait() => break IdleOutcome::Cancelled,
+                    result = &mut reading => match result {
+                        Ok(result) => result?,
+                        Err(_) => break IdleOutcome::Timeout,
+                    },
+                },
+                None => match reading.await {
+                    Ok(result) => result?,
+                    Err(_) => break IdleOutcome::Timeout,
+                },
+            };
+            if is_change_line(&line) {
+                break IdleOutcome::Changed;
+            }
+            if line.starts_with(b"* BYE") {
+                return Err(ConnectionError::rejected("服务器中断了连接"));
             }
         };
 
-        // 无论超时还是有变化，都要用 DONE 收尾，再读掉 tagged 应答。
+        // 无论超时、有变化还是被喊停，都要用 DONE 收尾，再读掉 tagged 应答。
         write_crlf_line(&mut self.stream, "DONE").await?;
         let command_timeout = self.timeout;
         match tokio::time::timeout(command_timeout, self.read_until_tag(&tag)).await {

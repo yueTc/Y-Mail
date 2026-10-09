@@ -592,6 +592,16 @@ export interface AiModelMap {
   updatedAt: string;
 }
 
+/** 通知识别「检查延迟」的一次结果。 */
+export interface NotificationLatency {
+  /** 一次外发往返的毫秒数。 */
+  elapsedMs: number;
+  /** 有没有认出验证码。 */
+  foundCode: boolean;
+  /** 有没有认出验证链接。 */
+  foundLink: boolean;
+}
+
 /** 外发授权弹窗需要展示的目标信息。 */
 export interface AiAuthorization {
   function: AiFunction;
@@ -1013,6 +1023,15 @@ export const api = {
 
   refreshAiProviderModels: (id: number) =>
     call<string[]>("refresh_ai_provider_models", { id }),
+
+  /** 用当前选的站点和模型测一次通知识别往返耗时；内容由后端写成假邮件。 */
+  checkNotificationLatency: (providerId: number, model: string, thinkingLevel?: AiThinkingLevel) =>
+    call<NotificationLatency>(
+      "check_notification_latency",
+      thinkingLevel === undefined
+        ? { providerId, model }
+        : { providerId, model, thinkingLevel },
+    ),
 
   listAiModelMaps: () => call<AiModelMap[]>("list_ai_model_maps"),
 

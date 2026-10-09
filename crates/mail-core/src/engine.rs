@@ -321,6 +321,14 @@ impl MailEngine {
     pub(crate) fn secrets_handle(&self) -> Arc<dyn SecretStore> {
         self.secrets.clone()
     }
+
+    /// 同步服务的共享句柄。
+    ///
+    /// 外壳停止同步时要先取到它、马上放掉引擎锁，再 await 线程退出；
+    /// 否则一次最长 4 分钟的 IDLE 收尾会把收件箱、读信等命令全部堵住。
+    pub fn sync_handle(&self) -> Arc<SyncService> {
+        self.sync.clone()
+    }
 }
 
 #[cfg(test)]

@@ -17,7 +17,7 @@ use crate::secrets::{MemorySecretStore, SecretStore};
 
 use super::fetcher::sync_folder;
 use super::state::{AccountSyncStatus, CancelFlag, SyncConfig, SyncService, SyncState};
-use super::worker::{run, sync_once, syncable_folders, WorkerContext};
+use super::worker::{refresh_progress, run, sync_once, syncable_folders, WorkerContext};
 
 /// 假服务器每连接一次的参数。
 struct Script {
@@ -784,5 +784,60 @@ async fn 不可选容器文件夹不会拖垮整个账号同步() {
     assert!(
         selected.iter().any(|name| name == "INBOX"),
         "应正常打开收件箱：{selected:?}"
+    );
+}
+
+#[test]
+fn 取消旗标会顺手打断_idle_等待() {
+    let cancel = CancelFlag::new();
+    assert!(!cancel.is_cancelled());
+    assert!(!cancel.idle_interrupt().is_interrupted());
+
+    cancel.cancel();
+
+    assert!(cancel.is_cancelled());
+    assert!(
+        cancel.idle_interrupt().is_interrupted(),
+        "取消时必须同时把正在 IDLE 的等待喊醒，否则要等满超时才退出"
+    );
+}
+
+#[test]
+fn 进度刷新保留服务器总数且不显示等待新邮件() {
+    let (engine, _secrets, account_id) = engine_with_account("progress@example.com", 993, None);
+    let ctx = context(&engine, account_id);
+    {
+        let mut status = ctx.status.lock().expect("锁");
+        status.total = 100;
+    }
+
+    refresh_progress(&ctx, SyncState::IdleWaiting, false);
+
+    let status = ctx.status.lock().expect("锁");
+    assert_eq!(status.total, 100, "刷新进度不能把服务器总数冲掉");
+    assert_eq!(status.progress, 0, "本地一封都没有时已同步为 0");
+    assert!(
+        status.message.is_empty(),
+        "总数已知时不该再显示「等待新邮件」：{}",
+        status.message
+    );
+}
+
+#[test]
+fn 撞到本机上限时进度文字会提示() {
+    let (engine, _secrets, account_id) = engine_with_account("capped@example.com", 993, None);
+    let ctx = context(&engine, account_id);
+    {
+        let mut status = ctx.status.lock().expect("锁");
+        status.total = 100;
+    }
+
+    refresh_progress(&ctx, SyncState::IdleWaiting, true);
+
+    let status = ctx.status.lock().expect("锁");
+    assert!(
+        status.message.contains("已达本机上限"),
+        "撞上限要给出提示：{}",
+        status.message
     );
 }

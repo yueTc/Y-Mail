@@ -9,7 +9,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::parse::{format_uid_set, parse_fetch_line, parse_list_line, parse_select_line, quote_imap_string};
-use super::{ClientConfig, FolderInfo, IdleOutcome, ImapClient};
+use super::{ClientConfig, FolderInfo, IdleInterrupt, IdleOutcome, ImapClient};
 
 fn config(port: u16) -> ClientConfig {
     ClientConfig {
@@ -429,6 +429,48 @@ async fn idle超时也能正常收尾() {
         .await
         .expect("IDLE 应成功");
     assert_eq!(outcome, IdleOutcome::Timeout);
+}
+
+#[tokio::test]
+async fn idle被打断会立刻收尾() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+    let addr = listener.local_addr().expect("地址");
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("接受");
+        let mut reader = greeting(socket).await;
+        let _ = read_line(&mut reader).await;
+        reader.get_mut().write_all(b"a001 OK\r\n").await.expect("写");
+        let _ = read_line(&mut reader).await;
+        reader
+            .get_mut()
+            .write_all(b"* CAPABILITY IMAP4rev1 IDLE\r\na002 OK\r\n")
+            .await
+            .expect("写");
+        assert_eq!(read_line(&mut reader).await, "a003 IDLE");
+        reader.get_mut().write_all(b"+ idling\r\n").await.expect("写");
+        // 服务器不发任何变化；客户端应当被本地打断信号喊醒并主动发 DONE。
+        assert_eq!(read_line(&mut reader).await, "DONE");
+        reader
+            .get_mut()
+            .write_all(b"a003 OK IDLE terminated\r\n")
+            .await
+            .expect("写");
+    });
+
+    let mut client = ImapClient::connect(&config(addr.port()), None)
+        .await
+        .expect("连接");
+    let interrupt = IdleInterrupt::new();
+    let signal = interrupt.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        signal.interrupt();
+    });
+    let outcome = client
+        .idle_wait_interruptible(Duration::from_secs(10), &interrupt)
+        .await
+        .expect("IDLE 应成功");
+    assert_eq!(outcome, IdleOutcome::Cancelled);
 }
 
 #[tokio::test]

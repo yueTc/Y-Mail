@@ -8,7 +8,7 @@ use mail_domain::proxy::Secret;
 use mail_domain::{
     Account, AccountId, ConnectionError, ConnectionErrorKind, FolderKind, SyncJobKind, SyncJobState,
 };
-use mail_imap::{ClientConfig, FolderInfo, ImapClient};
+use mail_imap::{ClientConfig, FolderInfo, IdleOutcome, ImapClient};
 use mail_store::{Store, StoreError};
 
 use crate::proxies::resolve_route_with;
@@ -168,6 +168,7 @@ async fn session(ctx: &Arc<WorkerContext>) -> Result<(), Failure> {
     flush_pending(ctx, &mut client).await?;
 
     let syncable = syncable_folders(&folders);
+    count_server_totals(ctx, &mut client, &syncable).await;
     let job_id = start_job(ctx);
     let outcome = run_folders(ctx, &mut client, &syncable).await;
     if let Some(job_id) = job_id {
@@ -300,6 +301,43 @@ pub(super) async fn flush_flags(ctx: &Arc<WorkerContext>) -> Result<(), Failure>
     result
 }
 
+/// 数一遍服务器上该账号所有可同步文件夹的邮件总数，写进状态快照。
+///
+/// 只统计一次；单个文件夹打不开或搜索失败按 0 计，不让统计拖垮整轮同步。
+async fn count_server_totals(ctx: &Arc<WorkerContext>, client: &mut ImapClient, folders: &[FolderInfo]) {
+    set_status(ctx, SyncState::Syncing, 0, 0, "正在统计邮件总数……");
+    let mut total: i64 = 0;
+    for info in folders {
+        if ctx.cancel.is_cancelled() {
+            return;
+        }
+        if let Err(error) = client.select(&info.server_path).await {
+            tracing::warn!(
+                account = ctx.account_id,
+                folder = %info.full_path,
+                error = %error,
+                "统计邮件总数时打开文件夹失败，按 0 计"
+            );
+            continue;
+        }
+        match client.uid_search_after(1).await {
+            Ok(uids) => total = total.saturating_add(uids.len() as i64),
+            Err(error) => tracing::warn!(
+                account = ctx.account_id,
+                folder = %info.full_path,
+                error = %error,
+                "统计邮件总数失败，按 0 计"
+            ),
+        }
+    }
+    let count = {
+        let store = lock_store(&ctx.store);
+        store.count_account_messages(ctx.account_id).unwrap_or(0)
+    };
+    let synced = if total > 0 { count.min(total) } else { count };
+    set_status(ctx, SyncState::Syncing, synced, total, "");
+}
+
 /// 先逐文件夹落一遍数据，再进入守着收件箱的循环。
 async fn run_folders(
     ctx: &Arc<WorkerContext>,
@@ -347,14 +385,19 @@ async fn live_loop(
         if ctx.cancel.is_cancelled() {
             return Ok(());
         }
-        set_status(ctx, SyncState::IdleWaiting, 0, 0, "等待新邮件");
+        refresh_progress(ctx, SyncState::IdleWaiting, false);
         if idle_capable {
             let path = inbox.map_or("INBOX", |info| info.server_path.as_str());
             client.select(path).await.map_err(Failure::connection)?;
-            client
-                .idle_wait(ctx.config.idle_timeout)
+            match client
+                .idle_wait_interruptible(ctx.config.idle_timeout, ctx.cancel.idle_interrupt())
                 .await
-                .map_err(Failure::connection)?;
+                .map_err(Failure::connection)?
+            {
+                // 收到停止信号：这次 IDLE 已经发过 DONE 收尾，可以干净退出。
+                IdleOutcome::Cancelled => return Ok(()),
+                IdleOutcome::Changed | IdleOutcome::Timeout => {}
+            }
         } else if ctx.cancel.sleep(ctx.config.poll_interval).await {
             return Ok(());
         }
@@ -422,6 +465,29 @@ pub(super) fn set_status(ctx: &WorkerContext, state: SyncState, progress: i64, t
     status.updated_at = format_iso8601_utc(unix_now());
 }
 
+/// 用「本地已同步条数 / 服务器总数」刷新状态快照。
+///
+/// `total` 是本次连接开始时统计好的服务器邮件总数；这里只把本地条数刷上去。
+/// 总数未知（统计失败）时退回原来的「等待新邮件」，不硬编数字。
+pub(super) fn refresh_progress(ctx: &WorkerContext, state: SyncState, capped: bool) {
+    let total = {
+        let status = ctx.status.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        status.total
+    };
+    let count = {
+        let store = lock_store(&ctx.store);
+        store.count_account_messages(ctx.account_id).unwrap_or(0)
+    };
+    let synced = if total > 0 { count.min(total) } else { count };
+    let message = if total == 0 {
+        "等待新邮件".to_string()
+    } else if capped && synced < total {
+        format!("已达本机上限（已同步 {synced} 封 / 共 {total} 封）")
+    } else {
+        String::new()
+    };
+    set_status(ctx, state, synced, total, &message);
+}
 /// 取存储锁；锁中毒时取回内部值继续用（单条 SQL 失败已由错误表达）。
 pub(super) fn lock_store(store: &Mutex<Store>) -> MutexGuard<'_, Store> {
     store.lock().unwrap_or_else(|poisoned| poisoned.into_inner())

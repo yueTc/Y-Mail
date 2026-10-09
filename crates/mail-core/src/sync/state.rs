@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use mail_domain::dates::{format_iso8601_utc, unix_now};
 use mail_domain::HistoryRange;
+use mail_imap::IdleInterrupt;
 use mail_store::Store;
 
 use crate::secrets::SecretStore;
@@ -15,6 +16,8 @@ use crate::secrets::SecretStore;
 pub struct CancelFlag {
     flag: AtomicBool,
     notify: tokio::sync::Notify,
+    /// 专门用来喊醒正在 IDLE 的那次等待，不必等满超时才收尾。
+    idle: IdleInterrupt,
 }
 
 impl CancelFlag {
@@ -23,13 +26,20 @@ impl CancelFlag {
         Self {
             flag: AtomicBool::new(false),
             notify: tokio::sync::Notify::new(),
+            idle: IdleInterrupt::new(),
         }
     }
 
     /// 标记取消并唤醒等待者。
     pub fn cancel(&self) {
         self.flag.store(true, Ordering::SeqCst);
+        self.idle.interrupt();
         self.notify.notify_waiters();
+    }
+
+    /// 向正在 IDLE 的那次等待取的打断信号。
+    pub fn idle_interrupt(&self) -> &IdleInterrupt {
+        &self.idle
     }
 
     /// 是否已被取消。
@@ -99,7 +109,7 @@ impl Default for SyncConfig {
             snapshot_days: 30,
             snapshot_limit: 500,
             backfill_batch: 300,
-            history_range: HistoryRange::LastYear,
+            history_range: HistoryRange::All,
             poll_interval: Duration::from_secs(60),
             idle_timeout: Duration::from_secs(240),
             backoff_base: Duration::from_secs(5),
