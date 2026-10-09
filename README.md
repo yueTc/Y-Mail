@@ -26,7 +26,7 @@ _163, QQ, WeCom, Gmail, Outlook — all in one inbox_
 
 ---
 
-> Current version `0.1.4`. Product name `Y-Mail`, bundle identifier `com.ymail.desktop`.
+> Current version `0.2.0`. Product name `Y-Mail`, bundle identifier `com.ymail.desktop`.
 
 ## Highlights
 
@@ -61,7 +61,7 @@ Grab the latest version from [**GitHub Releases**](https://github.com/yueTc/Y-Ma
 
 | Platform | Installer |
 |---|---|
-| **Windows 10 / 11 (x64)** | [`Y-Mail_0.1.4_x64_en-US.msi`](https://github.com/yueTc/Y-Mail/releases/download/v0.1.4/Y-Mail_0.1.4_x64_en-US.msi) (MSI, ~12 MB) |
+| **Windows 10 / 11 (x64)** | [`Y-Mail_0.2.0_x64_en-US.msi`](https://github.com/yueTc/Y-Mail/releases/download/v0.2.0/Y-Mail_0.2.0_x64_en-US.msi) (MSI, ~12 MB) |
 
 So far only the Windows x64 MSI is published; an NSIS installer can be built locally with `npm run tauri build` (see [Build from source](#build-from-source) below).
 
