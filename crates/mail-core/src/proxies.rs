@@ -36,6 +36,7 @@ impl MailEngine {
             }
         }
         self.store().set_global_proxy_mode(mode)?;
+        self.mark_settings_changed();
         Ok(())
     }
 
@@ -44,6 +45,17 @@ impl MailEngine {
     /// `password` 的语义：`None` 保持原密码不变；`Some(非空)` 替换密码；
     /// `Some(空)` 清空密码（用于改成无认证代理）。
     pub fn save_proxy(
+        &self,
+        config: &ProxyConfig,
+        password: Option<&Secret>,
+    ) -> Result<StoredProxy, EngineError> {
+        let stored = self.save_proxy_inner(config, password)?;
+        self.mark_settings_changed();
+        Ok(stored)
+    }
+
+    /// save_proxy 的真身；写成功后打同步标记由外层统一负责。
+    fn save_proxy_inner(
         &self,
         config: &ProxyConfig,
         password: Option<&Secret>,
@@ -164,6 +176,13 @@ impl MailEngine {
 
     /// 删除代理；账号对它的引用由存储层改回「跟随全局」。
     pub fn delete_proxy(&self, id: ProxyId) -> Result<(), EngineError> {
+        self.delete_proxy_inner(id)?;
+        self.mark_settings_changed();
+        Ok(())
+    }
+
+    /// delete_proxy 的真身；写成功后打同步标记由外层统一负责。
+    fn delete_proxy_inner(&self, id: ProxyId) -> Result<(), EngineError> {
         let existing = self.get_proxy(id)?;
 
         // 先删保险箱、再删库；库删失败时尽力把凭据放回去。

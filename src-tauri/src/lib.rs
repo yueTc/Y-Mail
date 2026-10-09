@@ -195,6 +195,18 @@ pub fn run() {
                 "外壳初始化完成"
             );
 
+            // 4.5) 把会参与同步的界面开关种进 setting 表：运行值在外壳，同步包从表里导出，
+            //      两份先对齐；导入远端时才有地方回填，也不会被默认值覆盖。
+            if let Err(error) = engine.store_synced_toggles(&mail_core::SyncedToggles {
+                notify_new_mail: settings.notify_new_mail,
+                notify_ai_enabled: settings.notify_ai_enabled,
+                block_remote_images_by_default: settings.block_remote_images_by_default,
+                minimize_to_tray_on_close: settings.minimize_to_tray_on_close,
+                start_minimized_to_tray: settings.start_minimized_to_tray,
+            }) {
+                tracing::warn!(error = %error, "初始化界面开关同步表失败");
+            }
+
             // 5) 上次迁移后用户选了清理：等新目录的引擎完全就绪，再清旧目录。
             //    清理成功或失败都先抹掉记录，避免以后每次启动都重复处理。
             if let Some(old_dir) = settings.pending_cleanup_dir.clone() {
@@ -233,6 +245,54 @@ pub fn run() {
                 match engine.start_sync(None) {
                     Ok(started) => tracing::info!(started, "后台同步已自动启动"),
                     Err(err) => tracing::warn!(error = %err, "后台同步自动启动失败"),
+                }
+            });
+
+            // 7.5) 设置同步：主窗口起来后拉一次远端；之后把本机改动去抖合并成一次上传。
+            //      只有开了同步、且远端没有冲突时才会真正动数据。
+            let sync_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = sync_handle.state::<AppState>();
+                let live = {
+                    let engine = state.engine().await;
+                    engine.settings_sync_live_handle()
+                };
+
+                // 启动拉取：远端有新版本且不冲突就导入，再把界面开关回填到外壳。
+                let enabled = {
+                    let engine = state.engine().await;
+                    engine
+                        .settings_sync_status()
+                        .map(|status| status.enabled)
+                        .unwrap_or(false)
+                };
+                if enabled {
+                    match state.engine().await.pull_settings_sync().await {
+                        Ok(_) => {
+                            let toggles = state.engine().await.read_synced_toggles();
+                            match toggles {
+                                Ok(toggles) => apply_synced_toggles(&state, toggles),
+                                Err(error) => {
+                                    tracing::warn!(error = %error, "读取同步回来的界面开关失败")
+                                }
+                            }
+                        }
+                        Err(error) => tracing::warn!(error = %error, "启动时拉取设置同步失败"),
+                    }
+                }
+
+                // 去抖上传：每次改动后静默等去抖窗口，把期间多次改动并成一次上传。
+                loop {
+                    live.wait_for_change().await;
+                    tokio::time::sleep(mail_core::settings_sync::DEBOUNCE_DELAY).await;
+                    let engine = state.engine().await;
+                    match engine.flush_pending_settings_sync().await {
+                        Ok(Some(status)) => {
+                            tracing::debug!(revision = status.revision, "设置已自动同步上传");
+                        }
+                        Ok(None) => {}
+                        Err(error) => tracing::warn!(error = %error, "自动上传设置同步失败"),
+                    }
                 }
             });
 
@@ -279,6 +339,27 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("Tauri 应用启动失败");
+}
+
+/// 把同步回来的界面开关落到外壳设置、原子开关与磁盘；没变化就什么都不做。
+fn apply_synced_toggles(state: &AppState, toggles: mail_core::SyncedToggles) {
+    let mut settings = state.settings_snapshot();
+    let unchanged = settings.notify_new_mail == toggles.notify_new_mail
+        && settings.notify_ai_enabled == toggles.notify_ai_enabled
+        && settings.block_remote_images_by_default == toggles.block_remote_images_by_default
+        && settings.minimize_to_tray_on_close == toggles.minimize_to_tray_on_close
+        && settings.start_minimized_to_tray == toggles.start_minimized_to_tray;
+    if unchanged {
+        return;
+    }
+    settings.notify_new_mail = toggles.notify_new_mail;
+    settings.notify_ai_enabled = toggles.notify_ai_enabled;
+    settings.block_remote_images_by_default = toggles.block_remote_images_by_default;
+    settings.minimize_to_tray_on_close = toggles.minimize_to_tray_on_close;
+    settings.start_minimized_to_tray = toggles.start_minimized_to_tray;
+    if let Err(error) = state.save_settings(settings) {
+        tracing::warn!(error = %error, "写回同步回来的界面开关失败");
+    }
 }
 
 /// 建托盘图标与中文菜单：左键点图标显示主窗口，菜单里可以显示或退出。

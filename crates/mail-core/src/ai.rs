@@ -255,6 +255,17 @@ impl MailEngine {
         input: &AiProviderInput,
         api_key: Option<&Secret>,
     ) -> Result<AiProviderView, EngineError> {
+        let view = self.save_ai_provider_inner(input, api_key)?;
+        self.mark_settings_changed();
+        Ok(view)
+    }
+
+    /// save_ai_provider 的真身；写成功后打同步标记由外层统一负责。
+    fn save_ai_provider_inner(
+        &self,
+        input: &AiProviderInput,
+        api_key: Option<&Secret>,
+    ) -> Result<AiProviderView, EngineError> {
         let label = input.label.trim();
         if label.is_empty() {
             return Err(EngineError::BadRequest("请填写站点名称".to_string()));
@@ -355,6 +366,13 @@ impl MailEngine {
 
     /// 删除 AI 站点；同时清掉它在保险箱里的密钥与全部缓存。
     pub fn delete_ai_provider(&self, id: i64) -> Result<(), EngineError> {
+        self.delete_ai_provider_inner(id)?;
+        self.mark_settings_changed();
+        Ok(())
+    }
+
+    /// delete_ai_provider 的真身；写成功后打同步标记由外层统一负责。
+    fn delete_ai_provider_inner(&self, id: i64) -> Result<(), EngineError> {
         self.clear_ai_authorizations();
         let existing = self
             .store()
@@ -447,19 +465,23 @@ impl MailEngine {
         }
         self.store()
             .upsert_ai_model_map(function, provider_id, model.trim(), thinking_level)?;
+        self.mark_settings_changed();
         Ok(())
     }
 
     /// 清除一个功能的站点选择，回退到第一个启用的站点。
     pub fn clear_ai_feature(&self, function: AiFunction) -> Result<(), EngineError> {
         self.store().delete_ai_model_map(function)?;
+        self.mark_settings_changed();
         Ok(())
     }
 
     /// 一键关闭全部 AI；返回停掉的站点数。
     pub fn disable_all_ai(&self) -> Result<usize, EngineError> {
         self.clear_ai_authorizations();
-        Ok(self.store().disable_all_ai_providers()?)
+        let count = self.store().disable_all_ai_providers()?;
+        self.mark_settings_changed();
+        Ok(count)
     }
 
     /// 清空全部 AI 缓存；返回清掉条数。

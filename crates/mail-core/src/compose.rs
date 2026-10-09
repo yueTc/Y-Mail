@@ -225,7 +225,9 @@ impl MailEngine {
         let store = lock_store(&self.store);
         ensure_account(&store, account_id)?;
         store.save_signature(account_id, html, enabled)?;
-        Ok(store.get_signature(account_id)?)
+        let saved = store.get_signature(account_id)?;
+        self.mark_settings_changed();
+        Ok(saved)
     }
 
     /// 跑一轮发送：先收尾上次残留，再按队列顺序逐封投递，直到队列空。

@@ -20,6 +20,7 @@ pub mod proxies;
 pub mod reading;
 pub mod search;
 pub mod secrets;
+pub mod settings_sync;
 pub mod sync;
 pub mod sync_settings;
 
@@ -60,6 +61,10 @@ pub use mail_store::{
 };
 pub use paths::SqlitePaths;
 pub use secrets::{ChunkedSecretStore, KeyringSecretStore, MemorySecretStore, SecretStore, SecretStoreError};
+pub use settings_sync::{
+    classify_remote_change, ConflictChoice, LocalSyncVersions, RemoteChange, SettingsSyncBackend,
+    SettingsSyncConflict, SettingsSyncStatus, SyncedToggles, SYNC_PASSWORD_KEY,
+};
 pub use sync::{AccountSyncStatus, SyncConfig, SyncService, SyncState};
 pub use sync_settings::{
     account_logical_key, ai_logical_key, proxy_logical_key, GitHubLoginView, SettingsSnapshot,

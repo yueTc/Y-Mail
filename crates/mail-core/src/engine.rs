@@ -17,6 +17,7 @@ use mail_store::{MigrationOutcome, Store, StoreError};
 
 use crate::paths::SqlitePaths;
 use crate::secrets::{ChunkedSecretStore, KeyringSecretStore, SecretStore, SecretStoreError};
+use crate::settings_sync::SettingsSyncLive;
 use crate::sync::{SyncConfig, SyncService};
 
 /// Windows 凭据管理器里，本应用使用的服务名。
@@ -82,6 +83,10 @@ pub enum EngineError {
     /// 同步任务相关的失败（启动、停止等）。
     #[error("同步失败：{0}")]
     Sync(String),
+
+    /// 设置同步底座的错误（文案已在底座里脱敏，最多带状态码或格式名）。
+    #[error(transparent)]
+    SettingsSync(#[from] mail_sync::SyncError),
 
     /// 邮件不存在或已被删除。
     #[error("邮件不存在或已被删除（编号 {0}）")]
@@ -157,6 +162,8 @@ pub struct MailEngine {
     pub(crate) ai_authorizations: std::sync::Mutex<HashMap<String, crate::ai::PendingAiAuthorization>>,
     /// 读信时是否默认拦截远程图片；外壳改设置时同步更新。默认拦（true）。
     pub(crate) block_remote_images: Arc<AtomicBool>,
+    /// 设置同步的「待同步」标记与唤醒（规格 3.6 / 3.9）。
+    pub(crate) settings_sync_live: Arc<SettingsSyncLive>,
 }
 
 impl std::fmt::Debug for MailEngine {
@@ -255,6 +262,7 @@ impl MailEngine {
             oauth_pending: std::sync::Mutex::new(HashMap::new()),
             ai_authorizations: std::sync::Mutex::new(HashMap::new()),
             block_remote_images: Arc::new(AtomicBool::new(true)),
+            settings_sync_live: Arc::new(SettingsSyncLive::new()),
         })
     }
 
@@ -294,6 +302,16 @@ impl MailEngine {
     /// 凭据保险箱的只读引用（内部编排用）。
     pub(crate) fn secrets(&self) -> &dyn SecretStore {
         self.secrets.as_ref()
+    }
+
+    /// 存储句柄的一份共享引用；设置同步后台任务要拿它自己决定出网路由。
+    pub(crate) fn store_handle(&self) -> Arc<std::sync::Mutex<Store>> {
+        self.store.clone()
+    }
+
+    /// 保险箱句柄的一份共享引用；设置同步后端不持有引擎，避免把网络等待绑在界面锁上。
+    pub(crate) fn secrets_handle(&self) -> Arc<dyn SecretStore> {
+        self.secrets.clone()
     }
 }
 

@@ -75,7 +75,11 @@ impl MailEngine {
         self.secrets().set(&key, secret)?;
         let inserted = self.store().insert_account(draft, Some(&key));
         match inserted {
-            Ok(id) => self.get_account(id),
+            Ok(id) => {
+                let account = self.get_account(id)?;
+                self.mark_settings_changed();
+                Ok(account)
+            }
             Err(err) => {
                 let _ = self.secrets().delete(&key);
                 Err(err.into())
@@ -128,7 +132,9 @@ impl MailEngine {
                                 tracing::debug!(error = %err, "更新账号后旧凭据删除失败");
                             }
                         }
-                        self.get_account(id)
+                        let account = self.get_account(id)?;
+                        self.mark_settings_changed();
+                        Ok(account)
                     }
                     Ok(false) => {
                         let _ = self.secrets().delete(&new_key);
@@ -147,7 +153,11 @@ impl MailEngine {
                     .store()
                     .update_account(id, draft, existing.credential_key.as_deref());
                 match updated {
-                    Ok(true) => self.get_account(id),
+                    Ok(true) => {
+                        let account = self.get_account(id)?;
+                        self.mark_settings_changed();
+                        Ok(account)
+                    }
                     Ok(false) => Err(EngineError::AccountNotFound(id.0)),
                     Err(err) => Err(err.into()),
                 }
@@ -170,7 +180,10 @@ impl MailEngine {
 
         let deleted = self.store().delete_account(id);
         match deleted {
-            Ok(true) => Ok(()),
+            Ok(true) => {
+                self.mark_settings_changed();
+                Ok(())
+            }
             Ok(false) => {
                 restore_secret(self, backup);
                 Err(EngineError::AccountNotFound(id.0))

@@ -637,8 +637,9 @@ pub async fn set_app_settings(
         pending_cleanup_dir: previous.pending_cleanup_dir.take(),
     };
     state
-        .save_settings(settings)
+        .save_settings(settings.clone())
         .map_err(|error| CommandError::new(format!("保存设置失败：{error}")))?;
+    bridge_synced_toggles(state.inner(), &settings).await;
     Ok(build_settings_dto(state.inner()))
 }
 
@@ -766,8 +767,9 @@ pub async fn set_tray_settings(
         ..previous
     };
     state
-        .save_settings(settings)
+        .save_settings(settings.clone())
         .map_err(|error| CommandError::new(format!("保存设置失败：{error}")))?;
+    bridge_synced_toggles(state.inner(), &settings).await;
     Ok(build_settings_dto(state.inner()))
 }
 
@@ -911,6 +913,27 @@ fn reveal_file(path: &Path) -> std::io::Result<()> {
 /// 组装返回给界面的设置快照。
 ///
 /// 界面上的路径统一去掉 Windows 规范化前缀 `\\?\`，避免用户看到莫名符号。
+/// 把外壳设置里会参与同步的界面开关摘出来，交给 mail-core 的 `setting` 表。
+fn synced_toggles(settings: &AppSettings) -> mail_core::SyncedToggles {
+    mail_core::SyncedToggles {
+        notify_new_mail: settings.notify_new_mail,
+        notify_ai_enabled: settings.notify_ai_enabled,
+        block_remote_images_by_default: settings.block_remote_images_by_default,
+        minimize_to_tray_on_close: settings.minimize_to_tray_on_close,
+        start_minimized_to_tray: settings.start_minimized_to_tray,
+    }
+}
+
+/// 保存设置后把界面开关同步进 mail-core；有变化就顺手打上待同步标记。
+async fn bridge_synced_toggles(state: &AppState, settings: &AppSettings) {
+    let engine = state.engine().await;
+    match engine.store_synced_toggles(&synced_toggles(settings)) {
+        Ok(true) => engine.mark_settings_changed(),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(error = %error, "写入待同步的界面开关失败"),
+    }
+}
+
 fn build_settings_dto(state: &AppState) -> AppSettingsDto {
     let settings = state.settings_snapshot();
     let default_dir = state.default_data_dir();
