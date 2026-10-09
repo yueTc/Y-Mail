@@ -2,8 +2,7 @@
 //!
 //! 安全约定：
 //! - 令牌只存在后端与系统保险箱里，前端状态里只有公开资料；
-//! - 头像只从固定域名 `avatars.githubusercontent.com` 加载，其余地址一律不渲染。
-
+//! - 头像优先用后端在本机缓存的 data URL；没缓存才从固定域名 `avatars.githubusercontent.com` 加载，其余地址一律不渲染。
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -34,6 +33,18 @@ export function safeAvatarUrl(url: string | null | undefined): string | undefine
   } catch {
     return undefined;
   }
+}
+
+/**
+ * 只放行后端缓存出来的图片 data URL；认不出的一律返回 undefined、不渲染。
+ *
+ * 导出是为了让单测能直接验证拦截逻辑。
+ */
+export function safeAvatarDataUrl(dataUrl: string | null | undefined): string | undefined {
+  if (!dataUrl) return undefined;
+  return /^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(dataUrl)
+    ? dataUrl
+    : undefined;
 }
 
 type Props = {
@@ -94,6 +105,7 @@ export default function GitHubLoginPanel({ scope = "login", onChanged }: Props) 
             login: result.login,
             name: result.name,
             avatarUrl: result.avatarUrl,
+            avatarDataUrl: result.avatarDataUrl,
             scope: result.scope,
           });
           setError(undefined);
@@ -172,7 +184,8 @@ export default function GitHubLoginPanel({ scope = "login", onChanged }: Props) 
     }
   }, [onChanged, stopPolling]);
 
-  const avatar = safeAvatarUrl(profile?.avatarUrl);
+  // 本机缓存优先，省一次网络请求；没缓存才退回 GitHub 头像地址（仍受域名白名单约束）。
+  const avatar = safeAvatarDataUrl(profile?.avatarDataUrl) ?? safeAvatarUrl(profile?.avatarUrl);
   const displayName = profile ? profile.name?.trim() || profile.login : "";
   /**
    * 已登录的权限够不够这一档。

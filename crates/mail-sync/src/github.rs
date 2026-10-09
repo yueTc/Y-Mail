@@ -282,6 +282,52 @@ pub async fn fetch_profile(
     Ok(GitHubProfile::from_json(&value))
 }
 
+/// 头像只允许从 GitHub 的固定图片域名下载（规格 3.7：全程序唯一放行的远程图片）。
+pub const AVATAR_HOST: &str = "avatars.githubusercontent.com";
+
+/// 校验头像地址：必须 `https`，主机名正好是允许的域名（防后缀欺骗）。
+pub fn validate_avatar_url(url: &str) -> Result<(), SyncError> {
+    let parsed = url::Url::parse(url).map_err(|_| SyncError::Config("头像地址不合法".to_string()))?;
+    if parsed.scheme() != "https" {
+        return Err(SyncError::Config("头像地址必须是 https".to_string()));
+    }
+    let host = parsed.host_str().unwrap_or_default();
+    if !host.eq_ignore_ascii_case(AVATAR_HOST) {
+        return Err(SyncError::Config("头像地址不在允许的域名内".to_string()));
+    }
+    Ok(())
+}
+
+/// 真正发请求取头像字节；地址白名单由调用方先校验。
+async fn fetch_avatar_bytes(
+    route: Option<&ProxyRoute>,
+    url: &str,
+    timeout: Duration,
+) -> Result<Vec<u8>, SyncError> {
+    let request = HttpRequest::get(url)
+        .with_header("Accept", "image/*")
+        .with_header("User-Agent", USER_AGENT);
+    let response = http::send(route, &request, timeout).await?;
+    if !response.is_success() {
+        return Err(SyncError::Http {
+            status: response.status,
+        });
+    }
+    Ok(response.body)
+}
+
+/// 下载头像原始字节。
+///
+/// 只放行 `https://avatars.githubusercontent.com/...`；返回原始字节，
+/// 由上层校验图片格式与大小后再落盘。
+pub async fn download_avatar(
+    route: Option<&ProxyRoute>,
+    url: &str,
+    timeout: Duration,
+) -> Result<Vec<u8>, SyncError> {
+    validate_avatar_url(url)?;
+    fetch_avatar_bytes(route, url, timeout).await
+}
 /// 把 GitHub 的令牌接口错误码翻成我们的错误。
 fn map_token_error(code: &str) -> SyncError {
     match code {
@@ -373,6 +419,16 @@ mod tests {
         .into_bytes()
     }
 
+    /// 拼一个带二进制正文的 200 响应。
+    fn binary_response(content_type: &str, body: &[u8]) -> Vec<u8> {
+        let mut out = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        out.extend_from_slice(body);
+        out
+    }
     fn endpoints(port: u16) -> Endpoints {
         Endpoints {
             device_code: format!("http://127.0.0.1:{port}/login/device/code"),
@@ -598,6 +654,44 @@ mod tests {
         assert!(!text.contains("gho_super_secret"), "错误里泄漏了令牌：{text}");
     }
 
+    #[test]
+    fn 头像地址只放行固定域名() {
+        assert!(validate_avatar_url("https://avatars.githubusercontent.com/u/1?v=4").is_ok());
+        assert!(validate_avatar_url("http://avatars.githubusercontent.com/u/1").is_err());
+        assert!(validate_avatar_url("https://evil.example.com/u/1").is_err());
+        assert!(validate_avatar_url("https://avatars.githubusercontent.com.evil.com/u/1").is_err());
+        assert!(validate_avatar_url("https://user@evil.com/avatars.githubusercontent.com").is_err());
+        assert!(validate_avatar_url("not a url").is_err());
+    }
+
+    #[tokio::test]
+    async fn 头像下载成功返回原始字节() {
+        let png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
+        let (port, server) = spawn_script(vec![binary_response("image/png", &png)]).await;
+        let url = format!("http://127.0.0.1:{port}/u/1");
+        let bytes = fetch_avatar_bytes(None, &url, Duration::from_secs(5))
+            .await
+            .expect("下载成功");
+        assert_eq!(bytes, png);
+        let requests = server.await.expect("服务器任务");
+        assert!(
+            requests[0].starts_with("GET /u/1 HTTP/1.1\r\n"),
+            "实际：{}",
+            requests[0]
+        );
+        assert!(requests[0].contains("Accept: image/*\r\n"));
+        assert!(requests[0].contains("User-Agent: Y-Mail\r\n"));
+    }
+
+    #[tokio::test]
+    async fn 头像下载非二零零时报状态码() {
+        let (port, _server) = spawn_script(vec![status_response(404, "Not Found", "nope")]).await;
+        let url = format!("http://127.0.0.1:{port}/u/1");
+        let error = fetch_avatar_bytes(None, &url, Duration::from_secs(5))
+            .await
+            .expect_err("应当报错");
+        assert!(matches!(error, SyncError::Http { status: 404 }));
+    }
     #[test]
     fn 设备码调试输出掩掉设备码本体() {
         let code = DeviceCode {

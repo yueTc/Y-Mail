@@ -7,6 +7,7 @@
 //! - 退出登录两处一起清。
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
@@ -40,6 +41,11 @@ pub const GITHUB_SCOPE_KEY: &str = "sync.github-scope";
 /// 设备码登录各次网络请求的超时。
 const GITHUB_LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// 头像本机缓存文件的固定名；全程序同时只登录一个账号，一个文件就够。
+const AVATAR_CACHE_FILE: &str = "github-avatar.img";
+/// 头像缓存大小上限：GitHub 头像都很小，超过 2MB 一律不收。
+const MAX_AVATAR_BYTES: usize = 2 * 1024 * 1024;
+
 /// 界面要的一份登录信息（不含令牌）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,6 +58,9 @@ pub struct GitHubLoginView {
     pub avatar_url: Option<String>,
     /// 本次登录申请到哪一档权限；界面据此判断要不要再授权 Gist。
     pub scope: GitHubScope,
+    /// 本机缓存头像的 data URL；没缓存就是空。界面优先用它，省一次网络请求。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_data_url: Option<String>,
 }
 
 impl GitHubLoginView {
@@ -214,12 +223,20 @@ impl MailEngine {
             name: text_field(profile.name.as_deref()),
             avatar_url: text_field(profile.avatar_url.as_deref()),
             scope,
+            // 新头像由登录流程下载后写入；这里先按「还没有缓存」算，写完库再作废旧文件。
+            avatar_data_url: None,
         };
 
         let previous = self.secrets().get(GITHUB_TOKEN_KEY)?;
         self.secrets().set(GITHUB_TOKEN_KEY, token)?;
         match self.write_login_settings(&view, scope) {
-            Ok(()) => Ok(view),
+            Ok(()) => {
+                // 换了账号就作废旧缓存；新头像由调用方下载后写入，失败也不会串号。
+                if let Err(err) = self.clear_github_avatar_cache() {
+                    tracing::warn!("清头像缓存失败：{err}");
+                }
+                Ok(view)
+            }
             Err(err) => {
                 // 回滚：有旧令牌就还原，没有就删掉，别留半登录态。
                 match previous {
@@ -254,6 +271,7 @@ impl MailEngine {
             name: non_empty(name),
             avatar_url: non_empty(avatar),
             scope,
+            avatar_data_url: self.cached_github_avatar_data_url()?,
         }))
     }
 
@@ -265,11 +283,15 @@ impl MailEngine {
     /// 退出登录：清保险箱令牌，清库里的资料行（规格 R2）。
     pub fn sign_out_github(&self) -> Result<(), EngineError> {
         self.secrets().delete(GITHUB_TOKEN_KEY)?;
-        let guard = self.store();
-        guard.set_setting(GITHUB_LOGIN_KEY, "")?;
-        guard.set_setting(GITHUB_NAME_KEY, "")?;
-        guard.set_setting(GITHUB_AVATAR_KEY, "")?;
-        guard.set_setting(GITHUB_SCOPE_KEY, "")?;
+        {
+            let guard = self.store();
+            guard.set_setting(GITHUB_LOGIN_KEY, "")?;
+            guard.set_setting(GITHUB_NAME_KEY, "")?;
+            guard.set_setting(GITHUB_AVATAR_KEY, "")?;
+            guard.set_setting(GITHUB_SCOPE_KEY, "")?;
+        }
+        // 头像缓存也要清，退出后界面不能还留着上一个人的头像（规格 R2）。
+        self.clear_github_avatar_cache()?;
         Ok(())
     }
 
@@ -280,6 +302,64 @@ impl MailEngine {
             .get_setting(GITHUB_SCOPE_KEY)?
             .filter(|text| !text.trim().is_empty())
             .map(|text| GitHubScope::parse(&text)))
+    }
+
+    /// 本机缓存头像的固定文件路径：`<数据目录>/avatar-cache/github-avatar.img`。
+    fn avatar_cache_file(&self) -> PathBuf {
+        PathBuf::from(self.root_dir())
+            .join("avatar-cache")
+            .join(AVATAR_CACHE_FILE)
+    }
+
+    /// 读本机缓存头像并编成 data URL；没缓存、或缓存不是图片就返回 `None`。
+    ///
+    /// 缓存坏了顶多当没缓存，界面退回远程地址；绝不因为一个本地文件报错。
+    pub fn cached_github_avatar_data_url(&self) -> Result<Option<String>, EngineError> {
+        let path = self.avatar_cache_file();
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => {
+                tracing::warn!("读头像缓存失败，按没缓存处理：{err}");
+                let _ = std::fs::remove_file(&path);
+                return Ok(None);
+            }
+        };
+        match sniff_image_mime(&bytes) {
+            Some(mime) => Ok(Some(image_data_url(mime, &bytes))),
+            None => {
+                tracing::warn!("头像缓存不是图片，已丢弃");
+                let _ = std::fs::remove_file(&path);
+                Ok(None)
+            }
+        }
+    }
+
+    /// 把下载到的头像写进本机缓存；不是可识别的图片或大小不合适就清掉缓存并报错。
+    pub fn store_github_avatar_cache(&self, bytes: &[u8]) -> Result<(), EngineError> {
+        if bytes.is_empty() || bytes.len() > MAX_AVATAR_BYTES {
+            self.clear_github_avatar_cache()?;
+            return Err(EngineError::BadRequest("头像大小不合适".to_string()));
+        }
+        if sniff_image_mime(bytes).is_none() {
+            self.clear_github_avatar_cache()?;
+            return Err(EngineError::BadRequest("头像不是可识别的图片".to_string()));
+        }
+        let path = self.avatar_cache_file();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, bytes)?;
+        Ok(())
+    }
+
+    /// 清掉本机缓存头像；文件本来就不在也算成功。
+    pub fn clear_github_avatar_cache(&self) -> Result<(), EngineError> {
+        match std::fs::remove_file(self.avatar_cache_file()) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(EngineError::Io(err)),
+        }
     }
 
     /// 发起一次设备码登录：向 GitHub 要一组设备码与用户码，登记一条待确认记录。
@@ -345,7 +425,22 @@ impl MailEngine {
             Ok(token) => {
                 let profile =
                     github::fetch_profile(route.as_ref(), &endpoints, &token, GITHUB_LOGIN_TIMEOUT).await?;
-                let view = self.save_github_login_with_scope(&Secret::new(token), &profile, entry.scope)?;
+                let mut view =
+                    self.save_github_login_with_scope(&Secret::new(token), &profile, entry.scope)?;
+                // 规格 3.7：头像在本机缓存一份，界面优先用本地。下载失败不影响登录。
+                if let Some(url) = view.avatar_url.clone() {
+                    match github::download_avatar(route.as_ref(), &url, GITHUB_LOGIN_TIMEOUT).await {
+                        Ok(bytes) => {
+                            if let Err(err) = self.store_github_avatar_cache(&bytes) {
+                                tracing::warn!("头像缓存写入失败：{err}");
+                            }
+                        }
+                        Err(err) => {
+                            tracing::warn!("头像下载失败，界面将退回远程地址：{err}");
+                        }
+                    }
+                    view.avatar_data_url = self.cached_github_avatar_data_url()?;
+                }
                 self.github_login_registry.remove(login_id);
                 Ok(GitHubLoginPoll::Authorized(view))
             }
@@ -379,6 +474,31 @@ impl MailEngine {
     }
 }
 
+/// 从图片字节嗅探类型；只认常见光栅图，其余一律不认（防止把任意字节当图片）。
+fn sniff_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Some("image/png");
+    }
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    None
+}
+
+/// 把图片字节编成网页能直接显示的 data URL。
+fn image_data_url(mime: &str, bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    )
+}
 /// 去掉首尾空白；清空后算没设。
 fn text_field(value: Option<&str>) -> Option<String> {
     non_empty(value.map(str::to_string))
@@ -1002,8 +1122,8 @@ mod tests {
     use crate::secrets::{MemorySecretStore, SecretStore};
 
     use super::{
-        account_logical_key, ai_logical_key, proxy_logical_key, SettingsSnapshot, GITHUB_TOKEN_KEY,
-        SNAPSHOT_SCHEMA_VERSION,
+        account_logical_key, ai_logical_key, proxy_logical_key, SettingsSnapshot, AVATAR_CACHE_FILE,
+        GITHUB_TOKEN_KEY, SNAPSHOT_SCHEMA_VERSION,
     };
 
     fn engine(dir: &std::path::Path) -> (MailEngine, Arc<MemorySecretStore>) {
@@ -1121,6 +1241,119 @@ mod tests {
         assert!(!found, "任何数据文件里都不应出现明文令牌");
     }
 
+    // ------- 头像本机缓存（规格 3.7 第 5 点）-------
+
+    /// 一小段带头部的 PNG 字节；只验证嗅探与编解码，不要求是真图。
+    fn png_bytes() -> Vec<u8> {
+        vec![
+            0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, b'I', b'H', b'D', b'R',
+        ]
+    }
+
+    /// 头像缓存的固定路径。
+    fn avatar_cache_path(dir: &std::path::Path) -> std::path::PathBuf {
+        dir.join("avatar-cache").join(AVATAR_CACHE_FILE)
+    }
+
+    #[test]
+    fn 登录后能把头像缓存读成_data_url() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (engine, _secrets) = engine(dir.path());
+        engine
+            .save_github_login(&Secret::new("gho-token-cache"), &profile())
+            .expect("保存登录");
+
+        // 还没下载时没有本机缓存，界面该退回远程地址。
+        let fresh = engine.github_login().expect("读资料").expect("应已登录");
+        assert!(fresh.avatar_data_url.is_none(), "没缓存时不该有 data URL");
+
+        let png = png_bytes();
+        engine.store_github_avatar_cache(&png).expect("写缓存");
+        assert!(avatar_cache_path(dir.path()).is_file(), "缓存文件该落盘");
+
+        let cached = engine.github_login().expect("读资料").expect("应已登录");
+        let data_url = cached.avatar_data_url.expect("该有缓存头像");
+        assert!(data_url.starts_with("data:image/png;base64,"), "实际：{data_url}");
+        let payload = data_url.split_once("base64,").expect("data URL 前缀").1;
+        assert_eq!(decode_base64(payload), png, "缓存内容该原样读回");
+    }
+
+    #[test]
+    fn 退出登录清掉本机头像缓存() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (engine, _secrets) = engine(dir.path());
+        engine
+            .save_github_login(&Secret::new("gho-token-clear"), &profile())
+            .expect("保存登录");
+        engine.store_github_avatar_cache(&png_bytes()).expect("写缓存");
+        assert!(avatar_cache_path(dir.path()).is_file());
+
+        engine.sign_out_github().expect("退出登录");
+
+        assert!(engine.github_login().expect("读资料").is_none());
+        assert!(
+            !avatar_cache_path(dir.path()).exists(),
+            "退出登录该把头像缓存删掉"
+        );
+        assert!(
+            engine.cached_github_avatar_data_url().expect("读缓存").is_none(),
+            "缓存没了就该是空"
+        );
+    }
+
+    #[test]
+    fn 头像缓存里查不到明文令牌() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let exposed = "gho-avatar-secret-7788";
+        {
+            let (engine, _secrets) = engine(dir.path());
+            engine
+                .save_github_login(&Secret::new(exposed), &profile())
+                .expect("保存登录");
+            engine.store_github_avatar_cache(&png_bytes()).expect("写缓存");
+        }
+
+        let mut found = false;
+        let mut stack = vec![dir.path().to_path_buf()];
+        while let Some(current) = stack.pop() {
+            for entry in std::fs::read_dir(&current).expect("列目录") {
+                let path = entry.expect("目录项").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let bytes = std::fs::read(&path).expect("读文件");
+                if bytes
+                    .windows(exposed.len())
+                    .any(|window| window == exposed.as_bytes())
+                {
+                    found = true;
+                }
+            }
+        }
+        assert!(!found, "头像缓存等本机文件里都不该出现明文令牌");
+    }
+
+    #[test]
+    fn 不是图片的字节不会被缓存() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (engine, _secrets) = engine(dir.path());
+        engine
+            .save_github_login(&Secret::new("gho-token-bad"), &profile())
+            .expect("保存登录");
+
+        assert!(engine.store_github_avatar_cache(b"not an image").is_err());
+        assert!(!avatar_cache_path(dir.path()).exists(), "坏字节不该留下缓存");
+        assert!(engine.cached_github_avatar_data_url().expect("读缓存").is_none());
+    }
+
+    /// 把 data URL 里的 base64 段解回字节；只给测试用。
+    fn decode_base64(text: &str) -> Vec<u8> {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode(text)
+            .expect("解 base64")
+    }
     // ------- Wave S4：快照导出与导入 -------
 
     /// 造一台带完整配置的引擎：代理、账号（带授权码）、全局代理、签名、AI 站点与映射、五个开关。

@@ -1,11 +1,12 @@
 //! GitHub 登录与设置同步面板前端回归：
-//! - 登录面板：显示用户码 → 轮询成功 → 显示头像；头像只放行固定域名。
+//! - 登录面板：显示用户码 → 轮询成功 → 显示头像；头像优先用本机缓存，只放行固定域名。
+
 //! - 设置同步面板：未勾选、密码不一致、密码太短、开启成功、冲突选择、权限不够六条路径。
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import GitHubLoginPanel, { safeAvatarUrl } from "../GitHubLoginPanel";
+import GitHubLoginPanel, { safeAvatarDataUrl, safeAvatarUrl } from "../GitHubLoginPanel";
 import SettingsSyncPanel from "../SettingsSyncPanel";
 import type { GitHubLoginView, SettingsSyncStatus } from "../api";
 import { api } from "../api";
@@ -102,6 +103,38 @@ describe("GitHub 登录面板", () => {
     expect(screen.queryByText("WXYZ-1234")).toBeNull();
   });
 
+  it("有本机缓存时优先用缓存头像", async () => {
+    const cached =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
+    (api.githubLoginProfile as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...loggedInSync,
+      avatarDataUrl: cached,
+    });
+
+    render(<GitHubLoginPanel />);
+
+    const avatar = await screen.findByAltText("GitHub 头像");
+    expect(avatar.getAttribute("src")).toBe(cached);
+  });
+
+  it("本机缓存头像只放行图片 data URL", () => {
+    const png = "data:image/png;base64,iVBORw0KGgo=";
+    expect(safeAvatarDataUrl(png)).toBe(png);
+    expect(safeAvatarDataUrl("data:text/html;base64,PHNjcmlwdD4=")).toBeUndefined();
+    expect(safeAvatarDataUrl("javascript:alert(1)")).toBeUndefined();
+    expect(safeAvatarDataUrl("https://avatars.githubusercontent.com/u/1")).toBeUndefined();
+    expect(safeAvatarDataUrl(null)).toBeUndefined();
+  });
+
+  it("退出登录后头像消失", async () => {
+    render(<GitHubLoginPanel />);
+    expect(await screen.findByAltText("GitHub 头像")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
+
+    await waitFor(() => expect(screen.queryByAltText("GitHub 头像")).toBeNull());
+    expect(api.githubLoginSignOut).toHaveBeenCalled();
+  });
   it("头像只放行固定域名", () => {
     expect(safeAvatarUrl("https://avatars.githubusercontent.com/u/1")).toBe(
       "https://avatars.githubusercontent.com/u/1",

@@ -1218,6 +1218,11 @@ export interface GitHubLoginView {
   login: string;
   name?: string | null;
   avatarUrl?: string | null;
+  /**
+   * 本机缓存头像的 data URL；后端登录时下载并校验过。
+   * 有它就用它，省一次网络请求；没有才退回 avatarUrl。
+   */
+  avatarDataUrl?: string | null;
   /** 本次登录申请到哪一档权限；据此判断要不要再授权 Gist。 */
   scope: GitHubScope;
 }

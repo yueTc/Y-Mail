@@ -289,6 +289,10 @@ impl MailEngine {
     pub fn database_file(&self) -> &str {
         &self.init.database_file
     }
+    /// 数据根目录；本机缓存文件（如头像）按它定位。
+    pub fn root_dir(&self) -> &str {
+        &self.init.root_dir
+    }
 
     /// 结构版本。
     pub fn schema_version(&self) -> i64 {
