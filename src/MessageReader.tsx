@@ -23,6 +23,7 @@ import AiAuthorizationDialog from "./AiAuthorizationDialog";
 import FlagButton from "./FlagButton";
 import ReaderResizer from "./ReaderResizer";
 import { isDarkTheme, useReaderTheme, useSystemDark } from "./readerTheme";
+import { UI_FONT_FAMILY_STACKS, useUiScale } from "./uiScale";
 import {
   findExternalAttachments,
   isExternalExpired,
@@ -105,6 +106,10 @@ export function buildReaderDocument(
   options: {
     allowRemoteImages: boolean;
     dark: boolean;
+    /** 正文基准字号（像素）；不传按 15。跟设置里的「字体大小」同一个值。 */
+    fontSizePx?: number;
+    /** 正文字体栈；不传用原来的默认栈。跟设置里的「字体样式」同一个值。 */
+    fontFamily?: string;
     translations?: readonly TranslationAnnotation[];
     /** insert：译文逐段插在原文后面；replace：把原文各段文字换成译文。 */
     translationMode?: "insert" | "replace";
@@ -131,7 +136,7 @@ export function buildReaderDocument(
     '<meta name="referrer" content="no-referrer">',
     "<style>",
     `html,body{margin:0;padding:0;background:${background};color:${foreground};`,
-    "font-family:'Segoe UI','Microsoft YaHei',system-ui,sans-serif;font-size:15px;line-height:1.6;}",
+    `font-family:${options.fontFamily ?? "'Segoe UI','Microsoft YaHei',system-ui,sans-serif"};font-size:${options.fontSizePx ?? 15}px;line-height:1.6;}`,
     "body{padding:14px 16px;overflow-wrap:break-word;}",
     `a{color:${link};}`,
     "img{max-width:100%;height:auto;}",
@@ -612,6 +617,8 @@ export default function MessageReader({
   const [rememberBusy, setRememberBusy] = useState(false);
   const [theme] = useReaderTheme();
   const systemDark = useSystemDark();
+  const { font: readerFontPx, fontFamily: readerFontFamily } = useUiScale();
+  const readerFontStack = UI_FONT_FAMILY_STACKS[readerFontFamily];
   const [downloading, setDownloading] = useState<ReadonlySet<number>>(new Set());
   const [downloadedPaths, setDownloadedPaths] = useState<Record<number, string>>({});
   const [inlineBusy, setInlineBusy] = useState<ReadonlySet<number>>(new Set());
@@ -928,8 +935,13 @@ export default function MessageReader({
   /** 原邮件的完整 HTML 文档：对照模式左栏、切回原文都用它，正文原样渲染。 */
   const document_ = useMemo(() => {
     if (!inlineApplication.html) return "";
-    return buildReaderDocument(inlineApplication.html, { allowRemoteImages: allowRemote, dark });
-  }, [inlineApplication.html, allowRemote, dark]);
+    return buildReaderDocument(inlineApplication.html, {
+      allowRemoteImages: allowRemote,
+      dark,
+      fontSizePx: readerFontPx,
+      fontFamily: readerFontStack,
+    });
+  }, [inlineApplication.html, allowRemote, dark, readerFontPx, readerFontStack]);
 
   /** 行内翻译用的文档：原邮件照旧，译文逐段插在对应内容后面。 */
   const inlineDocument_ = useMemo(() => {
@@ -937,12 +949,14 @@ export default function MessageReader({
     return buildReaderDocument(inlineApplication.html, {
       allowRemoteImages: allowRemote,
       dark,
+      fontSizePx: readerFontPx,
+      fontFamily: readerFontStack,
       translations: translation.original.map((original, index) => ({
         original,
         translated: translation.translated[index] ?? "",
       })),
     });
-  }, [inlineApplication.html, allowRemote, dark, translation]);
+  }, [inlineApplication.html, allowRemote, dark, translation, readerFontPx, readerFontStack]);
 
   /** 对照翻译右栏 / 直接翻译用的文档：原邮件排版原样，每段文字换成译文。 */
   const translatedDocument_ = useMemo(() => {
@@ -950,13 +964,15 @@ export default function MessageReader({
     return buildReaderDocument(inlineApplication.html, {
       allowRemoteImages: allowRemote,
       dark,
+      fontSizePx: readerFontPx,
+      fontFamily: readerFontStack,
       translations: translation.original.map((original, index) => ({
         original,
         translated: translation.translated[index] ?? "",
       })),
       translationMode: "replace",
     });
-  }, [inlineApplication.html, allowRemote, dark, translation]);
+  }, [inlineApplication.html, allowRemote, dark, translation, readerFontPx, readerFontStack]);
 
   /** 当前正文文档：有译文且选行内模式才用行内版；否则永远回原正文。 */
   const viewDocument =

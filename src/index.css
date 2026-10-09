@@ -154,10 +154,6 @@ h3 {
   font-size: 1rem;
 }
 
-.subtitle {
-  margin: 0 0 24px;
-  opacity: 0.72;
-}
 
 .panel {
   border: 1px solid var(--line);
@@ -1646,9 +1642,6 @@ textarea:focus {
   margin: 0;
 }
 
-.settings-head .subtitle {
-  margin: 4px 0 0;
-}
 
 /* 左栏宽度和拖动条宽度都由界面按当前窗口算，写进 grid 模板。 */
 .settings-columns {

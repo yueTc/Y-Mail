@@ -21,6 +21,7 @@ use mail_domain::account::{
 };
 use mail_domain::proxy::{GlobalProxyMode, ProxyConfig, ProxyId, ProxyKind, Secret};
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::settings::{AppSettings, UPDATE_CHECK_INTERVAL_MAX_HOURS, UPDATE_CHECK_INTERVAL_MIN_HOURS};
@@ -1007,6 +1008,32 @@ fn strip_verbatim_prefix(path: &str) -> String {
     } else {
         path.to_string()
     }
+}
+
+// ============================ 外观命令 ============================
+
+/// 页面缩放的允许范围；界面只给 80%–150%，这里留一点余量防越界值。
+pub(crate) const UI_ZOOM_MIN: f64 = 0.5;
+pub(crate) const UI_ZOOM_MAX: f64 = 3.0;
+
+/// 把缩放比例夹进允许范围；非法值（NaN / 无穷）退回 100%。
+pub(crate) fn clamp_ui_zoom(scale: f64) -> f64 {
+    if !scale.is_finite() {
+        return 1.0;
+    }
+    scale.clamp(UI_ZOOM_MIN, UI_ZOOM_MAX)
+}
+
+/// 页面缩放：把主窗口的网页整体放大或缩小；只动 WebView 显示，不碰任何数据。
+#[tauri::command]
+pub fn set_ui_zoom(app: tauri::AppHandle, scale: f64) -> Result<(), CommandError> {
+    let scale = clamp_ui_zoom(scale);
+    if let Some(window) = app.get_webview_window("main") {
+        window
+            .set_zoom(scale)
+            .map_err(|error| CommandError::new(format!("设置页面缩放失败：{error}")))?;
+    }
+    Ok(())
 }
 
 // ============================ 账号命令 ============================
@@ -3545,7 +3572,7 @@ pub async fn clear_ai_cache(state: tauri::State<'_, AppState>) -> Result<usize, 
 
 #[cfg(test)]
 mod tests {
-    use super::{is_external_link, strip_verbatim_prefix};
+    use super::{clamp_ui_zoom, is_external_link, strip_verbatim_prefix};
 
     #[test]
     fn only_absolute_http_https_mailto_links_are_opened() {
@@ -3564,6 +3591,17 @@ mod tests {
         assert!(!is_external_link("https://"));
         assert!(!is_external_link("mailto:"));
         assert!(!is_external_link(""));
+    }
+
+    #[test]
+    fn ui_zoom_is_clamped_to_allowed_range() {
+        assert_eq!(clamp_ui_zoom(1.0), 1.0);
+        // 太低 / 太高都夹回边界，别把界面缩没或撑爆。
+        assert_eq!(clamp_ui_zoom(0.1), 0.5);
+        assert_eq!(clamp_ui_zoom(9.0), 3.0);
+        // 非法值退回 100%。
+        assert_eq!(clamp_ui_zoom(f64::NAN), 1.0);
+        assert_eq!(clamp_ui_zoom(f64::INFINITY), 1.0);
     }
 
     #[test]

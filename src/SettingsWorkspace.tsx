@@ -477,8 +477,6 @@ export default function SettingsWorkspace({
       <header className="settings-head">
         <div>
           <h1>{t("设置")}</h1>
-          <p className="subtitle">
-            {t("授权码只进 Windows 凭据管理器，保存前会先做一次连接自检。")}</p>
         </div>
       </header>
 

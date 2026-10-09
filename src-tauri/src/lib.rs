@@ -58,6 +58,8 @@ pub fn run() {
             commands::change_data_dir,
             commands::open_data_dir,
             commands::restart_app,
+            // 外观：页面缩放（整块界面一起放大缩小）。
+            commands::set_ui_zoom,
             // 开机启动：读真实状态、写 / 删启动项。
             commands::autostart_status,
             commands::set_autostart,

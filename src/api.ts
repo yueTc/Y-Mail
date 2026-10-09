@@ -740,6 +740,11 @@ export const api = {
 
   restartApp: (cleanup: boolean) => call<void>("restart_app", { cleanup }),
 
+  // ===== 外观：页面缩放 =====
+
+  /** 页面缩放：整块界面一起放大缩小；数值会被外壳再夹一次范围。 */
+  setUiZoom: (scale: number) => call<void>("set_ui_zoom", { scale }),
+
   // ===== 开机启动 =====
 
   autostartStatus: () => call<boolean>("autostart_status"),
