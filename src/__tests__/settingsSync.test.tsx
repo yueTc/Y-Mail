@@ -1,6 +1,6 @@
 //! GitHub 登录与设置同步面板前端回归：
 //! - 登录面板：显示用户码 → 轮询成功 → 显示头像；头像只放行固定域名。
-//! - 设置同步面板：未勾选、密码不一致、开启成功、冲突选择、权限不够五条路径。
+//! - 设置同步面板：未勾选、密码不一致、密码太短、开启成功、冲突选择、权限不够六条路径。
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -156,6 +156,27 @@ describe("设置同步面板", () => {
     expect(api.settingsSyncEnable).not.toHaveBeenCalled();
   });
 
+  it("同步密码不足 8 位时开不了并提示", async () => {
+    const { container } = render(<SettingsSyncPanel />);
+    const form = await findEl(container, ".settings-sync-enable");
+
+    fireEvent.click(within(form).getByLabelText(/私密 Gist/));
+    fireEvent.click(within(form).getByLabelText(/敏感信息/));
+    fireEvent.change(within(form).getByLabelText("同步密码"), {
+      target: { value: "short" },
+    });
+    fireEvent.change(within(form).getByLabelText("再输一次"), {
+      target: { value: "short" },
+    });
+    fireEvent.change(within(form).getByLabelText("这台设备的名字"), {
+      target: { value: "测试机" },
+    });
+
+    fireEvent.click(within(form).getByRole("button", { name: "开启同步" }));
+
+    expect(await screen.findByText("同步密码至少 8 位。")).toBeTruthy();
+    expect(api.settingsSyncEnable).not.toHaveBeenCalled();
+  });
   it("勾选、密码一致、有设备名时能开启同步", async () => {
     const { container } = render(<SettingsSyncPanel />);
     const form = await findEl(container, ".settings-sync-enable");

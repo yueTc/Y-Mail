@@ -1373,6 +1373,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn 上传到云端的正文只有密文且改一字节解不开() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (engine, _) = engine(dir.path());
+        engine
+            .save_github_login(&Secret::new("gho-token-9527"), &profile())
+            .expect("登录");
+        let backend = FakeGist::new();
+        engine
+            .enable_settings_sync_with("password-123", "password-123", "我的电脑", &backend)
+            .await
+            .expect("开启同步");
+
+        let stored = backend.stored().expect("云端该有内容");
+        let surface = String::from_utf8_lossy(&stored);
+        assert!(
+            !surface.contains("password-123"),
+            "上传到云端的正文不该出现同步密码明文"
+        );
+
+        // 用对的密码能原样解回来。
+        let (snapshot, _) = super::decrypt_snapshot(&stored, "password-123").expect("正常解密");
+        assert_eq!(snapshot.device_label, "我的电脑");
+
+        // 改一个字节就解不开（靠完整性校验挡住）。
+        let mut tampered = stored.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+        assert!(
+            super::decrypt_snapshot(&tampered, "password-123").is_err(),
+            "被改过的云端正文必须解不开"
+        );
+    }
+    #[tokio::test]
     async fn 关闭同步会清状态并按需删远端() {
         let dir = tempfile::tempdir().expect("临时目录");
         let (engine, secrets) = engine(dir.path());
