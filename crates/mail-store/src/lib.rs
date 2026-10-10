@@ -13,6 +13,7 @@ pub mod connection;
 pub mod contacts;
 pub mod error;
 pub mod inbox;
+pub mod label;
 pub mod mcp;
 pub mod migrations;
 pub mod proxies;
@@ -33,6 +34,7 @@ pub use contacts::{
 };
 pub use error::StoreError;
 pub use inbox::{AccountInboxSummary, InboxFolder, InboxMessage, InboxQuery, InboxThread};
+pub use label::{MailLabel, MailLabelSource, MAIL_LABEL_COLORS};
 pub use mcp::{McpAuditRecord, MCP_ENABLED_KEY, MCP_WRITE_TOOLS_KEY};
 pub use migrations::{MigrationOutcome, MigrationReport};
 pub use proxies::StoredProxy;
