@@ -19,6 +19,7 @@ import type {
   AiProvider,
   AiTranslation,
   InboxMessage,
+  MailLabel,
   MessageBody,
   Signature,
 } from "../api";
@@ -79,6 +80,15 @@ vi.mock("../api", () => {
     disableAllAi: vi.fn(),
     clearAiCache: vi.fn(),
     checkNotificationLatency: vi.fn(),
+    listMailLabels: vi.fn(),
+    createMailLabel: vi.fn(),
+    renameMailLabel: vi.fn(),
+    setMailLabelColor: vi.fn(),
+    deleteMailLabel: vi.fn(),
+    reorderMailLabels: vi.fn(),
+    setMessageLabel: vi.fn(),
+    previewClassifyMessages: vi.fn(),
+    classifyMessages: vi.fn(),
     getAppSettings: vi.fn(async () => ({ ...baseSettings })),
     setClassifySettings: vi.fn(
       async (enabled: boolean, confidencePercent: number) => ({
@@ -188,6 +198,7 @@ beforeEach(() => {
   vi.mocked(api.listAiProviders).mockResolvedValue([]);
   vi.mocked(api.listAiModelMaps).mockResolvedValue([]);
   vi.mocked(api.listAiAudit).mockResolvedValue([]);
+  vi.mocked(api.listMailLabels).mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -801,6 +812,7 @@ describe("邮件自动分类设置", () => {
     vi.mocked(api.listAiProviders).mockResolvedValue([openAiProvider, typeSafeProvider]);
     vi.mocked(api.listAiModelMaps).mockResolvedValue([]);
     vi.mocked(api.listAiAudit).mockResolvedValue([]);
+    vi.mocked(api.listMailLabels).mockResolvedValue([]);
     return render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={vi.fn()} />);
   }
 
@@ -820,5 +832,86 @@ describe("邮件自动分类设置", () => {
     expect((toggle as HTMLInputElement).checked).toBe(false);
     const threshold = screen.getByLabelText("把握程度门槛") as HTMLInputElement;
     expect(threshold.value).toBe("75");
+  });
+});
+describe("分类标签管理", () => {
+  const LABELS: MailLabel[] = [
+    { id: 1, name: "客户", color: "blue", sortOrder: 10, isFallback: false },
+    { id: 2, name: "账单", color: "orange", sortOrder: 20, isFallback: false },
+    { id: 3, name: "通知", color: "teal", sortOrder: 30, isFallback: false },
+    { id: 4, name: "推广", color: "purple", sortOrder: 40, isFallback: false },
+    { id: 5, name: "招聘", color: "green", sortOrder: 50, isFallback: false },
+    { id: 6, name: "同事", color: "indigo", sortOrder: 60, isFallback: false },
+    { id: 7, name: "家人", color: "pink", sortOrder: 70, isFallback: false },
+    { id: 8, name: "其他", color: "gray", sortOrder: 1000, isFallback: true },
+  ];
+
+  function prepare() {
+    vi.mocked(api.listAiProviders).mockResolvedValue([]);
+    vi.mocked(api.listAiModelMaps).mockResolvedValue([]);
+    vi.mocked(api.listAiAudit).mockResolvedValue([]);
+    vi.mocked(api.listMailLabels).mockResolvedValue(LABELS);
+    vi.mocked(api.createMailLabel).mockResolvedValue(LABELS[0]);
+    vi.mocked(api.renameMailLabel).mockResolvedValue(undefined);
+    vi.mocked(api.setMailLabelColor).mockResolvedValue(undefined);
+    vi.mocked(api.deleteMailLabel).mockResolvedValue(undefined);
+    vi.mocked(api.reorderMailLabels).mockResolvedValue(undefined);
+    return render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={vi.fn()} />);
+  }
+
+  it("列出八条标签，每条都带颜色预览胶囊", async () => {
+    prepare();
+    expect(await screen.findByText("分类标签管理")).toBeTruthy();
+    await waitFor(() =>
+      expect(document.querySelectorAll("[data-label-preview]").length).toBe(8),
+    );
+    const blue = document.querySelector('[data-label-preview="blue"]');
+    expect(blue?.textContent).toBe("客户");
+    const gray = document.querySelector('[data-label-preview="gray"]');
+    expect(gray?.textContent).toBe("其他");
+  });
+
+  it("「其他」不能删除，颜色也不能改", async () => {
+    prepare();
+    const remove = await screen.findByRole("button", { name: "删除其他" });
+    expect((remove as HTMLButtonElement).disabled).toBe(true);
+    const color = screen.getByLabelText("其他颜色") as HTMLSelectElement;
+    expect(color.disabled).toBe(true);
+  });
+
+  it("改颜色会调用后端并重新拉标签", async () => {
+    prepare();
+    const select = (await screen.findByLabelText("账单颜色")) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "red" } });
+    await waitFor(() =>
+      expect(vi.mocked(api.setMailLabelColor)).toHaveBeenCalledWith(2, "red"),
+    );
+    await waitFor(() => expect(vi.mocked(api.listMailLabels).mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it("点新增会把新标签交给后端", async () => {
+    prepare();
+    const input = await screen.findByLabelText("新增标签");
+    fireEvent.change(input, { target: { value: "项目" } });
+    fireEvent.click(screen.getByRole("button", { name: "新增" }));
+    await waitFor(() => expect(vi.mocked(api.createMailLabel)).toHaveBeenCalledWith("项目"));
+  });
+
+  it("改名失焦会提交", async () => {
+    prepare();
+    const input = await screen.findByLabelText("账单标签名");
+    fireEvent.change(input, { target: { value: "账单邮件" } });
+    fireEvent.blur(input);
+    await waitFor(() =>
+      expect(vi.mocked(api.renameMailLabel)).toHaveBeenCalledWith(2, "账单邮件"),
+    );
+  });
+
+  it("上移会把整体新顺序提交", async () => {
+    prepare();
+    fireEvent.click(await screen.findByRole("button", { name: "上移账单" }));
+    await waitFor(() =>
+      expect(vi.mocked(api.reorderMailLabels)).toHaveBeenCalledWith([2, 1, 3, 4, 5, 6, 7, 8]),
+    );
   });
 });

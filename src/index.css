@@ -2938,3 +2938,206 @@ body.screenshot-body {
 .settings-sync-conflict p {
   margin: 0;
 }
+
+/* ============================ 本地分类标签胶囊（邮件分类） ============================ */
+/* 颜色只从固定色板键来；DOM 里不写十六进制色值，主题差异全在这层 CSS 里调。 */
+.inbox-row-label {
+  display: inline-flex;
+  align-items: center;
+  max-width: 8em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 18px;
+  border: 1px solid var(--label-border, #adb5bd);
+  background: var(--label-bg, #f1f3f5);
+  color: var(--label-fg, #343a40);
+}
+
+.inbox-row-label[data-label-color="gray"] {
+  --label-bg: #f1f3f5;
+  --label-border: #adb5bd;
+  --label-fg: #343a40;
+}
+.inbox-row-label[data-label-color="red"] {
+  --label-bg: #ffe3e3;
+  --label-border: #f08c8c;
+  --label-fg: #a61b1b;
+}
+.inbox-row-label[data-label-color="orange"] {
+  --label-bg: #ffeadb;
+  --label-border: #f0a35e;
+  --label-fg: #9a4a06;
+}
+.inbox-row-label[data-label-color="amber"] {
+  --label-bg: #fff3d6;
+  --label-border: #e3bc5a;
+  --label-fg: #8a5b00;
+}
+.inbox-row-label[data-label-color="green"] {
+  --label-bg: #e3f7e8;
+  --label-border: #7fc99a;
+  --label-fg: #1f6b3b;
+}
+.inbox-row-label[data-label-color="teal"] {
+  --label-bg: #ddf4f3;
+  --label-border: #6fbfbb;
+  --label-fg: #12615d;
+}
+.inbox-row-label[data-label-color="blue"] {
+  --label-bg: #e2eeff;
+  --label-border: #7aa7e8;
+  --label-fg: #1d4f9e;
+}
+.inbox-row-label[data-label-color="indigo"] {
+  --label-bg: #e8e8ff;
+  --label-border: #9a9aec;
+  --label-fg: #3b3ba8;
+}
+.inbox-row-label[data-label-color="purple"] {
+  --label-bg: #f2e5ff;
+  --label-border: #b78ce0;
+  --label-fg: #6b2fa0;
+}
+.inbox-row-label[data-label-color="pink"] {
+  --label-bg: #ffe4f1;
+  --label-border: #ee93be;
+  --label-fg: #a3236b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .inbox-row-label[data-label-color="gray"] {
+    --label-bg: #3a3f44;
+    --label-border: #5c656d;
+    --label-fg: #e6e9ec;
+  }
+  :root:not([data-theme="light"]) .inbox-row-label[data-label-color="red"] {
+    --label-bg: #4a2124;
+    --label-border: #a4565c;
+    --label-fg: #ffc9cf;
+  }
+  :root:not([data-theme="light"]) .inbox-row-label[data-label-color="orange"] {
+    --label-bg: #4a2f18;
+    --label-border: #b57a3c;
+    --label-fg: #ffd9b0;
+  }
+  :root:not([data-theme="light"]) .inbox-row-label[data-label-color="amber"] {
+    --label-bg: #4a3d14;
+    --label-border: #b09a3e;
+    --label-fg: #ffe6a6;
+  }
+  :root:not([data-theme="light"]) .inbox-row-label[data-label-color="green"] {
+    --label-bg: #1f3d2a;
+    --label-border: #4f9a6c;
+    --label-fg: #b6f0c8;
+  }
+  :root:not([data-theme="light"]) .inbox-row-label[data-label-color="teal"] {
+    --label-bg: #16393a;
+    --label-border: #47918f;
+    --label-fg: #a8eae7;
+  }
+  :root:not([data-theme="light"]) .inbox-row-label[data-label-color="blue"] {
+    --label-bg: #1c3350;
+    --label-border: #4f82c4;
+    --label-fg: #bcd6ff;
+  }
+  :root:not([data-theme="light"]) .inbox-row-label[data-label-color="indigo"] {
+    --label-bg: #262648;
+    --label-border: #6f6fbe;
+    --label-fg: #ccccff;
+  }
+  :root:not([data-theme="light"]) .inbox-row-label[data-label-color="purple"] {
+    --label-bg: #382152;
+    --label-border: #8f64bd;
+    --label-fg: #e0c2ff;
+  }
+  :root:not([data-theme="light"]) .inbox-row-label[data-label-color="pink"] {
+    --label-bg: #47223a;
+    --label-border: #b06a90;
+    --label-fg: #ffc6e1;
+  }
+}
+
+:root[data-theme="dark"] .inbox-row-label[data-label-color="gray"] {
+  --label-bg: #3a3f44;
+  --label-border: #5c656d;
+  --label-fg: #e6e9ec;
+}
+:root[data-theme="dark"] .inbox-row-label[data-label-color="red"] {
+  --label-bg: #4a2124;
+  --label-border: #a4565c;
+  --label-fg: #ffc9cf;
+}
+:root[data-theme="dark"] .inbox-row-label[data-label-color="orange"] {
+  --label-bg: #4a2f18;
+  --label-border: #b57a3c;
+  --label-fg: #ffd9b0;
+}
+:root[data-theme="dark"] .inbox-row-label[data-label-color="amber"] {
+  --label-bg: #4a3d14;
+  --label-border: #b09a3e;
+  --label-fg: #ffe6a6;
+}
+:root[data-theme="dark"] .inbox-row-label[data-label-color="green"] {
+  --label-bg: #1f3d2a;
+  --label-border: #4f9a6c;
+  --label-fg: #b6f0c8;
+}
+:root[data-theme="dark"] .inbox-row-label[data-label-color="teal"] {
+  --label-bg: #16393a;
+  --label-border: #47918f;
+  --label-fg: #a8eae7;
+}
+:root[data-theme="dark"] .inbox-row-label[data-label-color="blue"] {
+  --label-bg: #1c3350;
+  --label-border: #4f82c4;
+  --label-fg: #bcd6ff;
+}
+:root[data-theme="dark"] .inbox-row-label[data-label-color="indigo"] {
+  --label-bg: #262648;
+  --label-border: #6f6fbe;
+  --label-fg: #ccccff;
+}
+:root[data-theme="dark"] .inbox-row-label[data-label-color="purple"] {
+  --label-bg: #382152;
+  --label-border: #8f64bd;
+  --label-fg: #e0c2ff;
+}
+:root[data-theme="dark"] .inbox-row-label[data-label-color="pink"] {
+  --label-bg: #47223a;
+  --label-border: #b06a90;
+  --label-fg: #ffc6e1;
+}
+
+/* 分类标签管理区：一行一个标签，预览、名称、颜色与排序按钮同排。 */
+.ai-label-manager {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ai-label-add {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.ai-label-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ai-label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ai-label-name {
+  flex: 1 1 10em;
+  min-width: 6em;
+}

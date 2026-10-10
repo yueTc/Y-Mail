@@ -17,6 +17,7 @@ import {
   type AiProviderDraft,
   type AiProviderKind,
   type AiThinkingLevel,
+  type MailLabel,
   type NotificationLatency,
 } from "./api";
 import { t } from "./i18n";
@@ -183,6 +184,34 @@ function hostOf(baseUrl: string): string {
   }
 }
 
+/** 固定色板：与后端和数据库约束保持一致；界面只允许从这里选。 */
+const MAIL_LABEL_COLORS = [
+  "gray",
+  "red",
+  "orange",
+  "amber",
+  "green",
+  "teal",
+  "blue",
+  "indigo",
+  "purple",
+  "pink",
+] as const;
+
+/** 色板键在界面上的中文名。 */
+const LABEL_COLOR_LABEL: Record<string, string> = {
+  gray: "灰",
+  red: "红",
+  orange: "橙",
+  amber: "琥珀",
+  green: "绿",
+  teal: "青",
+  blue: "蓝",
+  indigo: "靛",
+  purple: "紫",
+  pink: "粉",
+};
+
 /** AI 设置页：站点管理、功能级配置、审计与熔断。 */
 export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: AiPanelProps) {
   const [providers, setProviders] = useState<AiProvider[]>([]);
@@ -206,6 +235,11 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   >(null);
   const [classifyNotice, setClassifyNotice] = useState("");
   const [classifyError, setClassifyError] = useState("");
+  // 「分类标签管理」：全部标签、新增输入与独立错误；成功操作后一律重新拉取。
+  const [labels, setLabels] = useState<MailLabel[]>([]);
+  const [labelBusy, setLabelBusy] = useState(false);
+  const [labelError, setLabelError] = useState("");
+  const [newLabelName, setNewLabelName] = useState("");
   // 打开「通知智能识别」开关前的风险确认：先记下要展示的目标，用户点确认才落盘。
   const [verifyRisk, setVerifyRisk] = useState<
     | { providerLabel: string; model: string; local: boolean }
@@ -227,14 +261,16 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
     setLoading(true);
     setError("");
     try {
-      const [nextProviders, nextMaps, nextAudits, nextSettings] = await Promise.all([
+      const [nextProviders, nextMaps, nextAudits, nextSettings, nextLabels] = await Promise.all([
         api.listAiProviders(),
         api.listAiModelMaps(),
         api.listAiAudit(50),
         api.getAppSettings(),
+        api.listMailLabels(),
       ]);
       setProviders(nextProviders);
       setAudits(nextAudits);
+      setLabels(nextLabels);
       setClassifyEnabled(nextSettings.classifyEnabled);
       setClassifyPercent(nextSettings.classifyConfidencePercent);
       setFeatureDrafts((old) => {
@@ -544,6 +580,117 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       setClassifyError(describeError(caught));
     }
   }, [classifyEnabled, classifyPercent]);
+
+  /** 重新拉一遍标签；所有标签操作成功后都走它，不靠本地猜顺序或颜色。 */
+  const reloadLabels = useCallback(async () => {
+    setLabels(await api.listMailLabels());
+  }, []);
+
+  /** 新增标签；颜色由后端按固定色板自动分配。 */
+  const addLabel = useCallback(async () => {
+    const name = newLabelName.trim();
+    if (name === "") {
+      setLabelError(t("标签名不能为空"));
+      return;
+    }
+    setLabelBusy(true);
+    setLabelError("");
+    try {
+      await api.createMailLabel(name);
+      setNewLabelName("");
+      await reloadLabels();
+    } catch (caught) {
+      setLabelError(describeError(caught));
+    } finally {
+      setLabelBusy(false);
+    }
+  }, [newLabelName, reloadLabels]);
+
+  /** 改名：失焦时提交；空名字直接退回重新拉取的名称。 */
+  const saveLabelName = useCallback(
+    async (label: MailLabel) => {
+      const name = label.name.trim();
+      if (name === "") {
+        setLabelError(t("标签名不能为空"));
+        await reloadLabels();
+        return;
+      }
+      setLabelBusy(true);
+      setLabelError("");
+      try {
+        await api.renameMailLabel(label.id, name);
+        await reloadLabels();
+      } catch (caught) {
+        setLabelError(describeError(caught));
+      } finally {
+        setLabelBusy(false);
+      }
+    },
+    [reloadLabels],
+  );
+
+  /** 改颜色：只接受固定色板键；兜底标签在界面上禁用。 */
+  const changeLabelColor = useCallback(
+    async (label: MailLabel, color: string) => {
+      setLabelBusy(true);
+      setLabelError("");
+      try {
+        await api.setMailLabelColor(label.id, color);
+        await reloadLabels();
+      } catch (caught) {
+        setLabelError(describeError(caught));
+      } finally {
+        setLabelBusy(false);
+      }
+    },
+    [reloadLabels],
+  );
+
+  /** 删除：先确认；兜底标签在界面上禁用。 */
+  const removeLabel = useCallback(
+    async (label: MailLabel) => {
+      if (
+        !window.confirm(
+          t("删除「{0}」后，贴了这个标签的邮件会变成没有标签。确定删除吗？", [label.name]),
+        )
+      ) {
+        return;
+      }
+      setLabelBusy(true);
+      setLabelError("");
+      try {
+        await api.deleteMailLabel(label.id);
+        await reloadLabels();
+      } catch (caught) {
+        setLabelError(describeError(caught));
+      } finally {
+        setLabelBusy(false);
+      }
+    },
+    [reloadLabels],
+  );
+
+  /** 上下调序：把当前顺序整体提交，成功后再重新拉取。 */
+  const moveLabel = useCallback(
+    async (labelId: number, delta: number) => {
+      const index = labels.findIndex((label) => label.id === labelId);
+      const target = index + delta;
+      if (index < 0 || target < 0 || target >= labels.length) return;
+      const next = labels.map((label) => label.id);
+      [next[index], next[target]] = [next[target], next[index]];
+      setLabelBusy(true);
+      setLabelError("");
+      try {
+        await api.reorderMailLabels(next);
+        await reloadLabels();
+      } catch (caught) {
+        setLabelError(describeError(caught));
+      } finally {
+        setLabelBusy(false);
+      }
+    },
+    [labels, reloadLabels],
+  );
 
   /**
    * 点开关时的入口：开 → 先检查站点模型，再弹风险确认；关 → 立即落盘。
@@ -1128,6 +1275,92 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
           </p>
         )}
       </section>
+      <h3>{t("分类标签管理")}</h3>
+      <p className="hint">
+        {t("标签和颜色只存在本机，不发给模型、不参与账号同步；颜色只能从固定色板里选。")}
+      </p>
+      <section className="ai-feature-card ai-label-manager">
+        <div className="ai-label-add">
+          <label className="secret-field">
+            {t("新增标签")}<input
+              aria-label={t("新增标签")}
+              value={newLabelName}
+              maxLength={64}
+              onChange={(event) => setNewLabelName(event.target.value)}
+            />
+          </label>
+          <button type="button" onClick={() => void addLabel()} disabled={labelBusy}>
+            {t("新增")}</button>
+        </div>
+        <ul className="ai-label-list">
+          {labels.map((label, index) => (
+            <li key={label.id} className="ai-label-row">
+              <span
+                className="inbox-row-label"
+                data-label-preview={label.color}
+                data-label-color={label.color}
+              >
+                {label.name}
+              </span>
+              <input
+                className="ai-label-name"
+                aria-label={t("{0}标签名", [label.name])}
+                value={label.name}
+                maxLength={64}
+                onChange={(event) =>
+                  setLabels((old) =>
+                    old.map((item) =>
+                      item.id === label.id ? { ...item, name: event.target.value } : item,
+                    ),
+                  )
+                }
+                onBlur={() => void saveLabelName(label)}
+              />
+              <select
+                aria-label={t("{0}颜色", [label.name])}
+                value={label.color}
+                disabled={label.isFallback || labelBusy}
+                onChange={(event) => void changeLabelColor(label, event.target.value)}
+              >
+                {MAIL_LABEL_COLORS.map((color) => (
+                  <option key={color} value={color}>
+                    {t(LABEL_COLOR_LABEL[color] ?? color)}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                aria-label={t("上移{0}", [label.name])}
+                disabled={labelBusy || index === 0}
+                onClick={() => void moveLabel(label.id, -1)}
+              >
+                {t("上移")}</button>
+              <button
+                type="button"
+                aria-label={t("下移{0}", [label.name])}
+                disabled={labelBusy || index === labels.length - 1}
+                onClick={() => void moveLabel(label.id, 1)}
+              >
+                {t("下移")}</button>
+              <button
+                type="button"
+                className="danger"
+                aria-label={t("删除{0}", [label.name])}
+                disabled={label.isFallback || labelBusy}
+                onClick={() => void removeLabel(label)}
+              >
+                {t("删除")}</button>
+            </li>
+          ))}
+        </ul>
+        <p className="hint">{t("「其他」是兜底标签：不能删除，颜色固定灰色，可以改名。")}</p>
+        {labelError && (
+          <p className="error" role="alert">
+            {t("操作失败：")}{labelError}
+          </p>
+        )}
+      </section>
+
       <h3>{t("AI 调用审计")}</h3>
       <p className="hint">{t("只记录时间、功能、站点、模型、是否外发和结果，不记录邮件正文或密钥。")}</p>
       {audits.length === 0 ? (
