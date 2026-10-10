@@ -1,10 +1,10 @@
 //! 「红旗邮件」左侧入口回归：每个账号的收件箱下面多一条，点了按账号看标红邮件。
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import InboxPanel from "../InboxPanel";
-import type { InboxFolder } from "../api";
+import type { Account, InboxFolder } from "../api";
 import { api } from "../api";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -34,6 +34,8 @@ vi.mock("../api", () => ({
   describeError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
   api: {
     listInboxThreads: vi.fn(),
+    listAccounts: vi.fn(),
+    listProxies: vi.fn(),
     listInboxMessages: vi.fn(),
     listInboxFolders: vi.fn(),
     inboxSummary: vi.fn(),
@@ -53,6 +55,23 @@ vi.mock("../api", () => ({
   },
 }));
 
+const ACCOUNT: Account = {
+  id: 1,
+  displayName: "测试账号",
+  email: "a@example.com",
+  authType: "password",
+  username: "a@example.com",
+  imap: { host: "imap.example.com", port: 993, security: "tls" },
+  smtp: { host: "smtp.example.com", port: 465, security: "tls" },
+  proxy: { mode: "inherit" },
+  color: "#3366ff",
+  enabled: true,
+  oauthProvider: null,
+  oauthClientId: "",
+  hasCredential: true,
+  createdAt: "2026-10-01T00:00:00Z",
+  updatedAt: "2026-10-01T00:00:00Z",
+};
 function folder(overrides: Partial<InboxFolder> = {}): InboxFolder {
   return {
     accountId: 1,
@@ -101,6 +120,8 @@ beforeEach(() => {
   });
   vi.mocked(api.listAiProviders).mockResolvedValue([]);
   vi.mocked(api.syncStatus).mockResolvedValue([]);
+  vi.mocked(api.listAccounts).mockResolvedValue([ACCOUNT]);
+  vi.mocked(api.listProxies).mockResolvedValue([]);
 });
 
 afterEach(cleanup);
@@ -315,5 +336,19 @@ describe("左侧账号展开", () => {
         expect.objectContaining({ accountId: 2, folderId: 20 }),
       ),
     );
+  });
+});
+describe("邮箱右键编辑", () => {
+  it("右键账号出「编辑」，点一下弹出编辑弹窗", async () => {
+    render(<InboxPanel />);
+    const accountButton = await screen.findByRole("button", { name: /测试账号/ });
+
+    fireEvent.contextMenu(accountButton);
+    const menu = await screen.findByRole("menu", { name: "邮箱菜单" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "编辑" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "编辑邮箱" });
+    expect(within(dialog).getAllByDisplayValue("a@example.com").length).toBeGreaterThan(0);
+    expect(api.listAccounts).toHaveBeenCalled();
   });
 });

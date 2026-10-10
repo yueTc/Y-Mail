@@ -12,12 +12,14 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import {
   api,
   describeError,
+  type Account,
   type AccountInboxSummary,
   type ComposeParticipant,
   type InboxFolder,
@@ -32,7 +34,7 @@ import {
 import ComposePanel, { type ComposeRequest } from "./ComposePanel";
 import MessageReader from "./MessageReader";
 import FlagButton from "./FlagButton";
-import AddAccountDialog from "./AddAccountDialog";
+import AccountDialog from "./AccountDialog";
 import PaneResizer from "./PaneResizer";
 import {
   COMPOSE_MIN_WIDTH,
@@ -536,6 +538,10 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   const consumedComposeSeed = useRef<InboxComposeSeed | undefined>(undefined);
   // 邮箱栏「添加邮箱」弹窗；保存成功后选中新账号。
   const [addAccountOpen, setAddAccountOpen] = useState(false);
+  // 邮箱栏右键菜单：落在哪个账号上、鼠标位置在哪。
+  const [accountMenu, setAccountMenu] = useState<{ accountId: number; x: number; y: number }>();
+  // 正在编辑的账号：邮箱栏只有摘要，右键「编辑」时先取回完整账号再开弹窗。
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   // 各账号同步状态快照；邮件列表工具栏用它显示当前账号状态徽标。
   const [syncStatuses, setSyncStatuses] = useState<SyncStatus[]>([]);
   // 上一轮同步状态，用来判断新账号是否刚完成首次拉取。
@@ -682,6 +688,42 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   useEffect(() => {
     void refreshSidebar();
   }, [refreshSidebar]);
+
+  // 邮箱栏右键菜单开着时，点别处 / 按 Esc / 一滚动就收起来。
+  useEffect(() => {
+    if (!accountMenu) return;
+    const close = () => setAccountMenu(undefined);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("click", close);
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("scroll", close, true);
+    return () => {
+      document.removeEventListener("click", close);
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("scroll", close, true);
+    };
+  }, [accountMenu]);
+
+  /** 右键账号：在鼠标位置开菜单。 */
+  const openAccountMenu = useCallback((event: ReactMouseEvent, accountId: number) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setAccountMenu({ accountId, x: event.clientX, y: event.clientY });
+  }, []);
+
+  /** 打开账号编辑弹窗：邮箱栏只有账号摘要，先取回完整账号再开。 */
+  const editAccount = useCallback(async (accountId: number) => {
+    setAccountMenu(undefined);
+    try {
+      const list = await api.listAccounts();
+      const found = list.find((item) => item.id === accountId);
+      if (found) setEditingAccount(found);
+    } catch (caught) {
+      setError(describeError(caught));
+    }
+  }, []);
 
   /**
    * 搜索：默认只查本地，绝不自动联网。
@@ -1071,6 +1113,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
           <div key={account.accountId} className="sidebar-account">
             <button
               type="button"
+              onContextMenu={(event) => openAccountMenu(event, account.accountId)}
               className={
                 selectedAccount === account.accountId
                   ? "sidebar-item sidebar-account-item active"
@@ -1388,9 +1431,31 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
         )}
       </aside>
     </div>
-    <AddAccountDialog
+    {accountMenu && (
+      <div
+        className="context-menu"
+        role="menu"
+        aria-label={t("邮箱菜单")}
+        style={{
+          left: Math.min(accountMenu.x, Math.max(8, window.innerWidth - 220)),
+          top: Math.min(accountMenu.y, Math.max(8, window.innerHeight - 120)),
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          className="context-menu-item"
+          onClick={() => void editAccount(accountMenu.accountId)}
+        >
+          {t("编辑")}</button>
+      </div>
+    )}
+
+    <AccountDialog
       open={addAccountOpen}
       source="mailbox"
+      account={null}
       onClose={() => setAddAccountOpen(false)}
       onSaved={(accountId) => {
         setAddAccountOpen(false);
@@ -1401,6 +1466,18 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
           setSelectedFolder(undefined);
           setExpandedAccounts((current) => new Set(current).add(id));
         }
+      }}
+    />
+
+    <AccountDialog
+      open={editingAccount !== null}
+      source="mailbox"
+      account={editingAccount}
+      onClose={() => setEditingAccount(null)}
+      onSaved={() => {
+        setEditingAccount(null);
+        setStatusNote(t("账号已更新。"));
+        void refreshSidebar();
       }}
     />
     </>

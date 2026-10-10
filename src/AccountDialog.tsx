@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useRef, type CSSProperties, type JSX } from "react";
 
+import type { Account } from "./api";
 import AccountForm from "./AccountForm";
 import { t } from "./i18n";
 
-/** 打开「添加邮箱」弹窗的入口：邮箱栏或设置页。 */
-export type AddAccountSource = "mailbox" | "settings";
+/** 打开账号弹窗的入口：邮箱栏或设置页；新增和编辑共用这一个弹窗。 */
+export type AccountDialogSource = "mailbox" | "settings";
 
-export type AddAccountDialogProps = {
+export type AccountDialogProps = {
   open: boolean;
-  source: AddAccountSource;
+  source: AccountDialogSource;
+  /** 要编辑的账号；传 null 或省略表示新增。 */
+  account?: Account | null;
   proxiesVersion?: number;
   onClose: () => void;
   onSaved: (accountId: string) => void;
@@ -78,13 +81,15 @@ const BODY_STYLE: CSSProperties = {
   overflowY: "auto",
 };
 
-export default function AddAccountDialog({
+export default function AccountDialog({
   open,
   source,
+  account = null,
   proxiesVersion,
   onClose,
   onSaved,
-}: AddAccountDialogProps): JSX.Element {
+}: AccountDialogProps): JSX.Element {
+  const editing = account !== null;
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const dirtyRef = useRef(false);
@@ -162,12 +167,12 @@ export default function AddAccountDialog({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="add-account-title"
+        aria-labelledby="account-dialog-title"
         style={DIALOG_STYLE}
       >
         <header style={HEADER_STYLE}>
-          <h2 id="add-account-title" style={{ margin: 0, fontSize: 18 }}>
-            {t("添加邮箱")}</h2>
+          <h2 id="account-dialog-title" style={{ margin: 0, fontSize: 18 }}>
+            {editing ? t("编辑邮箱") : t("添加邮箱")}</h2>
           <button
             type="button"
             aria-label={t("关闭")}
@@ -185,12 +190,15 @@ export default function AddAccountDialog({
           </button>
         </header>
 
-        <p style={STEP_STYLE}>
-          {t("操作步骤：先填邮箱地址，服务器参数会自动补齐；微软邮箱（Outlook / Hotmail / Live / MSN） 和谷歌 Gmail 会自动改用 OAuth2，点「浏览器授权」登录即可；其他邮箱点「连接自检」确认能收能发，通过后保存。 密码、授权码和令牌只进系统保险箱，不会写进数据库或日志。")}</p>
+        {editing ? null : (
+          <p style={STEP_STYLE}>
+            {t("操作步骤：先填邮箱地址，服务器参数会自动补齐；微软邮箱（Outlook / Hotmail / Live / MSN） 和谷歌 Gmail 会自动改用 OAuth2，点「浏览器授权」登录即可；其他邮箱点「连接自检」确认能收能发，通过后保存。 密码、授权码和令牌只进系统保险箱，不会写进数据库或日志。")}</p>
+        )}
 
         <div style={BODY_STYLE}>
           <AccountForm
-            account={null}
+            key={account === null ? "new" : `edit-${account.id}`}
+            account={account}
             source={source}
             proxiesVersion={proxiesVersion}
             onSaved={onSaved}

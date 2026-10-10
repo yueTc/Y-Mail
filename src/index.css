@@ -1952,18 +1952,21 @@ textarea:focus {
   opacity: 0.7;
 }
 
-.contacts-menu {
+.contacts-menu,
+.context-menu {
   position: fixed;
   z-index: 60;
   min-width: 160px;
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--panel-bg);
+  /* 菜单用不透明底色，避免透出下面的邮件列表看不清。 */
+  background: var(--panel-solid);
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.2);
 }
 
-.contacts-menu-item {
+.contacts-menu-item,
+.context-menu-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1978,11 +1981,13 @@ textarea:focus {
   white-space: nowrap;
 }
 
-.contacts-menu-item:hover {
+.contacts-menu-item:hover,
+.context-menu-item:hover {
   background: var(--state-hover-bg);
 }
 
-.contacts-menu-item.danger {
+.contacts-menu-item.danger,
+.context-menu-item.danger {
   color: var(--danger);
 }
 
@@ -2002,7 +2007,8 @@ textarea:focus {
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--panel-bg);
+  /* 二级菜单同样用不透明底色，跟主菜单保持一致。 */
+  background: var(--panel-solid);
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.2);
   overflow-y: auto;
 }

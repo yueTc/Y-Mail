@@ -15,7 +15,7 @@ import {
   type Security,
   type ServerConfig,
 } from "./api";
-import type { AddAccountSource } from "./AddAccountDialog";
+import type { AccountDialogSource } from "./AccountDialog";
 import { t } from "./i18n";
 
 /** 表单状态；授权码只存在这个内存对象里，不写 localStorage、不回显已保存的值。 */
@@ -231,7 +231,7 @@ export interface AccountFormProps {
   /** 要编辑的账号；传 null 表示新建。 */
   account: Account | null;
   /** 新建来源；编辑模式忽略，只影响保存后的提示文案。 */
-  source?: AddAccountSource;
+  source?: AccountDialogSource;
   /** 代理列表变化版本号，变化时重新拉取可选代理。 */
   proxiesVersion?: number;
   /** 保存成功（新建或编辑）后回调账号编号。 */

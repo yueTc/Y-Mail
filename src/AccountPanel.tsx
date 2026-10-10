@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api, describeError, type Account } from "./api";
-import AccountForm, { PROXY_MODE_LABELS } from "./AccountForm";
-import AddAccountDialog from "./AddAccountDialog";
+import { PROXY_MODE_LABELS } from "./AccountForm";
+import AccountDialog from "./AccountDialog";
 import { t } from "./i18n";
 
 interface Props {
@@ -15,7 +15,7 @@ export default function AccountPanel({ proxiesVersion }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  /** 「添加邮箱」弹窗开没开；新增走弹窗，编辑仍在本面板内联。 */
+  /** 「新增 / 编辑邮箱」弹窗开关；两种操作都走弹窗。 */
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Account | null>(null);
 
@@ -45,9 +45,9 @@ export default function AccountPanel({ proxiesVersion }: Props) {
     setEditing(account);
   }
 
-  /** 表单保存成功后：收起表单、刷新账号列表。弹窗来源与内联编辑的提示文案不一样。 */
-  function handleSaved(fromDialog: boolean) {
-    setNotice(fromDialog ? t("账号已保存。") : t("账号已更新。"));
+  /** 弹窗保存成功后：收起弹窗、刷新账号列表；新增和编辑的提示文案不一样。 */
+  function handleSaved(isNew: boolean) {
+    setNotice(isNew ? t("账号已保存。") : t("账号已更新。"));
     setAddOpen(false);
     setEditing(null);
     void reload();
@@ -152,26 +152,22 @@ export default function AccountPanel({ proxiesVersion }: Props) {
         </ul>
       )}
 
-      {editing !== null && (
-        <>
-          <h3>{t("编辑账号 #{0}", [editing.id])}</h3>
-          <AccountForm
-            key={editing.id}
-            account={editing}
-            source="settings"
-            proxiesVersion={proxiesVersion}
-            onSaved={() => handleSaved(false)}
-            onCancel={() => setEditing(null)}
-          />
-        </>
-      )}
-
-      <AddAccountDialog
+      <AccountDialog
         open={addOpen}
         source="settings"
+        account={null}
         proxiesVersion={proxiesVersion}
         onClose={() => setAddOpen(false)}
         onSaved={() => handleSaved(true)}
+      />
+
+      <AccountDialog
+        open={editing !== null}
+        source="settings"
+        account={editing}
+        proxiesVersion={proxiesVersion}
+        onClose={() => setEditing(null)}
+        onSaved={() => handleSaved(false)}
       />
     </section>
   );

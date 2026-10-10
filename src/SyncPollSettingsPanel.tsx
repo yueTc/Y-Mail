@@ -107,9 +107,6 @@ export default function SyncPollSettingsPanel() {
           />
         </label>
       </div>
-      <p className="hint">
-        {t("本项只在邮箱服务器不支持推送时生效；支持推送的邮箱会实时收信。")}
-      </p>
       {error && (
         <p className="error" role="alert">
           {error}
