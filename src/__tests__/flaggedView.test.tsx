@@ -40,6 +40,8 @@ vi.mock("../api", () => ({
     listInboxFolders: vi.fn(),
     inboxSummary: vi.fn(),
     listAiProviders: vi.fn(),
+    previewClassifyMessages: vi.fn(),
+    classifyMessages: vi.fn(),
     syncStatus: vi.fn(),
     startSync: vi.fn(),
     stopSync: vi.fn(),
@@ -476,5 +478,83 @@ describe("列表标签胶囊", () => {
       const chips = document.querySelectorAll('[data-label-color="orange"]');
       expect(chips.length).toBeGreaterThan(0);
     });
+  });
+});
+describe("收件箱右键立即分类", () => {
+  function targetMessage(overrides: Partial<InboxMessage> = {}): InboxMessage {
+    return {
+      id: 42,
+      accountId: 1,
+      folderId: 10,
+      uid: 42,
+      threadKey: "t42",
+      subject: "账单邮件",
+      fromName: "张三",
+      fromAddr: "z@example.com",
+      dateUtc: "2026-10-04T02:00:00Z",
+      size: 1000,
+      hasAttachments: false,
+      isRead: false,
+      isFlagged: false,
+      snippet: "",
+      accountEmail: "a@example.com",
+      accountName: "测试账号",
+      accountColor: "#3366ff",
+      folderPath: "INBOX",
+      labelId: null,
+      labelName: null,
+      labelColor: null,
+      ...overrides,
+    };
+  }
+
+  function prepare() {
+    vi.mocked(api.listInboxMessages).mockResolvedValue({
+      items: [targetMessage()],
+      total: 1,
+      offset: 0,
+      limit: 200,
+    });
+    vi.mocked(api.previewClassifyMessages).mockResolvedValue({
+      providerId: 1,
+      providerLabel: "jev",
+      host: "api.typesafe.ai",
+      model: "jev-latest",
+      local: false,
+      authorizationToken: "tok-1",
+      expiresInSeconds: 300,
+      targets: [{ messageId: 42, contentHash: "hash-1" }],
+    });
+    vi.mocked(api.classifyMessages).mockResolvedValue([
+      { id: 2, name: "账单", color: "orange", sortOrder: 20, isFallback: false },
+    ]);
+    return render(<InboxPanel />);
+  }
+
+  it("右键出「立即分类」，确认后才外发，且只传点中的那一封", async () => {
+    prepare();
+    fireEvent.contextMenu(await screen.findByText("账单邮件"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "立即分类" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "确认立即分类" });
+    expect(within(dialog).getByText("jev")).toBeTruthy();
+    expect(within(dialog).getByText("api.typesafe.ai")).toBeTruthy();
+    expect(within(dialog).getByText("jev-latest")).toBeTruthy();
+    expect(vi.mocked(api.previewClassifyMessages)).toHaveBeenCalledWith([42]);
+    expect(vi.mocked(api.classifyMessages)).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认分类" }));
+    await waitFor(() => expect(vi.mocked(api.classifyMessages)).toHaveBeenCalledWith("tok-1"));
+    expect(vi.mocked(api.classifyMessages)).toHaveBeenCalledTimes(1);
+  });
+
+  it("取消确认框不会外发", async () => {
+    prepare();
+    fireEvent.contextMenu(await screen.findByText("账单邮件"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "立即分类" }));
+    const dialog = await screen.findByRole("dialog", { name: "确认立即分类" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "确认立即分类" })).toBeNull());
+    expect(vi.mocked(api.classifyMessages)).not.toHaveBeenCalled();
   });
 });

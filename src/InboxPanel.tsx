@@ -21,6 +21,7 @@ import {
   describeError,
   type Account,
   type AccountInboxSummary,
+  type ClassifyPreview,
   type ComposeParticipant,
   type InboxFolder,
   type InboxMessage,
@@ -582,6 +583,18 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   // 邮箱栏右键菜单：落在哪个账号上、鼠标位置在哪。
   const [accountMenu, setAccountMenu] = useState<{ accountId: number; x: number; y: number }>();
+  // 邮件右键菜单与「立即分类」的一次性外发确认。
+  const [messageMenu, setMessageMenu] = useState<{
+    message: InboxMessage;
+    x: number;
+    y: number;
+  }>();
+  const [classifyConfirm, setClassifyConfirm] = useState<{
+    preview: ClassifyPreview;
+    subject: string;
+  }>();
+  const [classifyBusy, setClassifyBusy] = useState(false);
+  const [classifyError, setClassifyError] = useState("");
   // 正在编辑的账号：邮箱栏只有摘要，右键「编辑」时先取回完整账号再开弹窗。
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   // 各账号同步状态快照；邮件列表工具栏用它显示当前账号状态徽标。
@@ -766,6 +779,61 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
       setError(describeError(caught));
     }
   }, []);
+
+  // 邮件右键菜单开着时，点别处 / 按 Esc / 一滚动就收起来。
+  useEffect(() => {
+    if (!messageMenu) return;
+    const close = () => setMessageMenu(undefined);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("click", close);
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("scroll", close, true);
+    return () => {
+      document.removeEventListener("click", close);
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("scroll", close, true);
+    };
+  }, [messageMenu]);
+
+  /** 右键一封邮件：在鼠标位置开菜单；只对点中的那一封生效。 */
+  const openMessageMenu = useCallback((event: ReactMouseEvent, message: InboxMessage) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setMessageMenu({ message, x: event.clientX, y: event.clientY });
+  }, []);
+
+  /** 点「立即分类」：先拿外发预览，再弹一次确认；取消就不读正文、不外发。 */
+  const startClassify = useCallback(async (message: InboxMessage) => {
+    setMessageMenu(undefined);
+    setClassifyError("");
+    setClassifyBusy(true);
+    try {
+      const preview = await api.previewClassifyMessages([message.id]);
+      setClassifyConfirm({ preview, subject: message.subject || t("（无主题）") });
+    } catch (caught) {
+      setError(describeError(caught));
+    } finally {
+      setClassifyBusy(false);
+    }
+  }, []);
+
+  /** 确认框里点「确认分类」：这时才真正外发；完成后刷新列表拿新标签。 */
+  const confirmClassify = useCallback(async () => {
+    if (!classifyConfirm) return;
+    setClassifyBusy(true);
+    setClassifyError("");
+    try {
+      await api.classifyMessages(classifyConfirm.preview.authorizationToken);
+      setClassifyConfirm(undefined);
+      await load(true);
+    } catch (caught) {
+      setClassifyError(describeError(caught));
+    } finally {
+      setClassifyBusy(false);
+    }
+  }, [classifyConfirm, load]);
 
   /**
    * 搜索：默认只查本地，绝不自动联网。
@@ -1424,6 +1492,16 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
                     transform: `translateY(${item.start}px)`,
                     height: item.size,
                   }}
+                  onContextMenu={(event) =>
+                    openMessageMenu(
+                      event,
+                      row.kind === "thread"
+                        ? row.thread.latest
+                        : row.kind === "search"
+                          ? row.hit.message
+                          : row.message,
+                    )
+                  }
                 >
                   {row.kind === "thread" ? (
                     <ThreadRow
@@ -1504,6 +1582,78 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
           onClick={() => void editAccount(accountMenu.accountId)}
         >
           {t("编辑")}</button>
+      </div>
+    )}
+
+    {messageMenu && (
+      <div
+        className="context-menu"
+        role="menu"
+        aria-label={t("邮件菜单")}
+        style={{
+          left: Math.min(messageMenu.x, Math.max(8, window.innerWidth - 220)),
+          top: Math.min(messageMenu.y, Math.max(8, window.innerHeight - 120)),
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          className="context-menu-item"
+          onClick={() => void startClassify(messageMenu.message)}
+          disabled={classifyBusy}
+        >
+          {t("立即分类")}</button>
+      </div>
+    )}
+
+    {classifyConfirm && (
+      <div className="ai-modal-backdrop" role="presentation">
+        <section
+          className="ai-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("确认立即分类")}
+        >
+          <h3>{t("确认立即分类")}</h3>
+          <p>{t("这封邮件的正文会发给下面的目标做一次分类，确认后才会外发。")}</p>
+          <dl className="ai-modal-targets">
+            <dt>{t("目标邮件")}</dt>
+            <dd>{classifyConfirm.subject}</dd>
+            <dt>{t("站点")}</dt>
+            <dd>{classifyConfirm.preview.providerLabel}</dd>
+            <dt>{t("完整域名")}</dt>
+            <dd>{classifyConfirm.preview.host}</dd>
+            <dt>{t("用哪个模型")}</dt>
+            <dd>{classifyConfirm.preview.model}</dd>
+            <dt>{t("是不是本地服务")}</dt>
+            <dd>
+              {classifyConfirm.preview.local
+                ? t("是，本地服务，内容不离开这台电脑")
+                : t("不是，内容会发送到远程站点")}
+            </dd>
+          </dl>
+          {classifyError && (
+            <p className="error" role="alert">
+              {t("操作失败：")}{classifyError}
+            </p>
+          )}
+          <div className="form-actions">
+            <button
+              type="button"
+              className="primary"
+              onClick={() => void confirmClassify()}
+              disabled={classifyBusy}
+            >
+              {t("确认分类")}</button>
+            <button
+              type="button"
+              onClick={() => setClassifyConfirm(undefined)}
+              disabled={classifyBusy}
+            >
+              {t("取消")}</button>
+          </div>
+        </section>
       </div>
     )}
 
