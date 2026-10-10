@@ -81,19 +81,15 @@ fn sanitize_error_body(body: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    // 优先按 JSON 取 error.message / error.code；取不到就退回「只保留短标识」。
+    // 优先按 JSON 取错误消息：常见形状都认，取不到再往下走。
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        if let Some(error) = value.get("error") {
-            if let Some(message) = error.get("message").and_then(|item| item.as_str()) {
-                return shorten(&scrub_secret_like(message));
-            }
-            if let Some(code) = error.get("code").and_then(|item| item.as_str()) {
-                return shorten(&scrub_secret_like(code));
-            }
-            if let Some(text) = error.as_str() {
-                return shorten(&scrub_secret_like(text));
-            }
+        if let Some(message) = json_error_message(&value) {
+            return shorten(&scrub_secret_like(&message));
         }
+    }
+    // 网页而不是接口数据：多半是防护系统拦下的挑战页，别把这堆标签带回界面。
+    if looks_like_html(trimmed) {
+        return "站点返回了网页而不是接口数据，可能是被防护系统拦了，请稍后重试".to_string();
     }
     // 非 JSON：先把可能回显的密钥长串洗掉，再只留 ASCII 字母数字、下划线、点与短横。
     let scrubbed = scrub_secret_like(trimmed);
@@ -107,6 +103,42 @@ fn sanitize_error_body(body: &str) -> String {
     } else {
         format!("错误码 {filtered}")
     }
+}
+
+/// 从常见的错误 JSON 形状里取一句人话。
+///
+/// 认这些位置：`error.message`、`error.code`、`error` 字符串、
+/// `detail.message`、`detail` 字符串、`message`。
+fn json_error_message(value: &serde_json::Value) -> Option<String> {
+    let candidates = [
+        value
+            .get("error")
+            .and_then(|error| error.get("message"))
+            .and_then(|item| item.as_str()),
+        value
+            .get("error")
+            .and_then(|error| error.get("code"))
+            .and_then(|item| item.as_str()),
+        value.get("error").and_then(|error| error.as_str()),
+        value
+            .get("detail")
+            .and_then(|detail| detail.get("message"))
+            .and_then(|item| item.as_str()),
+        value.get("detail").and_then(|detail| detail.as_str()),
+        value.get("message").and_then(|item| item.as_str()),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+/// 正文看起来像网页而不是接口数据。
+fn looks_like_html(body: &str) -> bool {
+    let lower = body.trim_start().to_ascii_lowercase();
+    lower.starts_with("<!doctype html") || lower.starts_with("<html") || lower.contains("<script")
 }
 
 /// 把一条消息截短，避免把整段正文带回界面。
@@ -197,6 +229,24 @@ fn scrub_secret_like(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 防护系统返回网页时只给一句人话() {
+        let body =
+            "<!DOCTYPE html><html><head><title>Just a moment...</title></head><body>challenge</body></html>";
+        let detail = AiError::status_detail(403, body);
+        assert!(detail.contains("网页"), "{detail}");
+        assert!(!detail.contains("DOCTYPE"), "不能把网页标签带回界面：{detail}");
+        assert!(!detail.contains("challenge"), "{detail}");
+    }
+
+    #[test]
+    fn 认得_typesafe_那种_detail_message() {
+        let body = r#"{"detail":{"error_type":"authentication_error","message":"Must supply an API key! Check your request and try again."}}"#;
+        let detail = AiError::status_detail(403, body);
+        assert!(detail.contains("Must supply an API key"), "{detail}");
+        assert!(!detail.contains("error_type"), "{detail}");
+    }
 
     #[test]
     fn 错误正文里的正文片段不会被带出来() {

@@ -24,6 +24,12 @@ pub(crate) struct HttpResponse {
     pub body: String,
 }
 
+/// 请求头里的应用标识。
+///
+/// 不少站点（TypeSafe 前面的 Cloudflare 就是）会对没有 User-Agent 的请求直接回
+/// 403 挑战页，正文是一整段网页；这里固定带一个可识别的名字，别让请求像爬虫。
+const USER_AGENT: &str = concat!("Y-Mail/", env!("CARGO_PKG_VERSION"));
+
 /// 发一次请求。`body` 为 `None` 表示不带正文（GET）。
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn request(
@@ -59,7 +65,9 @@ pub(crate) async fn request(
         target.push_str(query);
     }
 
-    let mut head = format!("{method} {target} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\n");
+    let mut head = format!(
+        "{method} {target} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {USER_AGENT}\r\nAccept: application/json\r\nAccept-Language: zh-CN,zh;q=0.9,en;q=0.8\r\n"
+    );
     for (name, value) in headers {
         head.push_str(&format!("{name}: {value}\r\n"));
     }
@@ -205,6 +213,40 @@ mod tests {
         String::from_utf8_lossy(&request).to_string()
     }
 
+    /// 手动联调：确认加了 User-Agent 后能穿过 TypeSafe 前面的防护系统。
+    ///
+    /// 需要联网，所以默认忽略；跑法：
+    /// `cargo test -p mail-ai typesafe_真实站点 -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "需要联网，手动验证防护系统不再拦请求"]
+    async fn typesafe_真实站点不再被防护系统拦() {
+        let response = request(
+            None,
+            "POST",
+            "https://api.typesafe.ai/v1/systemone",
+            &[
+                ("Authorization", "Bearer fake-key-for-check".to_string()),
+                ("Content-Type", "application/json".to_string()),
+            ],
+            Some(r#"{"state":"test","model":"jev-latest","questions":[]}"#),
+            Duration::from_secs(20),
+        )
+        .await
+        .expect("请求应能到达站点");
+        let body = response.body.trim_start();
+        assert!(
+            !body.starts_with('<'),
+            "被防护系统拦成了网页（状态 {}）：{}",
+            response.status,
+            &body[..body.len().min(200)]
+        );
+        assert!(
+            body.contains("error_type") || body.contains("error"),
+            "应该是接口自己的 JSON 错误：{}",
+            &body[..body.len().min(200)]
+        );
+    }
+
     #[tokio::test]
     async fn post_json能带上正文与自定义头() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定成功");
@@ -217,6 +259,10 @@ mod tests {
                 "{request}"
             );
             assert!(request.contains("Authorization: Bearer sk-test"), "{request}");
+            assert!(
+                request.contains("User-Agent: Y-Mail/"),
+                "必须带应用 User-Agent，否则会被防护系统当爬虫拦掉：{request}"
+            );
             assert!(request.contains(r#""model":"m1""#), "{request}");
             let response = concat!(
                 "HTTP/1.1 200 OK\r\n",
