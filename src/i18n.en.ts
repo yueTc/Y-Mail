@@ -72,7 +72,7 @@ export const EN: Record<string, string> = {
   "1. 列表": "1. List",
   "阿": "阿",
   "安装包已自带 ": "The installer already includes ",
-  "按 Ctrl+K 聚焦；例如：发票 from:alice has:attachment": "Press Ctrl+K to focus; e.g. invoice from:alice has:attachment",
+  "按 Ctrl+K 聚焦；支持 from: / has: / is: / before: / label:，例如：发票 label:账单 from:alice": "Press Ctrl+K to focus; supports from: / has: / is: / before: / label:, e.g. 发票 label:账单 from:alice",
   "按「{0}」填服务器": "Fill server settings from “{0}”",
   "按会话聚合": "Group by conversation",
   "按起草要求生成内容": "Generate from the drafting brief",

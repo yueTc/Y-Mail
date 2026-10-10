@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import InboxPanel from "../InboxPanel";
-import type { Account, InboxFolder } from "../api";
+import type { Account, InboxFolder, InboxMessage } from "../api";
 import { api } from "../api";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -350,5 +350,131 @@ describe("邮箱右键编辑", () => {
     const dialog = await screen.findByRole("dialog", { name: "编辑邮箱" });
     expect(within(dialog).getAllByDisplayValue("a@example.com").length).toBeGreaterThan(0);
     expect(api.listAccounts).toHaveBeenCalled();
+  });
+});
+describe("列表标签胶囊", () => {
+  function labelledMessage(overrides: Partial<InboxMessage> = {}): InboxMessage {
+    return {
+      id: 1,
+      accountId: 1,
+      folderId: 10,
+      uid: 1,
+      threadKey: "t1",
+      subject: "账单邮件",
+      fromName: "张三",
+      fromAddr: "z@example.com",
+      dateUtc: "2026-10-04T02:00:00Z",
+      size: 1000,
+      hasAttachments: false,
+      isRead: false,
+      isFlagged: false,
+      snippet: "",
+      accountEmail: "a@example.com",
+      accountName: "测试账号",
+      accountColor: "#3366ff",
+      folderPath: "INBOX",
+      labelId: 2,
+      labelName: "账单",
+      labelColor: "orange",
+      ...overrides,
+    };
+  }
+
+  it("平铺行把胶囊放在时间前面，点一下按标签搜索", async () => {
+    vi.mocked(api.listInboxMessages).mockResolvedValue({
+      items: [labelledMessage()],
+      total: 1,
+      offset: 0,
+      limit: 200,
+    });
+    vi.mocked(api.searchMessages).mockResolvedValue({
+      items: [],
+      total: 0,
+      offset: 0,
+      limit: 200,
+      deepSynced: false,
+      deepError: null,
+    });
+    render(<InboxPanel />);
+
+    const chip = await screen.findByRole("button", { name: "账单" });
+    expect(chip.getAttribute("data-label-color")).toBe("orange");
+    const time = chip.nextElementSibling as HTMLElement | null;
+    expect(time?.classList.contains("inbox-row-time")).toBe(true);
+
+    fireEvent.click(chip);
+    await waitFor(() => {
+      const searchBox = screen.getByLabelText("搜索邮件") as HTMLInputElement;
+      expect(searchBox.value).toBe("label:账单");
+    });
+    await waitFor(() =>
+      expect(vi.mocked(api.searchMessages)).toHaveBeenCalledWith(
+        expect.objectContaining({ raw: "label:账单" }),
+      ),
+    );
+  });
+
+  it("没有标签时不渲染胶囊", async () => {
+    vi.mocked(api.listInboxMessages).mockResolvedValue({
+      items: [labelledMessage({ labelId: null, labelName: null, labelColor: null })],
+      total: 1,
+      offset: 0,
+      limit: 200,
+    });
+    render(<InboxPanel />);
+    await screen.findByText("账单邮件");
+    expect(screen.queryByRole("button", { name: "账单" })).toBeNull();
+  });
+
+  it("会话折叠行用最新一封的标签与颜色", async () => {
+    vi.mocked(api.listInboxThreads).mockResolvedValue({
+      items: [
+        {
+          accountId: 1,
+          threadKey: "t1",
+          messageCount: 2,
+          unreadCount: 1,
+          latest: labelledMessage({ labelId: 3, labelName: "通知", labelColor: "teal" }),
+        },
+      ],
+      total: 1,
+      offset: 0,
+      limit: 200,
+    });
+    render(<InboxPanel />);
+    fireEvent.click(await screen.findByLabelText("按会话聚合"));
+
+    const chip = await screen.findByRole("button", { name: "通知" });
+    expect(chip.getAttribute("data-label-color")).toBe("teal");
+  });
+
+  it("展开线程后的子邮件也带标签胶囊", async () => {
+    vi.mocked(api.listInboxThreads).mockResolvedValue({
+      items: [
+        {
+          accountId: 1,
+          threadKey: "t1",
+          messageCount: 1,
+          unreadCount: 1,
+          latest: labelledMessage({ labelId: 3, labelName: "通知", labelColor: "teal" }),
+        },
+      ],
+      total: 1,
+      offset: 0,
+      limit: 200,
+    });
+    vi.mocked(api.listThreadMessages).mockResolvedValue([
+      labelledMessage({ id: 11, uid: 11, labelId: 2, labelName: "账单", labelColor: "orange" }),
+    ]);
+    render(<InboxPanel />);
+    fireEvent.click(await screen.findByLabelText("按会话聚合"));
+
+    const row = await screen.findByRole("button", { name: /张三/ });
+    fireEvent.click(row);
+
+    await waitFor(() => {
+      const chips = document.querySelectorAll('[data-label-color="orange"]');
+      expect(chips.length).toBeGreaterThan(0);
+    });
   });
 });

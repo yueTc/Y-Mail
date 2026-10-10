@@ -333,12 +333,14 @@ function MessageRow({
   selected,
   onOpen,
   onToggleFlag,
+  onLabelClick,
 }: {
   message: InboxMessage;
   child?: boolean;
   selected?: boolean;
   onOpen?: () => void;
   onToggleFlag?: (message: InboxMessage) => void;
+  onLabelClick?: (labelName: string) => void;
 }) {
   const className = ["inbox-row", child ? "inbox-row-child" : "", selected ? "inbox-row-selected" : ""]
     .filter(Boolean)
@@ -358,6 +360,18 @@ function MessageRow({
       <div className="inbox-row-main">
         <div className="inbox-row-top">
           <span className="inbox-row-sender">{senderText(message)}</span>
+          {message.labelName && message.labelColor ? (
+            <button
+              type="button"
+              className="inbox-row-label"
+              data-label-color={message.labelColor}
+              onClick={(event) => {
+                event.stopPropagation();
+                onLabelClick?.(message.labelName ?? "");
+              }}
+            >
+              {message.labelName}</button>
+          ) : null}
           <span className="inbox-row-time">{formatListTime(message.dateUtc)}</span>
         </div>
         <div className="inbox-row-bottom">
@@ -385,11 +399,13 @@ function SearchResultRow({
   selected,
   onOpen,
   onToggleFlag,
+  onLabelClick,
 }: {
   hit: SearchHit;
   selected?: boolean;
   onOpen: () => void;
   onToggleFlag?: (message: InboxMessage) => void;
+  onLabelClick?: (labelName: string) => void;
 }) {
   const message = hit.message;
   const className = ["inbox-row", selected ? "inbox-row-selected" : ""].filter(Boolean).join(" ");
@@ -406,6 +422,18 @@ function SearchResultRow({
       <div className="inbox-row-main">
         <div className="inbox-row-top">
           <span className="inbox-row-sender">{senderText(message)}</span>
+          {message.labelName && message.labelColor ? (
+            <button
+              type="button"
+              className="inbox-row-label"
+              data-label-color={message.labelColor}
+              onClick={(event) => {
+                event.stopPropagation();
+                onLabelClick?.(message.labelName ?? "");
+              }}
+            >
+              {message.labelName}</button>
+          ) : null}
           <span className="inbox-row-time">{formatListTime(message.dateUtc)}</span>
         </div>
         <div className="inbox-row-bottom">
@@ -434,11 +462,13 @@ function ThreadRow({
   expanded,
   onToggle,
   onToggleFlag,
+  onLabelClick,
 }: {
   thread: InboxThread;
   expanded: boolean;
   onToggle: () => void;
   onToggleFlag?: (message: InboxMessage) => void;
+  onLabelClick?: (labelName: string) => void;
 }) {
   const latest = thread.latest;
   return (
@@ -454,6 +484,18 @@ function ThreadRow({
       <div className="inbox-row-main">
         <div className="inbox-row-top">
           <span className="inbox-row-sender">{senderText(latest)}</span>
+          {latest.labelName && latest.labelColor ? (
+            <button
+              type="button"
+              className="inbox-row-label"
+              data-label-color={latest.labelColor}
+              onClick={(event) => {
+                event.stopPropagation();
+                onLabelClick?.(latest.labelName ?? "");
+              }}
+            >
+              {latest.labelName}</button>
+          ) : null}
           <span className="inbox-row-time">{formatListTime(latest.dateUtc)}</span>
         </div>
         <div className="inbox-row-bottom">
@@ -731,8 +773,8 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
    * append=true 表示在已有结果后面续一页。
    */
   const runSearch = useCallback(
-    async (options?: { deep?: boolean; append?: boolean }) => {
-      const raw = searchInput.trim();
+    async (options?: { deep?: boolean; append?: boolean; raw?: string }) => {
+      const raw = (options?.raw ?? searchInput).trim();
       if (raw === "") {
         setSearchRaw("");
         setHits([]);
@@ -786,6 +828,16 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  /** 点列表里的标签胶囊：等于按 `label:标签名` 搜一次。 */
+  const filterByLabel = useCallback(
+    (labelName: string) => {
+      const raw = `label:${labelName}`;
+      setSearchInput(raw);
+      void runSearch({ raw });
+    },
+    [runSearch],
+  );
 
   /** 退出搜索，回到普通收件箱列表。 */
   const clearSearch = useCallback(() => {
@@ -1287,7 +1339,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
             ref={searchBoxRef}
             aria-label={t("搜索邮件")}
             value={searchInput}
-            placeholder={t("按 Ctrl+K 聚焦；例如：发票 from:alice has:attachment")}
+            placeholder={t("按 Ctrl+K 聚焦；支持 from: / has: / is: / before: / label:，例如：发票 label:账单 from:alice")}
             onChange={(event) => setSearchInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") void runSearch();
@@ -1379,6 +1431,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
                       expanded={expanded.has(row.key)}
                       onToggle={() => void toggleThread(row.thread)}
                       onToggleFlag={(message) => void toggleFlag(message)}
+                      onLabelClick={filterByLabel}
                     />
                   ) : row.kind === "search" ? (
                     <SearchResultRow
@@ -1386,6 +1439,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
                       selected={selectedMessage?.id === row.hit.message.id}
                       onOpen={() => void openMessage(row.hit.message)}
                       onToggleFlag={(message) => void toggleFlag(message)}
+                      onLabelClick={filterByLabel}
                     />
                   ) : (
                     <MessageRow
@@ -1394,6 +1448,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
                       selected={selectedMessage?.id === row.message.id}
                       onOpen={() => void openMessage(row.message)}
                       onToggleFlag={(message) => void toggleFlag(message)}
+                      onLabelClick={filterByLabel}
                     />
                   )}
                 </div>

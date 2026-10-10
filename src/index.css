@@ -2944,6 +2944,8 @@ body.screenshot-body {
 .inbox-row-label {
   display: inline-flex;
   align-items: center;
+  font: inherit;
+  cursor: pointer;
   max-width: 8em;
   overflow: hidden;
   text-overflow: ellipsis;
