@@ -13,7 +13,9 @@ pub mod verify;
 
 pub use client::{chat, list_models, translate, ChatOutcome, Endpoint, TranslationOutcome};
 pub use error::AiError;
-pub use provider::{is_local_host, join_url, normalize_base_url, ProviderKind, ThinkingLevel};
+pub use provider::{
+    is_local_host, join_url, normalize_base_url, ProviderFunction, ProviderKind, ThinkingLevel,
+};
 pub use segment::{anchor_targets, normalize_whitespace, split_html, split_text, Segment};
 pub use verify::{parse_verification, sanitize_code, sanitize_link, VerificationFinding};
 

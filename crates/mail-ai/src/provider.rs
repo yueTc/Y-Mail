@@ -1,9 +1,30 @@
 //! 站点类型与思考程度抽象。
 //!
-//! 站点分三类：OpenAI 兼容（第三方中转站 / 自建网关）、DeepL（只做翻译）、
-//! 本机 Ollama（零外传）。思考程度是四档抽象，由这里映射成各家参数。
+//! 站点分四类：OpenAI 兼容（第三方中转站 / 自建网关）、DeepL（只做翻译）、
+//! 本机 Ollama（零外传）、TypeSafe jev（只做邮件分类）。
+//! 思考程度是四档抽象，由这里映射成各家参数。
 
 use crate::error::AiError;
+
+/// 站点能承担的功能。
+///
+/// mail-ai 不依赖存储层，所以这里独立定义一套功能枚举；
+/// mail-core 负责把存储层的 `AiFunction` 一对一映射过来。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderFunction {
+    /// 翻译。
+    Translation,
+    /// 摘要。
+    Summary,
+    /// 润色。
+    Polish,
+    /// 起草。
+    Draft,
+    /// 通知识别。
+    NotificationVerify,
+    /// 邮件分类。
+    Classification,
+}
 
 /// AI 站点类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,6 +35,8 @@ pub enum ProviderKind {
     DeepL,
     /// 本机 Ollama；地址与本机判断走同一套规则。
     Ollama,
+    /// TypeSafe jev；只做邮件分类。
+    TypeSafe,
 }
 
 impl ProviderKind {
@@ -23,6 +46,7 @@ impl ProviderKind {
             Self::OpenAiCompatible => "openai_compatible",
             Self::DeepL => "deepl",
             Self::Ollama => "ollama",
+            Self::TypeSafe => "typesafe",
         }
     }
 
@@ -32,6 +56,7 @@ impl ProviderKind {
             "openai_compatible" | "openai" | "compatible" => Some(Self::OpenAiCompatible),
             "deepl" => Some(Self::DeepL),
             "ollama" => Some(Self::Ollama),
+            "typesafe" | "type_safe" | "jev" => Some(Self::TypeSafe),
             _ => None,
         }
     }
@@ -42,6 +67,7 @@ impl ProviderKind {
             Self::OpenAiCompatible => "OpenAI 兼容站点",
             Self::DeepL => "DeepL 翻译",
             Self::Ollama => "本机 Ollama",
+            Self::TypeSafe => "TypeSafe jev",
         }
     }
 
@@ -51,6 +77,20 @@ impl ProviderKind {
             Self::OpenAiCompatible => "https://api.openai.com/v1",
             Self::DeepL => "https://api-free.deepl.com",
             Self::Ollama => "http://127.0.0.1:11434/v1",
+            Self::TypeSafe => "https://api.typesafe.ai/v1",
+        }
+    }
+
+    /// 这个站点类型能不能承担某个功能。分类只认 TypeSafe jev。
+    pub fn supports(self, function: ProviderFunction) -> bool {
+        use ProviderFunction as F;
+        match self {
+            Self::OpenAiCompatible | Self::Ollama => matches!(
+                function,
+                F::Translation | F::Summary | F::Polish | F::Draft | F::NotificationVerify
+            ),
+            Self::DeepL => matches!(function, F::Translation),
+            Self::TypeSafe => matches!(function, F::Classification),
         }
     }
 
@@ -59,7 +99,6 @@ impl ProviderKind {
         matches!(self, Self::DeepL)
     }
 }
-
 /// 思考程度：关闭 / 低 / 中 / 高。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThinkingLevel {
@@ -187,6 +226,28 @@ pub fn join_url(base: &str, path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typesafe_only_supports_classification() {
+        assert!(ProviderKind::TypeSafe.supports(ProviderFunction::Classification));
+        assert!(!ProviderKind::TypeSafe.supports(ProviderFunction::Translation));
+        assert!(!ProviderKind::OpenAiCompatible.supports(ProviderFunction::Classification));
+        assert!(ProviderKind::Ollama.supports(ProviderFunction::Summary));
+        assert!(ProviderKind::DeepL.supports(ProviderFunction::Translation));
+        assert!(!ProviderKind::DeepL.supports(ProviderFunction::Draft));
+    }
+
+    #[test]
+    fn typesafe_站点元数据正确() {
+        assert_eq!(ProviderKind::TypeSafe.as_str(), "typesafe");
+        assert_eq!(ProviderKind::parse("typesafe"), Some(ProviderKind::TypeSafe));
+        assert_eq!(ProviderKind::parse("type_safe"), Some(ProviderKind::TypeSafe));
+        assert_eq!(ProviderKind::TypeSafe.label(), "TypeSafe jev");
+        assert_eq!(
+            ProviderKind::TypeSafe.default_base_url(),
+            "https://api.typesafe.ai/v1"
+        );
+    }
 
     #[test]
     fn 站点标识可往返() {

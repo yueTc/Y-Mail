@@ -21,6 +21,9 @@ pub enum AiProviderKind {
     DeepL,
     /// 本机 Ollama。
     Ollama,
+    /// TypeSafe jev；只做邮件分类。
+    #[serde(rename = "typesafe")]
+    TypeSafe,
 }
 
 impl AiProviderKind {
@@ -30,6 +33,7 @@ impl AiProviderKind {
             Self::OpenAiCompatible => "openai_compatible",
             Self::DeepL => "deepl",
             Self::Ollama => "ollama",
+            Self::TypeSafe => "typesafe",
         }
     }
 
@@ -39,6 +43,7 @@ impl AiProviderKind {
             "openai_compatible" | "openai" | "compatible" => Some(Self::OpenAiCompatible),
             "deepl" => Some(Self::DeepL),
             "ollama" => Some(Self::Ollama),
+            "typesafe" | "type_safe" | "jev" => Some(Self::TypeSafe),
             _ => None,
         }
     }

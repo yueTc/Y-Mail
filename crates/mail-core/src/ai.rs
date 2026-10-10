@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use mail_ai::{
     anchor_targets, chat, is_local_host, list_models, normalize_base_url, parse_verification, prompt,
-    split_html, split_text, translate, AiError, ChatOutcome, Endpoint, ProviderKind, ThinkingLevel,
-    TranslationOutcome, VerificationFinding,
+    split_html, split_text, translate, AiError, ChatOutcome, Endpoint, ProviderFunction, ProviderKind,
+    ThinkingLevel, TranslationOutcome, VerificationFinding,
 };
 use mail_domain::account::AccountProxyMode;
 use mail_domain::proxy::Secret;
@@ -40,6 +40,18 @@ fn provider_kind(kind: AiProviderKind) -> ProviderKind {
         AiProviderKind::OpenAiCompatible => ProviderKind::OpenAiCompatible,
         AiProviderKind::DeepL => ProviderKind::DeepL,
         AiProviderKind::Ollama => ProviderKind::Ollama,
+        AiProviderKind::TypeSafe => ProviderKind::TypeSafe,
+    }
+}
+
+/// 存储层功能与 AI 层功能的一对一映射。
+pub fn provider_function(function: AiFunction) -> ProviderFunction {
+    match function {
+        AiFunction::Translate => ProviderFunction::Translation,
+        AiFunction::Summary => ProviderFunction::Summary,
+        AiFunction::Polish => ProviderFunction::Polish,
+        AiFunction::Draft => ProviderFunction::Draft,
+        AiFunction::NotificationVerify => ProviderFunction::NotificationVerify,
     }
 }
 
