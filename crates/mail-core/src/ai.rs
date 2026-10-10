@@ -18,8 +18,8 @@ use mail_ai::{
 use mail_domain::account::AccountProxyMode;
 use mail_domain::proxy::Secret;
 use mail_store::{
-    AiFunction, AiModelMapEntry, AiProviderKind, AiThinkingLevel, NewAiAudit, NewAiProvider, StoredAiAudit,
-    StoredAiProvider,
+    AiFunction, AiModelMapEntry, AiProviderKind, AiThinkingLevel, MailLabel, MailLabelSource, NewAiAudit,
+    NewAiProvider, StoredAiAudit, StoredAiProvider,
 };
 
 use crate::engine::{EngineError, MailEngine};
@@ -607,6 +607,75 @@ impl MailEngine {
         })
     }
 
+    /// 对一封邮件做分类：读正文 → 调 jev → 按门槛落本地标签 → 记审计。
+    ///
+    /// 模型返回不合法、超时、网络失败一律不写标签，只返回错误；正文不进审计。
+    pub async fn classify_message(&self, message_id: i64, threshold: f64) -> Result<MailLabel, EngineError> {
+        if !(0.0..=1.0).contains(&threshold) {
+            return Err(EngineError::BadRequest(
+                "把握程度门槛必须在 0 到 1 之间".to_string(),
+            ));
+        }
+        let body = self
+            .store()
+            .get_message_body(message_id)?
+            .ok_or_else(|| EngineError::BadRequest("邮件正文还没下载，请先打开一次这封邮件".to_string()))?;
+        let text = truncate_classify_body(&classify_body_text(&body));
+        if text.trim().is_empty() {
+            return Err(EngineError::BadRequest("这封邮件没有可以分类的正文".to_string()));
+        }
+        let labels = self.store().list_mail_labels()?;
+        let fallback = labels
+            .iter()
+            .find(|label| label.is_fallback)
+            .cloned()
+            .ok_or_else(|| EngineError::BadRequest("缺少兜底标签「其他」".to_string()))?;
+
+        let target = self.resolve_ai_target(AiFunction::Classify)?;
+        let secret = self.provider_secret(&target)?;
+        let route = self.resolve_route(AccountProxyMode::InheritGlobal)?;
+        let endpoint = Endpoint {
+            kind: provider_kind(target.kind),
+            base_url: &target.base_url,
+            api_key: secret.as_ref(),
+        };
+        let choices: Vec<String> = labels.iter().map(|label| label.name.clone()).collect();
+        let outcome = classify_mail(
+            route.as_ref(),
+            &endpoint,
+            &target.model,
+            &text,
+            &choices,
+            NOTIFICATION_VERIFY_TIMEOUT,
+        )
+        .await
+        .map_err(|err| self.audit_ai_error(AiFunction::Classify, &target, err))?;
+
+        let label = if outcome.confidence >= threshold {
+            labels
+                .iter()
+                .find(|label| label.name == outcome.choice)
+                .cloned()
+                .unwrap_or_else(|| fallback.clone())
+        } else {
+            fallback
+        };
+        let confidence = Some(outcome.confidence);
+        self.store()
+            .set_message_label(message_id, label.id, MailLabelSource::Auto, confidence)?;
+        self.store().insert_ai_audit(&NewAiAudit {
+            function: AiFunction::Classify.as_str().to_string(),
+            provider_id: Some(target.provider_id),
+            provider_label: target.provider_label.clone(),
+            model: target.model.clone(),
+            target_host: host_of(&target.base_url),
+            local: target.local,
+            outbound: !target.local,
+            outcome: "ok".to_string(),
+            detail: format!("标签：{}", label.name),
+        })?;
+        Ok(label)
+    }
     /// 分类前的外发确认预览：读本地正文算哈希并回一次性令牌；不发网络请求。
     ///
     /// 传入的邮件编号会去重并保持顺序；任何一封没有正文都会整体拒绝。
@@ -1587,13 +1656,17 @@ mod tests {
     }
 
     fn add_typesafe(engine: &MailEngine) -> i64 {
+        add_typesafe_at(engine, "https://api.typesafe.ai/v1".to_string())
+    }
+
+    fn add_typesafe_at(engine: &MailEngine, base_url: String) -> i64 {
         engine
             .save_ai_provider(
                 &AiProviderInput {
                     id: None,
                     label: "jev".to_string(),
                     kind: AiProviderKind::TypeSafe,
-                    base_url: "https://api.typesafe.ai/v1".to_string(),
+                    base_url,
                     default_model: "jev-latest".to_string(),
                     models: Vec::new(),
                     thinking_level: AiThinkingLevel::Off,
@@ -1759,6 +1832,108 @@ mod tests {
             .consume_classify_authorization(&preview.authorization_token)
             .expect_err("令牌只能用一次");
         assert!(matches!(error, EngineError::AiAuthorizationInvalid));
+    }
+
+    #[tokio::test]
+    async fn classify_message_above_threshold_uses_model_choice() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let port = fake_chat_server(r#"{"answers":{"category":{"choice":"账单","confidence":0.90}}}"#).await;
+        let provider_id = add_typesafe_at(&engine, format!("http://127.0.0.1:{port}/v1"));
+        engine
+            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
+            .expect("配置分类");
+        let message = seed_message_with_body(&engine, 10, "本月账单已出，请查收");
+
+        let label = engine.classify_message(message, 0.75).await.expect("分类应成功");
+        assert_eq!(label.name, "账单");
+        assert_eq!(label.color, "orange");
+
+        let stored = engine
+            .store()
+            .get_message_label(message)
+            .expect("读标签")
+            .expect("应有标签");
+        assert_eq!(stored.0.name, "账单");
+        assert_eq!(stored.2, mail_store::MailLabelSource::Auto);
+        assert_eq!(stored.1, Some(0.90));
+
+        let audits = engine.list_ai_audit(10).expect("审计");
+        assert!(
+            audits.iter().any(|audit| audit.detail.contains("账单")),
+            "审计要记结果标签"
+        );
+        for audit in audits {
+            assert!(
+                !audit.detail.contains("本月账单"),
+                "审计不能记正文：{}",
+                audit.detail
+            );
+            assert!(!audit.detail.contains("请查收"), "审计不能记正文");
+        }
+    }
+
+    #[tokio::test]
+    async fn classify_message_below_threshold_uses_fallback() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let port = fake_chat_server(r#"{"answers":{"category":{"choice":"账单","confidence":0.40}}}"#).await;
+        let provider_id = add_typesafe_at(&engine, format!("http://127.0.0.1:{port}/v1"));
+        engine
+            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
+            .expect("配置分类");
+        let message = seed_message_with_body(&engine, 20, "有点说不准的一封邮件");
+
+        let label = engine.classify_message(message, 0.75).await.expect("分类应成功");
+        assert_eq!(label.name, "其他");
+        assert!(label.is_fallback);
+        assert_eq!(label.color, "gray");
+    }
+
+    #[tokio::test]
+    async fn classify_message_failures_leave_no_label() {
+        // 1）模型给了候选外的类别：协议错误，不贴标签。
+        let dir = tempfile::tempdir().expect("临时目录");
+        let first_engine = engine(dir.path());
+        let port =
+            fake_chat_server(r#"{"answers":{"category":{"choice":"不存在的类别","confidence":0.9}}}"#).await;
+        let provider_id = add_typesafe_at(&first_engine, format!("http://127.0.0.1:{port}/v1"));
+        first_engine
+            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
+            .expect("配置分类");
+        let message = seed_message_with_body(&first_engine, 30, "随便一封邮件");
+
+        let error = first_engine
+            .classify_message(message, 0.75)
+            .await
+            .expect_err("非法结果应报错");
+        assert!(matches!(error, EngineError::Ai(_)), "{error:?}");
+        assert!(
+            first_engine
+                .store()
+                .get_message_label(message)
+                .expect("读标签")
+                .is_none(),
+            "失败不能贴标签"
+        );
+
+        // 2）网络连接不上：同样不贴标签，且不影响下一封独立邮件。
+        let dir2 = tempfile::tempdir().expect("临时目录");
+        let second_engine = engine(dir2.path());
+        let provider_id = add_typesafe_at(&second_engine, "http://127.0.0.1:1/v1".to_string());
+        second_engine
+            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
+            .expect("配置分类");
+        let message = seed_message_with_body(&second_engine, 31, "另一封邮件");
+        let _ = second_engine
+            .classify_message(message, 0.75)
+            .await
+            .expect_err("网络失败应报错");
+        assert!(second_engine
+            .store()
+            .get_message_label(message)
+            .expect("读标签")
+            .is_none());
     }
 
     fn engine(dir: &std::path::Path) -> MailEngine {
