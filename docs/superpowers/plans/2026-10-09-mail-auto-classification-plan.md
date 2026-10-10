@@ -6,12 +6,12 @@
 |---|---|
 | 日期 | 2026-10-09 |
 | 分支 | codex/mail-auto-classification |
-| 规格 | docs/superpowers/specs/2026-10-09-mail-auto-classification-design.md v1.1 |
-| 总退出验证 | R1–R25 逐条可复现；四关全过；邮件正文只在授权后外发；标签只写本地库 |
+| 规格 | docs/superpowers/specs/2026-10-09-mail-auto-classification-design.md v1.2 |
+| 总退出验证 | R1–R27 逐条可复现；四关全过；邮件正文只在授权后外发；标签和颜色只写本地库 |
 
-**Goal:** 给统一收件箱接入 TypeSafe jev 分类，新增本地标签管理、自动与手动分类、列表标签显示和 label: 搜索。
+**Goal:** 给统一收件箱接入 TypeSafe jev 分类，新增本地标签管理、自动与手动分类、彩色胶囊列表显示和 label: 搜索。
 
-**Architecture:** 数据层新增 mail_label 与 message_label 两张本地表；mail-ai 新增 TypeSafe 协议适配；mail-core 负责授权、正文截取、阈值判定和审计；Tauri 外壳的现有新邮件轮询负责后台串行分类；React 界面负责配置、标签管理、右键入口和筛选。
+**Architecture:** 数据层新增带颜色的 mail_label 和 message_label 两张本地表；mail-ai 新增 TypeSafe 协议适配；mail-core 负责授权、正文截取、阈值判定和审计；Tauri 外壳的现有新邮件轮询负责后台串行分类；React 界面负责配置、标签颜色管理、右键入口、彩色胶囊显示和筛选。
 
 **Tech Stack:** Rust 2021、rusqlite、tokio、serde_json、Tauri、React、TypeScript、Vitest、SQLite WAL。
 
@@ -26,7 +26,7 @@
 - 正文最多外发前 2000 个字符，只发纯文本，不发附件，不加载远程图片。
 - 分类只允许 TypeSafe jev；其他站点不能承担翻译、摘要、润色、起草、通知识别以外的分类。
 - 一封邮件只有一个标签；把握低于门槛贴兜底标签，失败不贴标签。
-- 标签只写本地库，不同步账号，不上传服务器。
+- 标签和颜色只写本地库，不同步账号，不上传服务器；颜色只能从固定色板选，模型不接触颜色。
 - 每批改动必须通过：cargo fmt --all --check、cargo clippy --workspace --all-targets -- -D warnings、cargo test --workspace、npm run build。
 - Windows 终端找不到 cargo 时，先执行：$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"。
 - 写文件使用 UTF-8 无 BOM、LF；提交信息用中文；禁止提交 *.db、.env、密钥文件和构建产物。
@@ -54,10 +54,11 @@
 - P-D6：后台队列挂在 notify.rs 的现有轮询里，每轮最多处理 20 封；收信线程只投编号，不等待模型。
 - P-D7：邮件列表标签由 mail-store 查询直接带出，线程折叠行取最新一封的标签；前端只负责显示和点击搜索。
 - P-D8：分类开关与门槛存本机 settings.json；TypeSafe 站点密钥仍走系统保险箱，标签数据走 SQLite。
+- P-D9：标签颜色只存固定色板键；模型不返回颜色；前端用 data-label-color 加 CSS 色板映射显示，禁止接收任意样式或十六进制色值。
 
 ## 2. 规格与实际路径不一致的修正
 
-规格 v1.1 里提到的下面这些路径在执行时按本表理解，禁止按旧路径改代码：
+规格 v1.2 里提到的下面这些路径在执行时按本表理解，禁止按旧路径改代码：
 
 | 规格旧路径 | 实际路径 | 原因 |
 |---|---|---|
@@ -82,7 +83,7 @@
 
 **Interfaces:**
 - Consumes: 现有迁移器 run_migrations，第 12 条迁移。
-- Produces: mail_label、message_label 两张表；ai_provider 的 kind 放开 typesafe；ai_model_map 的 function 放开 classify；八条预置标签。
+- Produces: mail_label、message_label 两张表；ai_provider 的 kind 放开 typesafe；ai_model_map 的 function 放开 classify；八条带颜色预置标签；color 只接受固定色板键。
 
 - [ ] **Step 1: 先写失败测试**
 
@@ -98,6 +99,16 @@
             .query_row("SELECT COUNT(*) FROM mail_label", [], |row| row.get(0))
             .expect("数标签");
         assert_eq!(count, 8);
+        let fallback_color: String = store
+            .conn()
+            .query_row("SELECT color FROM mail_label WHERE is_fallback = 1", [], |row| row.get(0))
+            .expect("读兜底标签颜色");
+        assert_eq!(fallback_color, "gray");
+        let distinct_colors: i64 = store
+            .conn()
+            .query_row("SELECT COUNT(DISTINCT color) FROM mail_label", [], |row| row.get(0))
+            .expect("数标签颜色");
+        assert_eq!(distinct_colors, 8);
         let kind: String = store
             .conn()
             .query_row(
@@ -183,6 +194,7 @@ Expected: FAIL，提示找不到 mail_label 表或迁移版本仍是 12。
     CREATE TABLE IF NOT EXISTS mail_label (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
+        color TEXT NOT NULL CHECK (color IN ('gray', 'red', 'orange', 'amber', 'green', 'teal', 'blue', 'indigo', 'purple', 'pink')),
         sort_order INTEGER NOT NULL DEFAULT 0,
         is_fallback INTEGER NOT NULL DEFAULT 0 CHECK (is_fallback IN (0, 1)),
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -200,9 +212,9 @@ Expected: FAIL，提示找不到 mail_label 表或迁移版本仍是 12。
     ) STRICT;
     CREATE INDEX IF NOT EXISTS idx_message_label_label ON message_label (label_id);
 
-    INSERT INTO mail_label (name, sort_order, is_fallback) VALUES
-        ('客户', 10, 0), ('账单', 20, 0), ('通知', 30, 0), ('推广', 40, 0),
-        ('招聘', 50, 0), ('同事', 60, 0), ('家人', 70, 0), ('其他', 1000, 1);
+    INSERT INTO mail_label (name, color, sort_order, is_fallback) VALUES
+        ('客户', 'blue', 10, 0), ('账单', 'orange', 20, 0), ('通知', 'teal', 30, 0), ('推广', 'purple', 40, 0),
+        ('招聘', 'green', 50, 0), ('同事', 'indigo', 60, 0), ('家人', 'pink', 70, 0), ('其他', 'gray', 1000, 1);
 
 - [ ] **Step 4: 注册迁移并把所有版本断言改成 13**
 
@@ -238,7 +250,7 @@ Expected: PASS；另外跑一次 cargo test -p mail-store migrations -- --nocapt
 
 **Interfaces:**
 - Consumes: Store、StoreError、message 主键。
-- Produces: MailLabel、MailLabelSource；list_mail_labels、create_mail_label、rename_mail_label、delete_mail_label、reorder_mail_labels。
+- Produces: MailLabel、MailLabelSource、MAIL_LABEL_COLORS；list_mail_labels、create_mail_label、rename_mail_label、delete_mail_label、reorder_mail_labels、set_mail_label_color。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -261,8 +273,11 @@ Expected: PASS；另外跑一次 cargo test -p mail-store migrations -- --nocapt
             let store = store();
             let initial = store.list_mail_labels().expect("初始标签");
             assert_eq!(initial.len(), 8);
+            assert_eq!(initial.iter().find(|label| label.name == "其他").expect("兜底").color, "gray");
             let extra = store.create_mail_label("项目").expect("新增");
-            assert_eq!(store.list_mail_labels().expect("再查").len(), 9);
+            let after_create = store.list_mail_labels().expect("再查");
+            assert_eq!(after_create.len(), 9);
+            assert_eq!(after_create.iter().find(|label| label.id == extra).expect("新标签").color, "red");
             store.rename_mail_label(extra, "项目邮件").expect("改名");
             let mut order: Vec<i64> = initial.iter().map(|label| label.id).collect();
             order.insert(0, extra);
@@ -285,13 +300,26 @@ Expected: PASS；另外跑一次 cargo test -p mail-store migrations -- --nocapt
             let err = store.delete_mail_label(fallback.id).expect_err("不能删");
             assert!(matches!(err, StoreError::InvalidData(_)));
         }
+
+        #[test]
+        fn fallback_label_color_is_fixed_gray() {
+            let store = store();
+            let fallback = store
+                .list_mail_labels()
+                .expect("标签")
+                .into_iter()
+                .find(|label| label.is_fallback)
+                .expect("兜底");
+            let err = store.set_mail_label_color(fallback.id, "red").expect_err("不能改兜底颜色");
+            assert!(matches!(err, StoreError::InvalidData(_)));
+        }
     }
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: cargo test -p mail-store labels_can_be_created_renamed_deleted_and_reordered fallback_label_cannot_be_deleted -- --nocapture
+Run: cargo test -p mail-store labels_can_be_created_renamed_deleted_and_reordered fallback_label_cannot_be_deleted fallback_label_color_is_fixed_gray -- --nocapture
 
-Expected: FAIL，提示 label 模块或方法不存在。
+Expected: FAIL，提示 label 模块、颜色字段或方法不存在。
 
 - [ ] **Step 3: 定义结构与方法签名**
 
@@ -300,10 +328,15 @@ Expected: FAIL，提示 label 模块或方法不存在。
     use crate::connection::Store;
     use crate::error::StoreError;
 
+    pub const MAIL_LABEL_COLORS: [&str; 10] = [
+        "gray", "red", "orange", "amber", "green", "teal", "blue", "indigo", "purple", "pink",
+    ];
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct MailLabel {
         pub id: i64,
         pub name: String,
+        pub color: String,
         pub sort_order: i64,
         pub is_fallback: bool,
     }
@@ -317,15 +350,15 @@ Expected: FAIL，提示 label 模块或方法不存在。
         }
     }
 
-在 Store 的 impl 块实现：list_mail_labels、create_mail_label、rename_mail_label、delete_mail_label、reorder_mail_labels。删除前先查 is_fallback；是兜底标签返回 StoreError::InvalidData("兜底标签不能删除")。reorder_mail_labels 要求传入全部标签 ID、不能重复，并在事务里按顺序更新 sort_order。所有 SQL 用参数绑定。
+在 Store 的 impl 块实现：list_mail_labels、create_mail_label、rename_mail_label、delete_mail_label、reorder_mail_labels、set_mail_label_color。list_mail_labels 必须返回 color。create_mail_label 按 MAIL_LABEL_COLORS 顺序挑第一个尚未使用的颜色；全部用过时用当前标签数量对色板长度取模。set_mail_label_color 只接受固定色板键，并在写入前校验；删除标签前先查 is_fallback，是兜底标签返回 StoreError::InvalidData("兜底标签不能删除")；兜底标签改色返回 StoreError::InvalidData("兜底标签颜色不能修改")。reorder_mail_labels 要求传入全部标签 ID、不能重复，并在事务里按顺序更新 sort_order。所有 SQL 用参数绑定。
 
 - [ ] **Step 4: 导出模块**
 
-在 crates/mail-store/src/lib.rs 加 pub mod label;，并在 pub use 区加 MailLabel、MailLabelSource。
+在 crates/mail-store/src/lib.rs 加 pub mod label;，并在 pub use 区加 MailLabel、MailLabelSource、MAIL_LABEL_COLORS。
 
 - [ ] **Step 5: 跑测试**
 
-Run: cargo test -p mail-store labels_can_be_created_renamed_deleted_and_reordered fallback_label_cannot_be_deleted -- --nocapture
+Run: cargo test -p mail-store labels_can_be_created_renamed_deleted_and_reordered fallback_label_cannot_be_deleted fallback_label_color_is_fixed_gray -- --nocapture
 
 Expected: PASS。
 
@@ -855,7 +888,7 @@ Expected: PASS。src-tauri/Cargo.toml 已确认 package 名是 ymail，命令直
 
 **Interfaces:**
 - Consumes: Store 标签接口、MailEngine 分类授权接口。
-- Produces: list_mail_labels、create_mail_label、rename_mail_label、delete_mail_label、reorder_mail_labels、preview_classify_messages、classify_messages、set_message_label；InboxMessageDto 增加 labelId、labelName。
+- Produces: list_mail_labels、create_mail_label、rename_mail_label、delete_mail_label、reorder_mail_labels、set_mail_label_color、preview_classify_messages、classify_messages、set_message_label；MailLabelDto 增加 color；InboxMessageDto 增加 labelId、labelName、labelColor。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -863,13 +896,13 @@ Expected: PASS。src-tauri/Cargo.toml 已确认 package 名是 ymail，命令直
 
     #[test]
     fn label_dto_never_contains_secret_fields() {
-        let dto = MailLabelDto { id: 1, name: "账单".into(), sort_order: 10, is_fallback: false };
+        let dto = MailLabelDto { id: 1, name: "账单".into(), color: "orange".into(), sort_order: 10, is_fallback: false };
         let text = serde_json::to_string(&dto).expect("序列化");
         assert!(!text.contains("api_key"));
         assert!(!text.contains("secret"));
     }
 
-在 src/api.ts 的类型测试里断言 InboxMessage 有 labelId: number | null 和 labelName: string | null。
+在 src/api.ts 的类型测试里断言 InboxMessage 有 labelId: number | null、labelName: string | null 和 labelColor: string | null；MailLabel 有 color: string。
 
 - [ ] **Step 2: 跑测试确认失败**
 
@@ -880,11 +913,11 @@ Expected: FAIL，DTO 或类型不存在。
 
 - [ ] **Step 3: 加 DTO 与命令**
 
-命令参数全部用 camelCase 的 serde rename_all。create/rename/delete/reorder 只接受标签 ID 与名称；所有名称 trim 后非空、长度不超过 64。preview_classify_messages(message_ids: Vec<i64>) 返回站点、域名、模型、local、每封 messageId/contentHash/token。classify_messages(token: String) 只消费服务端保存的待授权，不接受前端再传 messageIds。set_message_label(message_id, label_id: Option<i64>) 使用 source=manual。
+命令参数全部用 camelCase 的 serde rename_all。create/rename/delete/reorder 只接受标签 ID 与名称；set_mail_label_color(label_id, color) 只接受固定色板键；所有名称 trim 后非空、长度不超过 64。preview_classify_messages(message_ids: Vec<i64>) 返回站点、域名、模型、local、每封 messageId/contentHash/token。classify_messages(token: String) 只消费服务端保存的待授权，不接受前端再传 messageIds。set_message_label(message_id, label_id: Option<i64>) 使用 source=manual。
 
 - [ ] **Step 4: 注册命令与列表字段**
 
-在 src-tauri/src/lib.rs 的 invoke_handler 注册全部新命令。InboxMessageDto::from_message 带出 label_id、label_name；没有标签时 serde 输出 null。
+在 src-tauri/src/lib.rs 的 invoke_handler 注册全部新命令。MailLabelDto 带出 color。InboxMessageDto::from_message 带出 label_id、label_name、label_color；没有标签时三个字段都输出 null。
 
 - [ ] **Step 5: 跑测试**
 
@@ -909,7 +942,7 @@ Expected: PASS。
 
 **Interfaces:**
 - Consumes: message_label、mail_label。
-- Produces: InboxMessage.label_id、InboxMessage.label_name；INBOX_COLUMNS 从 19 列变 21 列；线程最新一封带标签。
+- Produces: InboxMessage.label_id、InboxMessage.label_name、InboxMessage.label_color；INBOX_COLUMNS 从 19 列变 22 列；线程最新一封带标签和颜色。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -918,11 +951,12 @@ Expected: PASS。
     #[test]
     fn inbox_thread_uses_latest_message_label() {
         // 同一 thread 两封邮件，旧邮件账单、新邮件通知；
-        // list_inbox_threads 返回的通知是唯一 latest 标签。
+        // 断言 list_inbox_threads 返回的最新标签 name 是“通知”、color 是“teal”。
     }
 
     #[test]
     fn search_column_count_matches_inbox_columns() {
+        assert_eq!(INBOX_COLUMNS_COUNT, 22);
         assert_eq!(INBOX_COLUMNS_COUNT, crate::inbox::INBOX_COLUMNS.split(',').count());
     }
 
@@ -936,14 +970,14 @@ Expected: FAIL，字段/列数不存在。
 
 INBOX_COLUMNS 末尾加：
 
-    ml.label_id, l.name
+    ml.label_id, l.name, l.color
 
-THREAD_BASE 同步加两列，并在 FROM message m 后补：
+THREAD_BASE 同步加三列，并在 FROM message m 后补：
 
     LEFT JOIN message_label ml ON ml.message_id = m.id
     LEFT JOIN mail_label l ON l.id = ml.label_id
 
-线程窗口按新列位置取值：tkey 变 21，rn/message_count/unread_count 顺延。row_to_message 读取 19/20 标签下标，row_to_thread 同步改下标。get_inbox_message、list_inbox_messages、list_thread_messages、count 相关查询都补相同 JOIN，避免列错位。
+线程窗口按新列位置取值：tkey 变 22，rn/message_count/unread_count 顺延。row_to_message 读取 19/20/21 标签下标，row_to_thread 同步改下标。get_inbox_message、list_inbox_messages、list_thread_messages、count 相关查询都补相同 JOIN，避免列错位。
 
 - [ ] **Step 4: 跑测试**
 
@@ -1091,12 +1125,12 @@ Expected: PASS。
 - Modify: src/AiPanel.tsx
 - Modify: src/api.ts
 - Modify: src/i18n.en.ts
-- Modify: src/styles.css
+- Modify: src/index.css
 - Test: src/__tests__/ai.test.tsx
 
 **Interfaces:**
-- Consumes: list_mail_labels、create_mail_label、rename_mail_label、delete_mail_label、reorder_mail_labels。
-- Produces: 「分类标签管理」区；新增、改名、删除、上下调序；兜底标签删除按钮禁用。
+- Consumes: list_mail_labels、create_mail_label、rename_mail_label、delete_mail_label、reorder_mail_labels、set_mail_label_color。
+- Produces: 「分类标签管理」区；新增、改名、改颜色、删除、上下调序；每项有胶囊预览；兜底标签删除和改色按钮禁用。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -1104,7 +1138,9 @@ React 测试断言：
 
     - AI 功能页出现「分类标签管理」标题；
     - 初始八条标签；
-    - 「其他」的删除按钮 disabled；
+    - 每条标签有 data-label-preview，颜色与 color 一致；
+    - 「其他」的删除按钮和颜色选择器 disabled；
+    - 把「账单」改成红色后调用 set_mail_label_color 并重新拉回红色标签；
     - 点新增后出现新标签；
     - 点改名后名称变化；
     - 点上移后顺序变化。
@@ -1117,7 +1153,7 @@ Expected: FAIL，标题不存在。
 
 - [ ] **Step 3: 实现管理区**
 
-放在 AI 功能页功能映射之后、审计之前。名称输入 trim 后为空不提交，超过 64 字符给中文错误。删除前弹确认，提示该标签下邮件会变成没有标签；兜底标签禁用删除。所有成功操作重新拉 list_mail_labels，不靠本地猜顺序。
+放在 AI 功能页功能映射之后、审计之前。颜色选择器只列 MAIL_LABEL_COLORS 的十项，不提供任意取色器或十六进制输入；每项用同样的胶囊样式做预览，预览节点带 data-label-preview={label.color}。名称输入 trim 后为空不提交，超过 64 字符给中文错误。删除前弹确认，提示该标签下邮件会变成没有标签；兜底标签禁用删除和改色。所有成功操作重新拉 list_mail_labels，不靠本地猜顺序或颜色。
 
 - [ ] **Step 4: 跑测试**
 
@@ -1127,7 +1163,7 @@ Expected: PASS。
 
 - [ ] **Step 5: 提交**
 
-    git add src/AiPanel.tsx src/api.ts src/i18n.en.ts src/styles.css src/__tests__/ai.test.tsx
+    git add src/AiPanel.tsx src/api.ts src/i18n.en.ts src/index.css src/__tests__/ai.test.tsx
     git commit -m "界面：在 AI 功能里增加分类标签管理"
 
 ---
@@ -1138,16 +1174,16 @@ Expected: PASS。
 - Modify: src/InboxPanel.tsx:330-480、1400-1475
 - Modify: src/api.ts:219-310
 - Modify: src/i18n.en.ts
-- Modify: src/styles.css
+- Modify: src/index.css
 - Test: src/__tests__/flaggedView.test.tsx、src/__tests__/inbox.test.tsx
 
 **Interfaces:**
-- Consumes: InboxMessage.labelId、labelName；SearchQuery label。
-- Produces: 标签胶囊放在时间前面；点标签设置 label:标签名；搜索提示包含 label:。
+- Consumes: InboxMessage.labelId、labelName、labelColor；SearchQuery label；MAIL_LABEL_COLORS。
+- Produces: 彩色完整胶囊放在时间前面；点标签设置 label:标签名；搜索提示包含 label:。
 
 - [ ] **Step 1: 写失败测试**
 
-测试数据带 labelName: "账单"，断言标签节点在 .inbox-row-time 的前一个兄弟节点；点击后搜索框值为 label:账单，并触发列表筛选。无标签时不渲染胶囊。
+测试数据带 labelName: "账单"、labelColor: "orange"，断言标签节点在 .inbox-row-time 的前一个兄弟节点，且带 data-label-color="orange"；点击后搜索框值为 label:账单，并触发列表筛选。无标签时不渲染胶囊。平铺、子邮件和会话折叠三种行都要覆盖。
 
 - [ ] **Step 2: 跑测试确认失败**
 
@@ -1159,10 +1195,14 @@ Expected: FAIL。
 
 邮件行结构：
 
-    <span className="inbox-row-label">{message.labelName}</span>
+    {message.labelName && message.labelColor ? (
+      <span className="inbox-row-label" data-label-color={message.labelColor}>
+        {message.labelName}
+      </span>
+    ) : null}
     <time className="inbox-row-time">{formatDate(message.dateUtc)}</time>
 
-标签点击 stopPropagation，设置搜索为 label:标签名；搜索提示改成「搜索邮件，支持 from: / has: / is: / before: / label:」。
+胶囊只包裹标签文字，整块紧挨时间放在时间前面，不额外换行。标签点击 stopPropagation，设置搜索为 label:标签名；搜索提示改成「搜索邮件，支持 from: / has: / is: / before: / label:」。在 src/index.css 的 .inbox-row-time 前补 .inbox-row-label 的完整圆角、内边距、边框和文字样式，并为十种 data-label-color 分别写浅色与深色两组映射；颜色值只来自 CSS，不拼到 DOM 的 style 属性里。
 
 - [ ] **Step 4: 跑测试**
 
@@ -1172,7 +1212,7 @@ Expected: PASS。
 
 - [ ] **Step 5: 提交**
 
-    git add src/InboxPanel.tsx src/api.ts src/i18n.en.ts src/styles.css src/__tests__/flaggedView.test.tsx src/__tests__/inbox.test.tsx
+    git add src/InboxPanel.tsx src/api.ts src/i18n.en.ts src/index.css src/__tests__/flaggedView.test.tsx src/__tests__/inbox.test.tsx
     git commit -m "界面：邮件标签显示在时间前并支持点选筛选"
 
 ---
@@ -1227,7 +1267,7 @@ Expected: PASS。
 - Modify: src/MessageReader.tsx
 - Modify: src/api.ts
 - Modify: src/i18n.en.ts
-- Modify: src/styles.css
+- Modify: src/index.css
 - Test: src/__tests__/reader.test.tsx
 
 **Interfaces:**
@@ -1236,7 +1276,7 @@ Expected: PASS。
 
 - [ ] **Step 1: 写失败测试**
 
-断言下拉列出八条标签，能选「账单」，能选「清除标签」，保存后调用 set_message_label 并触发列表刷新。
+断言下拉列出八条标签并保留每条 color 数据，能选「账单」，能选「清除标签」，保存后调用 set_message_label 并触发列表刷新。
 
 - [ ] **Step 2: 跑测试确认失败**
 
@@ -1256,7 +1296,7 @@ Expected: PASS。
 
 - [ ] **Step 5: 提交**
 
-    git add src/MessageReader.tsx src/api.ts src/i18n.en.ts src/styles.css src/__tests__/reader.test.tsx
+    git add src/MessageReader.tsx src/api.ts src/i18n.en.ts src/index.css src/__tests__/reader.test.tsx
     git commit -m "界面：读信页支持手动修改标签"
 
 ---
@@ -1365,11 +1405,11 @@ Expected: 只能看到三个记忆文件修改；没有 *.db、.env、构建产�
 
 ## 4. 测试策略
 
-- 数据层全部走真实 SQLite 临时库，不用假 SQL；覆盖旧库升级、预置标签、唯一兜底、级联删除。
+- 数据层全部走真实 SQLite 临时库，不用假 SQL；覆盖旧库升级、带颜色预置标签、颜色校验、自动分配、兜底固定灰色、唯一兜底、级联删除。
 - AI 协议用本地假 HTTP 服务，覆盖 200、400、500、超时、confidence 非法、choice 非法。
 - 授权测试必须覆盖令牌一次性、内容和邮件编号绑定、取消不读取正文。
-- 收件箱 SQL 测平铺、线程折叠、搜索分页、无标签和标签改名后的显示。
-- React 测试按任务文件分别覆盖标签位置、点选筛选、右键单封、取消不发、读信修改。
+- 收件箱 SQL 测平铺、线程折叠、搜索分页、无标签、标签改名和颜色变化后的显示。
+- React 测试按任务文件分别覆盖彩色胶囊位置、颜色管理、点选筛选、右键单封、取消不发、读信修改。
 - 四关是总门禁，任何一项失败都不能进入收尾提交。
 
 ## 5. 风险与回退
@@ -1380,6 +1420,7 @@ Expected: 只能看到三个记忆文件修改；没有 *.db、.env、构建产�
 - 迁移失败：0013 在事务里执行；回退只回滚迁移，不写半成品表。
 - 标签误删：删除前弹确认；删除只清本地关联，不回写服务器。
 - 命令契约变化：前端只通过 src/api.ts 封装；回退一个命令时同步删注册和类型。
+- 固定色板在浅色和深色主题下的对比度没做真机观感验证：上线前逐色看一遍；不满意时只改 src/index.css 的映射，不改数据库颜色键。
 
 ## 6. 检查点
 
@@ -1389,7 +1430,7 @@ Expected: 只能看到三个记忆文件修改；没有 *.db、.env、构建产�
 - A4 完成后：npm run test 相关前端测试全绿。
 - A5 完成后：四关全绿，.ai-memory 更新。
 
-## 7. 总退出验证（R1–R25）
+## 7. 总退出验证（R1–R27）
 
 | 需求 | 验证任务 | 具体证据 |
 |---|---|---|
@@ -1418,6 +1459,8 @@ Expected: 只能看到三个记忆文件修改；没有 *.db、.env、构建产�
 | R23 | Task 15 | 门槛默认 75，范围 50–99，越界回 75 |
 | R24 | Task 9、18 | 右键菜单、单封确认、取消不外发 |
 | R25 | Task 18 | 只传当前 message.id，不提供多选入口 |
+| R26 | Task 2、12、16 | 固定色板校验、颜色修改命令、管理区预览和兜底禁改测试通过；颜色不进入 AI 请求 |
+| R27 | Task 1、13、17 | 预置颜色落库；收件箱查询带出 label_color；胶囊紧挨时间之前且十色浅深主题映射存在 |
 
 ## 8. 执行交接
 
