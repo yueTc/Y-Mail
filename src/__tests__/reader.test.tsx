@@ -2,7 +2,7 @@
 //!
 //! 这里渲染真实的 `MessageReader`，只把 Tauri 命令层（../api）换成内存桩。
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import MessageReader, {
@@ -11,7 +11,7 @@ import MessageReader, {
   externalReaderLink,
   isExecutableAttachment,
 } from "../MessageReader";
-import type { InboxMessage, MessageAttachment, MessageBody } from "../api";
+import type { InboxMessage, MailLabel, MessageAttachment, MessageBody } from "../api";
 import { api } from "../api";
 
 vi.mock("../api", () => ({
@@ -26,6 +26,8 @@ vi.mock("../api", () => ({
     rememberRemoteSender: vi.fn(),
     listTrustedRemoteSenders: vi.fn(),
     forgetRemoteSender: vi.fn(),
+    listMailLabels: vi.fn(),
+    setMessageLabel: vi.fn(),
   },
 }));
 
@@ -103,6 +105,7 @@ beforeEach(() => {
   vi.mocked(api.getMessageBody).mockResolvedValue(body());
   vi.mocked(api.downloadAttachment).mockResolvedValue("D:/downloads/报告.pdf");
   vi.mocked(api.rememberRemoteSender).mockResolvedValue(["z@example.com"]);
+  vi.mocked(api.listMailLabels).mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -307,5 +310,52 @@ describe("读信窗格的附件与深色模式", () => {
       const button = screen.getByRole("button", { name: "已过期" }) as HTMLButtonElement;
       expect(button.disabled).toBe(true);
     });
+  });
+});
+describe("读信页手动改标签", () => {
+  const LABELS: MailLabel[] = [
+    { id: 1, name: "客户", color: "blue", sortOrder: 10, isFallback: false },
+    { id: 2, name: "账单", color: "orange", sortOrder: 20, isFallback: false },
+    { id: 3, name: "通知", color: "teal", sortOrder: 30, isFallback: false },
+    { id: 4, name: "推广", color: "purple", sortOrder: 40, isFallback: false },
+    { id: 5, name: "招聘", color: "green", sortOrder: 50, isFallback: false },
+    { id: 6, name: "同事", color: "indigo", sortOrder: 60, isFallback: false },
+    { id: 7, name: "家人", color: "pink", sortOrder: 70, isFallback: false },
+    { id: 8, name: "其他", color: "gray", sortOrder: 1000, isFallback: true },
+  ];
+
+  it("下拉列出八条标签，能选账单也能清除，并通知外层刷新", async () => {
+    vi.mocked(api.listMailLabels).mockResolvedValue(LABELS);
+    vi.mocked(api.setMessageLabel).mockResolvedValue(undefined);
+    const onLabelChanged = vi.fn();
+    render(<MessageReader message={MESSAGE} onLabelChanged={onLabelChanged} />);
+
+    const select = (await screen.findByLabelText("邮件标签")) as HTMLSelectElement;
+    const options = within(select).getAllByRole("option");
+    expect(options.length).toBe(9);
+    expect(options.some((option) => option.textContent === "账单")).toBe(true);
+    expect(options.some((option) => option.textContent === "清除标签")).toBe(true);
+
+    fireEvent.change(select, { target: { value: "2" } });
+    await waitFor(() =>
+      expect(vi.mocked(api.setMessageLabel)).toHaveBeenCalledWith(42, 2),
+    );
+    await waitFor(() => expect(onLabelChanged).toHaveBeenCalled());
+
+    fireEvent.change(select, { target: { value: "" } });
+    await waitFor(() =>
+      expect(vi.mocked(api.setMessageLabel)).toHaveBeenCalledWith(42, null),
+    );
+  });
+
+  it("保存失败给中文提示，不改界面选择", async () => {
+    vi.mocked(api.listMailLabels).mockResolvedValue(LABELS);
+    vi.mocked(api.setMessageLabel).mockRejectedValue(new Error("后端拒绝"));
+    render(<MessageReader message={MESSAGE} />);
+
+    const select = (await screen.findByLabelText("邮件标签")) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "2" } });
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("后端拒绝"));
+    expect(select.value).toBe("");
   });
 });

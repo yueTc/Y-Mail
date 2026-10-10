@@ -16,6 +16,7 @@ import {
   type AiTranslation,
   type InboxMessage,
   type InlineImage,
+  type MailLabel,
   type MessageAttachment,
   type MessageBody,
 } from "./api";
@@ -598,6 +599,8 @@ export interface MessageReaderProps {
   aiEnabled?: boolean;
   /** 切换红旗；不传时标题区不显示按钮。 */
   onToggleFlag?: (message: InboxMessage) => void;
+  /** 手动改过标签后通知外层刷新列表；不传时只保存不刷新。 */
+  onLabelChanged?: () => void;
 }
 
 /** 右栏读信窗格：正文、远程图片放行提示与附件清单。 */
@@ -605,6 +608,7 @@ export default function MessageReader({
   message,
   aiEnabled = false,
   onToggleFlag,
+  onLabelChanged,
 }: MessageReaderProps) {
   const [body, setBody] = useState<MessageBody>();
   const [loading, setLoading] = useState(false);
@@ -646,6 +650,10 @@ export default function MessageReader({
   const [summaryAuth, setSummaryAuth] = useState<AiAuthorization>();
   const [summaryAuthBusy, setSummaryAuthBusy] = useState(false);
   const [aiDowngraded, setAiDowngraded] = useState(false);
+  // 本地标签：下拉只列固定标签；保存失败不乐观改界面。
+  const [labels, setLabels] = useState<MailLabel[]>([]);
+  const [labelBusy, setLabelBusy] = useState(false);
+  const [labelError, setLabelError] = useState("");
 
   const messageId = message?.id;
   /** 用户本封点过放行（请求参数用它，避免后端已经自动放行时重复请求）。 */
@@ -679,6 +687,40 @@ export default function MessageReader({
       cancelled = true;
     };
   }, [messageId, userAllowedRemote, reloadKey]);
+
+  /** 标签列表只读一次；读取失败按没有标签处理，不打断读信。 */
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listMailLabels()
+      .then((list) => {
+        if (!cancelled) setLabels(list);
+      })
+      .catch(() => {
+        if (!cancelled) setLabels([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** 保存标签：空值表示清除；成功后才通知外层刷新。 */
+  const saveLabel = useCallback(
+    async (value: string) => {
+      if (message === undefined) return;
+      setLabelBusy(true);
+      setLabelError("");
+      try {
+        await api.setMessageLabel(message.id, value === "" ? null : Number(value));
+        onLabelChanged?.();
+      } catch (caught) {
+        setLabelError(describeError(caught));
+      } finally {
+        setLabelBusy(false);
+      }
+    },
+    [message, onLabelChanged],
+  );
 
   /** 切邮件时清掉上一封的内嵌图加载状态，避免串封。 */
   useEffect(() => {
@@ -1042,6 +1084,28 @@ export default function MessageReader({
             <span className="reader-meta-addr">{message.fromAddr}</span>
           )}
           <span>{formatReaderTime(message.dateUtc)}</span>
+        </div>
+        <div className="reader-label-row">
+          <label>
+            {t("标签")}<select
+              aria-label={t("邮件标签")}
+              value={message.labelId === null ? "" : String(message.labelId)}
+              disabled={labelBusy}
+              onChange={(event) => void saveLabel(event.target.value)}
+            >
+              <option value="">{t("清除标签")}</option>
+              {labels.map((label) => (
+                <option key={label.id} value={label.id}>
+                  {label.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {labelError && (
+            <span className="error" role="alert">
+              {labelError}
+            </span>
+          )}
         </div>
         <div className="reader-ai-tools">
           <button

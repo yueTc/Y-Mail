@@ -3143,3 +3143,16 @@ body.screenshot-body {
   flex: 1 1 10em;
   min-width: 6em;
 }
+/* 读信页标签下拉：和 AI 工具按钮同一列，浅深主题都沿用面板配色。 */
+.reader-label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  flex-wrap: wrap;
+}
+.reader-label-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

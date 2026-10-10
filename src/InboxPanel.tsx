@@ -1560,6 +1560,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
             message={selectedMessage}
             aiEnabled={aiEnabled}
             onToggleFlag={(message) => void toggleFlag(message)}
+            onLabelChanged={() => void load(true)}
           />
         )}
       </aside>
