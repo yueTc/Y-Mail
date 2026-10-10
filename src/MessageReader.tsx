@@ -691,14 +691,16 @@ export default function MessageReader({
   /** 标签列表只读一次；读取失败按没有标签处理，不打断读信。 */
   useEffect(() => {
     let cancelled = false;
-    api
-      .listMailLabels()
-      .then((list) => {
+    const load = async () => {
+      try {
+        const list = await api.listMailLabels();
         if (!cancelled) setLabels(list);
-      })
-      .catch(() => {
+      } catch {
+        // 读不到标签不影响读信；界面上就没有可选项。
         if (!cancelled) setLabels([]);
-      });
+      }
+    };
+    void load();
     return () => {
       cancelled = true;
     };
