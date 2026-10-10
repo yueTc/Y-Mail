@@ -48,7 +48,7 @@ pub async fn list_models(
     endpoint: &Endpoint<'_>,
     timeout: Duration,
 ) -> Result<Vec<String>, AiError> {
-    if endpoint.kind.translation_only() {
+    if endpoint.kind.translation_only() || endpoint.kind == ProviderKind::TypeSafe {
         return Err(AiError::Unsupported("拉取模型列表"));
     }
     let url = join_url(endpoint.base_url, "models");
@@ -84,6 +84,78 @@ pub async fn list_models(
         return Err(AiError::Protocol);
     }
     Ok(models)
+}
+
+/// 一次邮件分类的结果。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassifyOutcome {
+    /// 模型选中的标签名。
+    pub choice: String,
+    /// 把握程度，0 到 1。
+    pub confidence: f64,
+}
+
+/// 调 TypeSafe jev 做一次邮件分类。
+///
+/// `state` 是邮件正文纯文本（调用方负责截断与安全处理），`choices` 是当前
+/// 本地标签名。返回模型选中的标签与把握程度；结果不合法一律按协议错误处理。
+pub async fn classify_mail(
+    route: Option<&ProxyRoute>,
+    endpoint: &Endpoint<'_>,
+    model: &str,
+    state: &str,
+    choices: &[String],
+    timeout: Duration,
+) -> Result<ClassifyOutcome, AiError> {
+    if endpoint.kind != ProviderKind::TypeSafe {
+        return Err(AiError::Unsupported("邮件分类"));
+    }
+    if model.trim().is_empty() {
+        return Err(AiError::MissingModel);
+    }
+    if state.trim().is_empty() || choices.is_empty() {
+        return Err(AiError::Protocol);
+    }
+    let url = join_url(endpoint.base_url, "systemone");
+    let headers = auth_headers(endpoint)?;
+    let body = json!({
+        "state": state,
+        "model": model,
+        "questions": [{
+            "name": "category",
+            "type": "choice",
+            "criteria": "请只从候选标签中选择最匹配的一项",
+            "choices": choices
+        }]
+    });
+    let payload = body.to_string();
+    let response = request(route, "POST", &url, &headers, Some(&payload), timeout).await?;
+    if response.status != 200 {
+        return Err(status_error(response.status, endpoint, &response.body));
+    }
+    let value: Value = serde_json::from_str(&response.body).map_err(|_| AiError::Protocol)?;
+    let answer = value
+        .get("answers")
+        .and_then(|answers| answers.get("category"))
+        .ok_or(AiError::Protocol)?;
+    let choice = answer
+        .get("choice")
+        .and_then(|choice| choice.as_str())
+        .map(str::trim)
+        .filter(|choice| !choice.is_empty())
+        .ok_or(AiError::Protocol)?
+        .to_string();
+    if !choices.iter().any(|candidate| candidate == &choice) {
+        return Err(AiError::Protocol);
+    }
+    let confidence = answer
+        .get("confidence")
+        .and_then(Value::as_f64)
+        .ok_or(AiError::Protocol)?;
+    if !(0.0..=1.0).contains(&confidence) {
+        return Err(AiError::Protocol);
+    }
+    Ok(ClassifyOutcome { choice, confidence })
 }
 
 /// 发一次对话，返回模型输出的纯文本。
@@ -366,6 +438,97 @@ mod tests {
             base_url,
             api_key: None,
         }
+    }
+
+    /// 假服务器：收一次请求，把原始请求文本回传给测试。
+    async fn fake_capture_server(payload: &'static str) -> (u16, std::sync::mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定成功");
+        let port = listener.local_addr().expect("取地址").port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("接受连接");
+            let mut buf = vec![0u8; 8192];
+            let read = socket.read(&mut buf).await.expect("读请求");
+            let request = String::from_utf8_lossy(&buf[..read]).to_string();
+            let _ = tx.send(request);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                payload.len()
+            );
+            socket.write_all(response.as_bytes()).await.expect("写响应");
+        });
+        (port, rx)
+    }
+
+    #[tokio::test]
+    async fn typesafe_classify_sends_systemone_request_and_parses_answer() {
+        let (port, captured) =
+            fake_capture_server(r#"{"answers":{"category":{"choice":"账单","confidence":0.91}}}"#).await;
+        let base = format!("http://127.0.0.1:{port}/v1");
+        let endpoint = endpoint(ProviderKind::TypeSafe, &base);
+        let choices = vec!["账单".to_string(), "其他".to_string()];
+        let outcome = classify_mail(
+            None,
+            &endpoint,
+            "jev-latest",
+            "本月账单已出",
+            &choices,
+            Duration::from_secs(15),
+        )
+        .await
+        .expect("应能分类");
+        assert_eq!(outcome.choice, "账单");
+        assert!((outcome.confidence - 0.91).abs() < 0.0001);
+
+        let request = captured.recv().expect("拿到请求");
+        assert!(request.contains("POST /v1/systemone"), "{request}");
+        assert!(request.contains("\"state\":\"本月账单已出\""), "{request}");
+        assert!(request.contains("\"model\":\"jev-latest\""), "{request}");
+        assert!(request.contains("\"name\":\"category\""), "{request}");
+        assert!(request.contains("\"type\":\"choice\""), "{request}");
+        assert!(request.contains("其他"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn typesafe_classify_rejects_out_of_range_confidence() {
+        let port = fake_server(
+            "200 OK",
+            r#"{"answers":{"category":{"choice":"账单","confidence":1.5}}}"#,
+        )
+        .await;
+        let base = format!("http://127.0.0.1:{port}/v1");
+        let error = classify_mail(
+            None,
+            &endpoint(ProviderKind::TypeSafe, &base),
+            "jev-latest",
+            "本月账单已出",
+            &["账单".to_string(), "其他".to_string()],
+            Duration::from_secs(15),
+        )
+        .await
+        .expect_err("把握程度超范围应报错");
+        assert!(matches!(error, AiError::Protocol));
+    }
+
+    #[tokio::test]
+    async fn typesafe_classify_rejects_choice_outside_candidates() {
+        let port = fake_server(
+            "200 OK",
+            r#"{"answers":{"category":{"choice":"未知类别","confidence":0.9}}}"#,
+        )
+        .await;
+        let base = format!("http://127.0.0.1:{port}/v1");
+        let error = classify_mail(
+            None,
+            &endpoint(ProviderKind::TypeSafe, &base),
+            "jev-latest",
+            "本月账单已出",
+            &["账单".to_string(), "其他".to_string()],
+            Duration::from_secs(15),
+        )
+        .await
+        .expect_err("候选外的选择应报错");
+        assert!(matches!(error, AiError::Protocol));
     }
 
     #[tokio::test]

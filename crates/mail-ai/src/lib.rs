@@ -11,7 +11,9 @@ mod provider;
 mod segment;
 pub mod verify;
 
-pub use client::{chat, list_models, translate, ChatOutcome, Endpoint, TranslationOutcome};
+pub use client::{
+    chat, classify_mail, list_models, translate, ChatOutcome, ClassifyOutcome, Endpoint, TranslationOutcome,
+};
 pub use error::AiError;
 pub use provider::{
     is_local_host, join_url, normalize_base_url, ProviderFunction, ProviderKind, ThinkingLevel,
