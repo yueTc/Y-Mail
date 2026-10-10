@@ -85,6 +85,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "0012_ai_notification_verify",
         sql: include_str!("sql/0012_ai_notification_verify.sql"),
     },
+    Migration {
+        version: 13,
+        name: "0013_mail_label_classification",
+        sql: include_str!("sql/0013_mail_label_classification.sql"),
+    },
 ];
 
 /// 单条迁移的执行结果。
@@ -295,8 +300,8 @@ mod tests {
         let mut store = Store::open_in_memory().expect("打开内存库");
 
         let first = store.run_migrations().expect("首次迁移");
-        assert_eq!(first.applied_count(), 12, "首次应应用 12 条迁移");
-        assert_eq!(first.current_version, 12);
+        assert_eq!(first.applied_count(), 13, "首次应应用 13 条迁移");
+        assert_eq!(first.current_version, 13);
         assert_eq!(first.applied[0].name, "0001_core_bootstrap");
         assert!(!first.applied[0].applied_at.is_empty(), "登记时间不应为空");
 
@@ -305,7 +310,7 @@ mod tests {
 
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
         );
     }
 
@@ -372,7 +377,7 @@ mod tests {
         store.run_migrations().expect("升级到三号库");
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
         );
 
         // 升级到七号库后，旧账号的授权字段应为空（NULL / 空串），不影响既有数据。
@@ -426,7 +431,7 @@ mod tests {
         store.run_migrations().expect("升级到十二号库");
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
         );
 
         // 旧 translate 映射要保留；新增 notification_verify 要能写；非法值仍被拒。
@@ -454,9 +459,148 @@ mod tests {
     }
 
     #[test]
+    fn migration_0013_creates_mail_labels() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let mut store = Store::open(dir.path().join("mail.db")).expect("打开数据库");
+        store.run_migrations().expect("跑迁移");
+        let count: i64 = store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM mail_label", [], |row| row.get(0))
+            .expect("数标签");
+        assert_eq!(count, 8);
+        let fallback_color: String = store
+            .conn()
+            .query_row("SELECT color FROM mail_label WHERE is_fallback = 1", [], |row| {
+                row.get(0)
+            })
+            .expect("读兜底标签颜色");
+        assert_eq!(fallback_color, "gray");
+        let distinct_colors: i64 = store
+            .conn()
+            .query_row("SELECT COUNT(DISTINCT color) FROM mail_label", [], |row| {
+                row.get(0)
+            })
+            .expect("数标签颜色");
+        assert_eq!(distinct_colors, 8);
+        let kind: String = store
+            .conn()
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ai_provider'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("读建表 SQL");
+        assert!(kind.contains("typesafe"), "站点约束要包含 typesafe：{kind}");
+        let function: String = store
+            .conn()
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ai_model_map'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("读功能映射 SQL");
+        assert!(
+            function.contains("classify"),
+            "功能约束要包含 classify：{function}"
+        );
+    }
+
+    #[test]
+    fn 从十二号库升级后分类站点映射与标签可用() {
+        let mut store = Store::open_in_memory().expect("打开内存库");
+        {
+            let conn = store.raw_connection_for_test();
+            conn.execute_batch(super::MIGRATION_TABLE_SQL).expect("建登记表");
+            for migration in &MIGRATIONS[..12] {
+                conn.execute_batch(migration.sql).expect("应用旧迁移");
+                conn.execute(
+                    "INSERT INTO schema_migration (version, name, checksum) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![migration.version, migration.name, checksum(migration.sql)],
+                )
+                .expect("登记旧迁移");
+            }
+            conn.execute(
+                "INSERT INTO ai_provider (label, kind, base_url, default_model, models_json) \
+                 VALUES ('本机', 'ollama', 'http://127.0.0.1:11434/v1', 'qwen', '[\"qwen\",\"llama\"]')",
+                [],
+            )
+            .expect("插入旧站点");
+            conn.execute(
+                "INSERT INTO ai_model_map (function, provider_id, model) VALUES ('translate', 1, 'qwen')",
+                [],
+            )
+            .expect("插入旧映射");
+        }
+
+        store.run_migrations().expect("升级到十三号库");
+        assert_eq!(
+            store.applied_migration_versions().expect("读取版本"),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+        );
+
+        let conn = store.raw_connection_for_test();
+        // 旧站点和旧映射必须原样保留。
+        let (label, models): (String, String) = conn
+            .query_row(
+                "SELECT label, models_json FROM ai_provider WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("旧站点应保留");
+        assert_eq!(label, "本机");
+        assert_eq!(models, "[\"qwen\",\"llama\"]");
+        let kept: String = conn
+            .query_row(
+                "SELECT model FROM ai_model_map WHERE function = 'translate'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("旧映射应保留");
+        assert_eq!(kept, "qwen");
+
+        // 升级后新增的 typesafe 站点与 classify 映射要能写；非法值仍被拒。
+        conn.execute(
+            "INSERT INTO ai_provider (label, kind, base_url) VALUES ('jev', 'typesafe', 'https://api.typesafe.ai/v1')",
+            [],
+        )
+        .expect("升级后应能写 typesafe 站点");
+        let typesafe_id: i64 = conn
+            .query_row("SELECT id FROM ai_provider WHERE kind = 'typesafe'", [], |row| {
+                row.get(0)
+            })
+            .expect("读 typesafe 站点");
+        conn.execute(
+            "INSERT INTO ai_model_map (function, provider_id, model) VALUES ('classify', ?1, 'jev-latest')",
+            rusqlite::params![typesafe_id],
+        )
+        .expect("升级后应能写 classify 映射");
+        let bad_kind = conn.execute(
+            "INSERT INTO ai_provider (label, kind, base_url) VALUES ('坏', 'nope', 'https://x')",
+            [],
+        );
+        assert!(bad_kind.is_err(), "非法站点类型仍应被 CHECK 拒绝");
+        let bad_function = conn.execute(
+            "INSERT INTO ai_model_map (function, provider_id, model) VALUES ('nope', 1, 'x')",
+            [],
+        );
+        assert!(bad_function.is_err(), "非法功能值仍应被 CHECK 拒绝");
+
+        // 标签表升级后应有八条预置标签，且兜底唯一。
+        let labels: i64 = conn
+            .query_row("SELECT COUNT(*) FROM mail_label", [], |row| row.get(0))
+            .expect("数标签");
+        assert_eq!(labels, 8);
+        let second_fallback = conn.execute(
+            "INSERT INTO mail_label (name, color, sort_order, is_fallback) VALUES ('假兜底', 'gray', 2000, 1)",
+            [],
+        );
+        assert!(second_fallback.is_err(), "兜底标签只能有一条");
+    }
+
+    #[test]
     fn 迁移清单与校验和的基本性质() {
-        assert_eq!(MIGRATIONS.len(), 12);
-        assert_eq!(supported_version(), 12);
+        assert_eq!(MIGRATIONS.len(), 13);
+        assert_eq!(supported_version(), 13);
         assert_eq!(checksum("abc"), checksum("abc"));
         assert_ne!(checksum("abc"), checksum("abd"));
     }
