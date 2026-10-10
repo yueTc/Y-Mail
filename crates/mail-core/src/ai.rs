@@ -607,6 +607,18 @@ impl MailEngine {
         })
     }
 
+    /// 自动分类：这封邮件已经有标签就跳过，没有才真正分类。返回是否处理了它。
+    pub async fn classify_message_if_untagged(
+        &self,
+        message_id: i64,
+        threshold: f64,
+    ) -> Result<bool, EngineError> {
+        if self.store().get_message_label(message_id)?.is_some() {
+            return Ok(false);
+        }
+        self.classify_message(message_id, threshold).await?;
+        Ok(true)
+    }
     /// 对一封邮件做分类：读正文 → 调 jev → 按门槛落本地标签 → 记审计。
     ///
     /// 模型返回不合法、超时、网络失败一律不写标签，只返回错误；正文不进审计。

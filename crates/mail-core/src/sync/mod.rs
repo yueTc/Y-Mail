@@ -7,7 +7,7 @@ pub(crate) mod fetcher;
 pub(crate) mod state;
 pub(crate) mod worker;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use mail_store::Store;
@@ -22,7 +22,12 @@ use worker::WorkerContext;
 
 impl SyncService {
     /// 组装服务；存储与保险箱句柄由引擎传入，保证只有一条写库路径。
-    pub fn new(store: Arc<Mutex<Store>>, secrets: Arc<dyn SecretStore>, config: SyncConfig) -> Self {
+    pub fn new(
+        store: Arc<Mutex<Store>>,
+        secrets: Arc<dyn SecretStore>,
+        config: SyncConfig,
+        classify_queue: Arc<Mutex<VecDeque<i64>>>,
+    ) -> Self {
         let poll_interval = Arc::new(PollInterval::new(config.poll_interval));
         Self {
             store,
@@ -31,6 +36,7 @@ impl SyncService {
             poll_interval,
             workers: Mutex::new(HashMap::new()),
             statuses: Mutex::new(HashMap::new()),
+            classify_queue,
         }
     }
 
@@ -48,6 +54,7 @@ impl SyncService {
             secrets: self.secrets.clone(),
             config: self.config.clone(),
             poll_interval: self.poll_interval.clone(),
+            classify_queue: self.classify_queue.clone(),
             status: status.clone(),
             cancel: cancel.clone(),
         });
@@ -116,6 +123,7 @@ impl SyncService {
             secrets: self.secrets.clone(),
             config: self.config.clone(),
             poll_interval: self.poll_interval.clone(),
+            classify_queue: self.classify_queue.clone(),
             status,
             cancel,
         });
@@ -141,6 +149,7 @@ impl SyncService {
             secrets: self.secrets.clone(),
             config: self.config.clone(),
             poll_interval: self.poll_interval.clone(),
+            classify_queue: self.classify_queue.clone(),
             status,
             cancel,
         });

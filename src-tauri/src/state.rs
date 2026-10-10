@@ -9,7 +9,7 @@
 //! 4. 存储目录与通知开关存在默认应用数据目录的 `settings.json`，界面改完立刻写盘。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use tokio::sync::{Mutex, MutexGuard};
@@ -34,6 +34,10 @@ pub struct AppState {
     notify_enabled: Arc<AtomicBool>,
     /// 通知智能识别开关；后台轮询线程直接读它，改了立刻生效。
     notify_ai_enabled: Arc<AtomicBool>,
+    /// 邮件自动分类开关；后台轮询线程直接读它，关了立刻停止外发。
+    classify_enabled: Arc<AtomicBool>,
+    /// 分类把握程度门槛（百分数，50–99）；后台轮询线程直接读它。
+    classify_confidence_percent: Arc<AtomicU8>,
     /// 读信是否默认拦截远程图片；与引擎共用同一个原子开关，改设置立刻生效。
     block_remote_images: Arc<AtomicBool>,
     /// 数据目录迁移是否正在跑；防止界面重复触发。
@@ -46,6 +50,7 @@ pub struct AppState {
 
 impl AppState {
     /// 构造状态。
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         engine: MailEngine,
         logging: Logging,
@@ -53,6 +58,8 @@ impl AppState {
         settings: AppSettings,
         notify_enabled: Arc<AtomicBool>,
         notify_ai_enabled: Arc<AtomicBool>,
+        classify_enabled: Arc<AtomicBool>,
+        classify_confidence_percent: Arc<AtomicU8>,
         first_run: bool,
     ) -> Self {
         let init = engine.init_summary();
@@ -67,6 +74,8 @@ impl AppState {
             settings: StdMutex::new(settings),
             notify_enabled,
             notify_ai_enabled,
+            classify_enabled,
+            classify_confidence_percent,
             block_remote_images,
             migrating_data_dir: AtomicBool::new(false),
             first_run,
@@ -106,6 +115,11 @@ impl AppState {
             .store(settings.notify_new_mail, Ordering::Relaxed);
         self.notify_ai_enabled
             .store(settings.notify_ai_enabled, Ordering::Relaxed);
+        let classify_percent = settings.normalized_classify_confidence_percent();
+        self.classify_enabled
+            .store(settings.classify_enabled, Ordering::Relaxed);
+        self.classify_confidence_percent
+            .store(classify_percent, Ordering::Relaxed);
         self.block_remote_images
             .store(settings.block_remote_images_by_default, Ordering::Relaxed);
         let mut guard = self

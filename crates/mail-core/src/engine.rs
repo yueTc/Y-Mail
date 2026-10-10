@@ -6,7 +6,7 @@
 //! Wave 1 起，引擎还持有凭据保险箱句柄；账号与代理的编排接口见
 //! [`crate::accounts`] 与 [`crate::proxies`]。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -167,6 +167,8 @@ pub struct MailEngine {
     pub(crate) settings_sync_live: Arc<SettingsSyncLive>,
     /// 还没确认的 GitHub 设备码登录；设备码只在本进程内存里，退出即清。
     pub(crate) github_login_registry: Arc<GitHubLoginRegistry>,
+    /// 新邮件落地后待分类的本地邮件编号；收信线程只投递，后台轮询消费。
+    pub(crate) classify_queue: Arc<std::sync::Mutex<VecDeque<i64>>>,
 }
 
 impl std::fmt::Debug for MailEngine {
@@ -251,10 +253,12 @@ impl MailEngine {
         );
 
         let store = Arc::new(std::sync::Mutex::new(store));
+        let classify_queue = Arc::new(std::sync::Mutex::new(VecDeque::new()));
         let sync = Arc::new(SyncService::new(
             store.clone(),
             secrets.clone(),
             SyncConfig::default(),
+            classify_queue.clone(),
         ));
 
         Ok(Self {
@@ -267,7 +271,38 @@ impl MailEngine {
             block_remote_images: Arc::new(AtomicBool::new(true)),
             settings_sync_live: Arc::new(SettingsSyncLive::new()),
             github_login_registry: Arc::new(GitHubLoginRegistry::new()),
+            classify_queue,
         })
+    }
+
+    /// 把新落地邮件编号投进分类队列；锁内只 push，不等模型。
+    pub fn enqueue_classify_ids(&self, ids: &[i64]) {
+        if ids.is_empty() {
+            return;
+        }
+        let mut queue = self
+            .classify_queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        queue.extend(ids.iter().copied());
+    }
+
+    /// 取出一批待分类邮件编号（最多 `limit` 个）；取完即出队。
+    pub fn drain_classify_queue(&self, limit: usize) -> Vec<i64> {
+        let mut queue = self
+            .classify_queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let take = limit.min(queue.len());
+        queue.drain(..take).collect()
+    }
+
+    /// 当前待分类队列长度。
+    pub fn classify_queue_len(&self) -> usize {
+        self.classify_queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
     }
 
     /// 初始化摘要（可克隆，供外壳展示或记录日志）。

@@ -13,7 +13,9 @@ use mail_mime::decode_encoded_words;
 use mail_store::{NewFolder, NewMessage, StoredFolder};
 
 use super::state::SyncState;
-use super::worker::{lock_store, refresh_progress, Failure, WorkerContext, FETCH_BATCH};
+use super::worker::{
+    enqueue_classify_ids, lock_store, refresh_progress, Failure, WorkerContext, FETCH_BATCH,
+};
 
 /// 一次唤醒里最多补几批历史，避免长时间占着连接不处理新邮件。
 const BACKFILL_BATCHES_PER_CYCLE: usize = 8;
@@ -333,9 +335,14 @@ fn insert_metas(ctx: &Arc<WorkerContext>, folder_id: i64, metas: Vec<MessageMeta
         tracing::warn!(account = ctx.account_id, "本地已达账号容量上限，暂停写入新邮件");
         return Ok(true);
     }
-    let inserted = store.insert_messages(&messages).map_err(Failure::store)?;
-    if inserted > 0 {
+    let inserted_ids = store
+        .insert_messages_returning_ids(&messages)
+        .map_err(Failure::store)?;
+    if !inserted_ids.is_empty() {
         store.upsert_contacts(&contacts).map_err(Failure::store)?;
+        // 先把存储锁放掉，再投队列；收信线程绝不在这里等模型。
+        drop(store);
+        enqueue_classify_ids(ctx, &inserted_ids);
     }
     Ok(false)
 }
@@ -439,6 +446,85 @@ mod tests {
                 message_id: "<m1@example.com>".to_string(),
             },
         }
+    }
+
+    #[test]
+    fn new_message_ids_are_enqueued_without_waiting_for_ai() {
+        use crate::engine::MailEngine;
+        use crate::secrets::MemorySecretStore;
+        use crate::sync::state::{AccountSyncStatus, CancelFlag, PollInterval, SyncConfig};
+        use crate::sync::worker::WorkerContext;
+        use mail_domain::FolderKind;
+        use std::sync::{Arc, Mutex};
+
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = MailEngine::initialize_with_secrets(dir.path(), Arc::new(MemorySecretStore::new()))
+            .expect("初始化引擎");
+        let account_id = {
+            let store = engine.store.lock().expect("锁");
+            store
+                .insert_account(
+                    &mail_domain::AccountDraft {
+                        display_name: "测试".to_string(),
+                        email: "t@example.com".to_string(),
+                        auth_type: mail_domain::AuthType::Password,
+                        username: "t@example.com".to_string(),
+                        imap: mail_domain::ServerConfig {
+                            host: "imap.example.com".to_string(),
+                            port: 993,
+                            security: mail_domain::Security::Tls,
+                        },
+                        smtp: mail_domain::ServerConfig {
+                            host: "smtp.example.com".to_string(),
+                            port: 465,
+                            security: mail_domain::Security::Tls,
+                        },
+                        proxy: mail_domain::AccountProxyMode::InheritGlobal,
+                        color: String::new(),
+                        enabled: true,
+                        oauth_provider: None,
+                        oauth_client_id: String::new(),
+                    },
+                    None,
+                )
+                .expect("插入账号")
+                .0
+        };
+        let folder_id = {
+            let store = engine.store.lock().expect("锁");
+            store
+                .upsert_folder(account_id, "INBOX", "/", FolderKind::Inbox)
+                .expect("插入文件夹")
+        };
+        let ctx = Arc::new(WorkerContext {
+            account_id,
+            store: engine.store.clone(),
+            secrets: Arc::new(MemorySecretStore::new()),
+            config: SyncConfig::default(),
+            poll_interval: Arc::new(PollInterval::new(std::time::Duration::from_millis(20))),
+            status: Arc::new(Mutex::new(AccountSyncStatus::new(account_id, "t@example.com"))),
+            cancel: Arc::new(CancelFlag::new()),
+            classify_queue: engine.classify_queue.clone(),
+        });
+
+        let mut first = meta("主题一", "甲");
+        first.uid = 11;
+        let mut second = meta("主题二", "乙");
+        second.uid = 12;
+        super::insert_metas(&ctx, folder_id, vec![first, second]).expect("入库");
+
+        // 这里是同步测试：入库调用已经返回，队列里立刻有两个编号，
+        // 说明收信链路只投递、不等模型。
+        assert_eq!(engine.classify_queue_len(), 2);
+        let drained = engine.drain_classify_queue(20);
+        assert_eq!(drained.len(), 2);
+        assert_eq!(engine.classify_queue_len(), 0);
+
+        // 重复入库不再投递。
+        let mut again = meta("主题一", "甲");
+        again.uid = 11;
+        super::insert_metas(&ctx, folder_id, vec![again]).expect("重复入库");
+        assert_eq!(engine.classify_queue_len(), 0);
     }
 
     #[test]

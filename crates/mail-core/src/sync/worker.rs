@@ -1,5 +1,6 @@
 //! 每账号一个同步工作线程：连接、跑一遍各文件夹，再守着收件箱等新邮件。
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use mail_domain::auth::AuthMaterial;
@@ -36,6 +37,20 @@ pub(super) struct WorkerContext {
     pub status: Arc<Mutex<AccountSyncStatus>>,
     /// 取消旗标。
     pub cancel: Arc<CancelFlag>,
+    /// 新邮件落地后待分类的本地编号。
+    pub classify_queue: Arc<Mutex<VecDeque<i64>>>,
+}
+
+/// 把新落地邮件编号投进分类队列；锁内只 push，不做任何等待。
+pub(super) fn enqueue_classify_ids(ctx: &WorkerContext, ids: &[i64]) {
+    if ids.is_empty() {
+        return;
+    }
+    let mut queue = ctx
+        .classify_queue
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    queue.extend(ids.iter().copied());
 }
 
 /// 内部失败原因：保留分类，供上层决定重试还是停。

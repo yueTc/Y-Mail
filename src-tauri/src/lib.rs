@@ -15,7 +15,7 @@ pub mod state;
 pub mod storage_dir;
 pub mod sync_commands;
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU8};
 use std::sync::Arc;
 
 use mail_core::MailEngine;
@@ -247,6 +247,10 @@ pub fn run() {
             // 6) 把引擎、设置与摘要交给命令层；日志句柄随之进入应用状态，保证写线程存活。
             let notify_enabled = Arc::new(AtomicBool::new(settings.notify_new_mail));
             let notify_ai_enabled = Arc::new(AtomicBool::new(settings.notify_ai_enabled));
+            let classify_enabled = Arc::new(AtomicBool::new(settings.classify_enabled));
+            let classify_confidence_percent = Arc::new(AtomicU8::new(
+                settings.normalized_classify_confidence_percent(),
+            ));
             app.manage(AppState::new(
                 engine,
                 logging,
@@ -254,6 +258,8 @@ pub fn run() {
                 settings,
                 notify_enabled.clone(),
                 notify_ai_enabled.clone(),
+                classify_enabled.clone(),
+                classify_confidence_percent.clone(),
                 first_run,
             ));
 
@@ -347,7 +353,13 @@ pub fn run() {
             //    先把通知里的应用名登记成「Y-Mail」，否则 Windows 会写成拉起本程序的
             //    PowerShell（开发模式、未安装场景都这样）。
             notify::register_notification_identity(app.handle());
-            notify::spawn(app.handle().clone(), notify_enabled, notify_ai_enabled);
+            notify::spawn(
+                app.handle().clone(),
+                notify_enabled,
+                notify_ai_enabled,
+                classify_enabled,
+                classify_confidence_percent,
+            );
 
             Ok(())
         })

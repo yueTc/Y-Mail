@@ -20,6 +20,11 @@ pub const UPDATE_CHECK_INTERVAL_MIN_HOURS: u32 = 1;
 pub const UPDATE_CHECK_INTERVAL_MAX_HOURS: u32 = 168;
 pub const UPDATE_CHECK_INTERVAL_DEFAULT_HOURS: u32 = 24;
 
+/// 「邮件自动分类」把握程度门槛的默认值与允许范围（百分数）。
+pub const CLASSIFY_CONFIDENCE_DEFAULT_PERCENT: u8 = 75;
+pub const CLASSIFY_CONFIDENCE_MIN_PERCENT: u8 = 50;
+pub const CLASSIFY_CONFIDENCE_MAX_PERCENT: u8 = 99;
+
 /// 服务器不支持推送时的轮询间隔允许范围（秒）与默认值。
 pub const SYNC_POLL_INTERVAL_MIN_SECONDS: u32 = 10;
 pub const SYNC_POLL_INTERVAL_MAX_SECONDS: u32 = 3600;
@@ -53,6 +58,12 @@ pub struct AppSettings {
     pub sync_poll_interval_seconds: u32,
     /// 下次启动要清理的旧数据目录；为空表示没有待清理目录。
     pub pending_cleanup_dir: Option<PathBuf>,
+    /// 「邮件自动分类」开关；默认关。开启后新邮件正文会自动发往所选 AI。
+    /// 只存本机，不参与账号同步。
+    pub classify_enabled: bool,
+    /// 分类把握程度门槛（百分数）；默认 75，允许 50–99，越界读回时按默认处理。
+    /// 只存本机，不参与账号设置同步。
+    pub classify_confidence_percent: u8,
 }
 
 impl Default for AppSettings {
@@ -69,6 +80,8 @@ impl Default for AppSettings {
             update_check_interval_hours: UPDATE_CHECK_INTERVAL_DEFAULT_HOURS,
             sync_poll_interval_seconds: SYNC_POLL_INTERVAL_DEFAULT_SECONDS,
             pending_cleanup_dir: None,
+            classify_enabled: false,
+            classify_confidence_percent: CLASSIFY_CONFIDENCE_DEFAULT_PERCENT,
         }
     }
 }
@@ -108,7 +121,18 @@ impl AppSettings {
         {
             self.sync_poll_interval_seconds = SYNC_POLL_INTERVAL_DEFAULT_SECONDS;
         }
+        self.classify_confidence_percent = self.normalized_classify_confidence_percent();
         self
+    }
+
+    /// 分类门槛的生效值：越界或老配置缺字段时都回默认 75。
+    pub fn normalized_classify_confidence_percent(&self) -> u8 {
+        let value = self.classify_confidence_percent;
+        if (CLASSIFY_CONFIDENCE_MIN_PERCENT..=CLASSIFY_CONFIDENCE_MAX_PERCENT).contains(&value) {
+            value
+        } else {
+            CLASSIFY_CONFIDENCE_DEFAULT_PERCENT
+        }
     }
 
     /// 邮件数据目录的生效值：没单独配置就用传入的默认目录。
@@ -177,6 +201,8 @@ mod tests {
             update_check_interval_hours: UPDATE_CHECK_INTERVAL_DEFAULT_HOURS,
             sync_poll_interval_seconds: SYNC_POLL_INTERVAL_DEFAULT_SECONDS,
             pending_cleanup_dir: None,
+            classify_enabled: false,
+            classify_confidence_percent: 75,
         };
         assert_eq!(
             settings.effective_data_dir(std::path::Path::new("C:/app")),
@@ -210,6 +236,8 @@ mod tests {
             update_check_interval_hours: 6,
             sync_poll_interval_seconds: 120,
             pending_cleanup_dir: Some(std::path::PathBuf::from("C:/Old/Mail")),
+            classify_enabled: true,
+            classify_confidence_percent: 80,
         };
         settings.save(&dir).expect("保存设置");
         let raw = std::fs::read_to_string(dir.join(super::SETTINGS_FILE)).expect("读设置原文");

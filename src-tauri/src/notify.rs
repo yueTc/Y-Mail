@@ -15,7 +15,7 @@
 //! [`register_notification_identity`]。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,6 +33,8 @@ const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const SCAN_LIMIT: i64 = 20;
 /// 一轮最多弹几条通知，避免长时间离线后一次性刷屏。
 const MAX_NOTIFICATIONS: usize = 3;
+/// 一轮最多处理几封分类；剩下的留到下一轮。
+const CLASSIFY_BATCH_LIMIT: usize = 20;
 /// 主窗口标签；判断前台只看这个窗口。
 const MAIN_WINDOW_LABEL: &str = "main";
 
@@ -73,7 +75,13 @@ pub struct OpenMessageEvent {
 ///
 /// `enabled` 是用户在设置里控制的新邮件通知开关；关掉后只发界面刷新事件，
 /// 再怎么切走也不弹系统通知。开关之外的第二个条件是窗口焦点：窗口在前台时同样只发事件。
-pub fn spawn(app: AppHandle, enabled: Arc<AtomicBool>, ai_enabled: Arc<AtomicBool>) {
+pub fn spawn(
+    app: AppHandle,
+    enabled: Arc<AtomicBool>,
+    ai_enabled: Arc<AtomicBool>,
+    classify_enabled: Arc<AtomicBool>,
+    classify_confidence_percent: Arc<AtomicU8>,
+) {
     tauri::async_runtime::spawn(async move {
         let mut seen: HashMap<i64, i64> = HashMap::new();
         let mut primed = false;
@@ -86,6 +94,9 @@ pub fn spawn(app: AppHandle, enabled: Arc<AtomicBool>, ai_enabled: Arc<AtomicBoo
                     continue;
                 }
             };
+
+            // 分类消费跟通知开关无关，只看分类开关；开关关着时队列原样保留。
+            drain_classify_queue(&app, &classify_enabled, &classify_confidence_percent).await;
 
             if !primed {
                 // 启动时先把已有邮件记下来，不补弹历史通知。
@@ -134,6 +145,38 @@ pub fn spawn(app: AppHandle, enabled: Arc<AtomicBool>, ai_enabled: Arc<AtomicBoo
             }
         }
     });
+}
+
+/// 从号码列表里截出这一轮要处理的（最多 20 个）。
+fn take_classify_batch(ids: Vec<i64>) -> Vec<i64> {
+    ids.into_iter().take(CLASSIFY_BATCH_LIMIT).collect()
+}
+
+/// 消费待分类队列。
+///
+/// 开关关着时原样保留队列、一次模型都不调；开着时每轮最多处理 20 封。
+/// 每封独立取一次引擎锁，避免长时间占住界面命令要用的锁；存储锁绝不跨 await。
+async fn drain_classify_queue(app: &AppHandle, enabled: &AtomicBool, percent: &AtomicU8) {
+    if !enabled.load(Ordering::Relaxed) {
+        return;
+    }
+    let ids = {
+        let state = app.state::<AppState>();
+        let engine = state.engine().await;
+        take_classify_batch(engine.drain_classify_queue(CLASSIFY_BATCH_LIMIT))
+    };
+    if ids.is_empty() {
+        return;
+    }
+    let threshold = f64::from(percent.load(Ordering::Relaxed)) / 100.0;
+    for message_id in ids {
+        let state = app.state::<AppState>();
+        let engine = state.engine().await;
+        // 已有标签的邮件在编排层直接跳过，绝不覆盖用户手改的结果。
+        if let Err(error) = engine.classify_message_if_untagged(message_id, threshold).await {
+            tracing::debug!(message_id, error = %error, "自动分类失败，跳过这封");
+        }
+    }
 }
 
 /// 扫一遍未读邮件；按邮件编号倒序取前若干条。
@@ -435,10 +478,19 @@ mod tests {
     #[cfg(windows)]
     use super::{notification_display_name, DEFAULT_NOTIFICATION_NAME};
     use super::{
-        safe_action_value, should_pop_system_notification, should_run_verification, verification_lines,
-        SafeAction,
+        safe_action_value, should_pop_system_notification, should_run_verification, take_classify_batch,
+        verification_lines, SafeAction,
     };
     use mail_core::VerificationFinding;
+
+    #[test]
+    fn classify_batch_is_capped_at_twenty() {
+        let ids: Vec<i64> = (1..=25).collect();
+        assert_eq!(
+            take_classify_batch(ids),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        );
+    }
 
     #[test]
     fn 窗口在前台时不弹系统通知() {

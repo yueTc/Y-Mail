@@ -1,6 +1,7 @@
 //! 同步引擎的端到端测试：用假 IMAP 服务器跑通快照、增量、断点续传、
 //! UIDVALIDITY 重建、退避重试、失败隔离与取消。
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -252,6 +253,7 @@ fn context(engine: &MailEngine, account_id: i64) -> Arc<WorkerContext> {
             "tester@example.com",
         ))),
         cancel: Arc::new(CancelFlag::new()),
+        classify_queue: Arc::new(Mutex::new(VecDeque::new())),
     })
 }
 
@@ -274,6 +276,7 @@ fn worker_ctx(
             "tester@example.com",
         ))),
         cancel: Arc::new(CancelFlag::new()),
+        classify_queue: Arc::new(Mutex::new(VecDeque::new())),
     })
 }
 
@@ -569,6 +572,7 @@ async fn 一个账号连不上不影响另一个账号() {
             slow_poll_interval: Duration::from_millis(20),
             ..SyncConfig::default()
         },
+        Arc::new(Mutex::new(VecDeque::new())),
     ));
     assert!(service.start(good_id).expect("启动好账号"));
     assert!(service.start(bad_id).expect("启动坏账号"));

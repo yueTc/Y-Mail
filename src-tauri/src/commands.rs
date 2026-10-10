@@ -650,6 +650,9 @@ pub async fn set_app_settings(
         // 拉信间隔由「账号与同步」分组单独维护，这里从旧值带过。
         sync_poll_interval_seconds: previous.sync_poll_interval_seconds,
         pending_cleanup_dir: previous.pending_cleanup_dir.take(),
+        // 分类开关与门槛由 AI 面板单独维护，这里从旧值原样带过。
+        classify_enabled: previous.classify_enabled,
+        classify_confidence_percent: previous.classify_confidence_percent,
     };
     state
         .save_settings(settings.clone())

@@ -1,6 +1,6 @@
 //! 同步服务的共享状态：取消旗标、配置、状态快照与服务句柄。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -306,6 +306,8 @@ pub struct SyncService {
     pub(crate) workers: Mutex<HashMap<i64, WorkerHandle>>,
     /// 各账号的最新状态。
     pub(crate) statuses: Mutex<HashMap<i64, Arc<Mutex<AccountSyncStatus>>>>,
+    /// 新邮件落地后待分类的本地编号；收信线程只投递，后台轮询消费。
+    pub(crate) classify_queue: Arc<Mutex<VecDeque<i64>>>,
 }
 
 impl std::fmt::Debug for SyncService {
