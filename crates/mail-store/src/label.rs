@@ -254,6 +254,108 @@ impl Store {
         Ok(())
     }
 }
+
+impl Store {
+    /// 给邮件写标签：一封邮件只有一个标签，已有就整行覆盖。
+    ///
+    /// 写入前校验邮件和标签都存在；把握程度不为空时必须在 0 到 1 之间。
+    pub fn set_message_label(
+        &self,
+        message_id: i64,
+        label_id: i64,
+        source: MailLabelSource,
+        confidence: Option<f64>,
+    ) -> Result<(), StoreError> {
+        let message_exists = self
+            .conn()
+            .query_row("SELECT 1 FROM message WHERE id = ?1", [message_id], |_| Ok(true))
+            .optional()?
+            .unwrap_or(false);
+        if !message_exists {
+            return Err(StoreError::InvalidData("邮件不存在".to_string()));
+        }
+        if self.get_mail_label(label_id)?.is_none() {
+            return Err(StoreError::InvalidData("标签不存在".to_string()));
+        }
+        if let Some(value) = confidence {
+            if value.is_nan() || !(0.0..=1.0).contains(&value) {
+                return Err(StoreError::InvalidData("把握程度必须在 0 到 1 之间".to_string()));
+            }
+        }
+
+        self.conn().execute(
+            "INSERT INTO message_label (message_id, label_id, source, confidence)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(message_id) DO UPDATE SET
+                 label_id = excluded.label_id,
+                 source = excluded.source,
+                 confidence = excluded.confidence,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+            rusqlite::params![message_id, label_id, source.as_str(), confidence],
+        )?;
+        Ok(())
+    }
+
+    /// 读邮件的标签，返回标签、把握程度和来源；没有标签返回 `None`。
+    pub fn get_message_label(
+        &self,
+        message_id: i64,
+    ) -> Result<Option<(MailLabel, Option<f64>, MailLabelSource)>, StoreError> {
+        let found = self
+            .conn()
+            .query_row(
+                "SELECT l.id, l.name, l.color, l.sort_order, l.is_fallback, ml.confidence, ml.source
+                 FROM message_label ml
+                 JOIN mail_label l ON l.id = ml.label_id
+                 WHERE ml.message_id = ?1",
+                [message_id],
+                |row| {
+                    let label = MailLabel {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        color: row.get(2)?,
+                        sort_order: row.get(3)?,
+                        is_fallback: row.get::<_, i64>(4)? != 0,
+                    };
+                    let confidence: Option<f64> = row.get(5)?;
+                    let source: String = row.get(6)?;
+                    Ok((label, confidence, source))
+                },
+            )
+            .optional()?;
+
+        Ok(found.map(|(label, confidence, source)| {
+            let source = MailLabelSource::parse(&source).unwrap_or(MailLabelSource::Auto);
+            (label, confidence, source)
+        }))
+    }
+
+    /// 清空邮件的标签；返回是否真的删掉了一行。
+    pub fn clear_message_label(&self, message_id: i64) -> Result<bool, StoreError> {
+        let changed = self
+            .conn()
+            .execute("DELETE FROM message_label WHERE message_id = ?1", [message_id])?;
+        Ok(changed > 0)
+    }
+
+    /// 按标签名精确取邮件编号（升序）。
+    pub fn list_message_ids_with_label(&self, label_name: &str) -> Result<Vec<i64>, StoreError> {
+        let mut stmt = self.conn().prepare(
+            "SELECT ml.message_id
+             FROM message_label ml
+             JOIN mail_label l ON l.id = ml.label_id
+             WHERE l.name = ?1
+             ORDER BY ml.message_id ASC",
+        )?;
+        let mut rows = stmt.query([label_name])?;
+        let mut ids = Vec::new();
+        while let Some(row) = rows.next()? {
+            ids.push(row.get::<_, i64>(0)?);
+        }
+        Ok(ids)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,6 +500,174 @@ mod tests {
             .expect("标签")
             .color;
         assert_eq!(color, "pink");
+    }
+
+    fn seeded_messages(store: &Store, uids: &[u32]) -> Vec<i64> {
+        let draft = mail_domain::AccountDraft {
+            display_name: "测试".to_string(),
+            email: "t@example.com".to_string(),
+            auth_type: mail_domain::AuthType::Password,
+            username: "t@example.com".to_string(),
+            imap: mail_domain::ServerConfig {
+                host: "imap.example.com".to_string(),
+                port: 993,
+                security: mail_domain::Security::Tls,
+            },
+            smtp: mail_domain::ServerConfig {
+                host: "smtp.example.com".to_string(),
+                port: 465,
+                security: mail_domain::Security::Tls,
+            },
+            proxy: mail_domain::AccountProxyMode::InheritGlobal,
+            color: String::new(),
+            enabled: true,
+            oauth_provider: None,
+            oauth_client_id: String::new(),
+        };
+        let account_id = store.insert_account(&draft, None).expect("插入账号").0;
+        let folder_id = store
+            .upsert_folder(account_id, "INBOX", "/", mail_domain::FolderKind::Inbox)
+            .expect("插入文件夹");
+        let batch: Vec<crate::sync::NewMessage> = uids
+            .iter()
+            .map(|uid| crate::sync::NewMessage {
+                account_id,
+                folder_id,
+                uid: *uid,
+                message_id_header: format!("<m{uid}@x>"),
+                thread_key: format!("主题 {uid}"),
+                subject: format!("主题 {uid}"),
+                from_name: "张三".to_string(),
+                from_addr: "z@example.com".to_string(),
+                to_json: "[]".to_string(),
+                cc_json: "[]".to_string(),
+                date_utc: "2026-10-04T00:00:00Z".to_string(),
+                size: 1000,
+                has_attachments: false,
+                is_read: false,
+                is_flagged: false,
+                is_answered: false,
+                is_draft: false,
+            })
+            .collect();
+        store.insert_messages(&batch).expect("插入邮件");
+        let conn = store.conn();
+        uids.iter()
+            .map(|uid| {
+                conn.query_row(
+                    "SELECT id FROM message WHERE uid = ?1",
+                    [i64::from(*uid)],
+                    |row| row.get(0),
+                )
+                .expect("读邮件编号")
+            })
+            .collect()
+    }
+
+    fn label_id(store: &Store, name: &str) -> i64 {
+        store
+            .list_mail_labels()
+            .expect("标签列表")
+            .into_iter()
+            .find(|label| label.name == name)
+            .expect("找到标签")
+            .id
+    }
+
+    #[test]
+    fn setting_a_label_replaces_the_previous_one() {
+        let store = store();
+        let message = seeded_messages(&store, &[100])[0];
+        let customer = label_id(&store, "客户");
+        let bill = label_id(&store, "账单");
+
+        store
+            .set_message_label(message, customer, MailLabelSource::Auto, Some(0.9))
+            .expect("贴第一个标签");
+        let first = store.get_message_label(message).expect("查").expect("有标签");
+        assert_eq!(first.0.name, "客户");
+        assert_eq!(first.2, MailLabelSource::Auto);
+        assert_eq!(first.1, Some(0.9));
+
+        store
+            .set_message_label(message, bill, MailLabelSource::Manual, None)
+            .expect("换标签");
+        let second = store.get_message_label(message).expect("查").expect("有标签");
+        assert_eq!(second.0.name, "账单");
+        assert_eq!(second.2, MailLabelSource::Manual);
+
+        let rows: i64 = store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM message_label WHERE message_id = ?1",
+                [message],
+                |row| row.get(0),
+            )
+            .expect("数标签行");
+        assert_eq!(rows, 1, "一封邮件只能有一行标签");
+    }
+
+    #[test]
+    fn deleting_a_label_clears_its_message_rows() {
+        let store = store();
+        let message = seeded_messages(&store, &[200])[0];
+        let custom = store.create_mail_label("项目").expect("新增标签");
+        store
+            .set_message_label(message, custom, MailLabelSource::Auto, Some(0.8))
+            .expect("贴标签");
+
+        store.delete_mail_label(custom).expect("删标签");
+        assert!(store.get_message_label(message).expect("查").is_none());
+    }
+
+    #[test]
+    fn deleting_a_message_clears_its_label_row() {
+        let store = store();
+        let message = seeded_messages(&store, &[300])[0];
+        let bill = label_id(&store, "账单");
+        store
+            .set_message_label(message, bill, MailLabelSource::Manual, None)
+            .expect("贴标签");
+
+        store
+            .conn()
+            .execute("DELETE FROM message WHERE id = ?1", [message])
+            .expect("删邮件");
+        let rows: i64 = store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM message_label", [], |row| row.get(0))
+            .expect("数标签行");
+        assert_eq!(rows, 0);
+    }
+
+    #[test]
+    fn clearing_a_label_reports_whether_it_existed() {
+        let store = store();
+        let message = seeded_messages(&store, &[400])[0];
+        let bill = label_id(&store, "账单");
+        assert!(!store.clear_message_label(message).expect("没标签时清"));
+        store
+            .set_message_label(message, bill, MailLabelSource::Auto, None)
+            .expect("贴标签");
+        assert!(store.clear_message_label(message).expect("有标签时清"));
+        assert!(store.get_message_label(message).expect("查").is_none());
+    }
+
+    #[test]
+    fn list_message_ids_with_label_matches_by_name() {
+        let store = store();
+        let messages = seeded_messages(&store, &[500, 501]);
+        let bill = label_id(&store, "账单");
+        store
+            .set_message_label(messages[0], bill, MailLabelSource::Auto, None)
+            .expect("贴第一封");
+
+        let found = store.list_message_ids_with_label("账单").expect("按标签取邮件");
+        assert_eq!(found, vec![messages[0]]);
+        assert!(store
+            .list_message_ids_with_label("不存在的标签")
+            .expect("不存在")
+            .is_empty());
     }
 
     #[test]
