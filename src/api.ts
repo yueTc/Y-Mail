@@ -186,6 +186,10 @@ export interface AppSettings {
   updateCheckIntervalHours: number;
   /** 服务器不支持推送时的拉信间隔秒数；默认 60，允许 10–3600。 */
   syncPollIntervalSeconds: number;
+  /** 「邮件自动分类」开关；默认关，只存本机、不参与账号同步。 */
+  classifyEnabled: boolean;
+  /** 分类把握程度门槛（百分数，50–99）；默认 75。 */
+  classifyConfidencePercent: number;
   /** 默认邮件数据目录。 */
   defaultDataDir: string;
   /** 附件目录留空时会用的默认位置。 */
@@ -595,6 +599,8 @@ export interface AiProviderDraft {
 export interface AiProvider extends AiProviderDraft {
   id: number;
   hasKey: boolean;
+  /** 这个站点类型支持的功能标识；邮件分类只认 TypeSafe jev。 */
+  supportedFunctions: AiFunction[];
 }
 
 /** 功能级模型配置。 */
@@ -785,6 +791,10 @@ export const api = {
 
   saveAppSettings: (input: AppSettingsInput) =>
     call<AppSettings>("set_app_settings", { input }),
+
+  /** 保存「邮件自动分类」开关与把握程度门槛；只写本机设置。 */
+  setClassifySettings: (enabled: boolean, confidencePercent: number) =>
+    call<AppSettings>("set_classify_settings", { enabled, confidencePercent }),
 
   changeDataDir: (newDir: string, confirmed: boolean) =>
     call<ChangeDataDirResult>("change_data_dir", { newDir, confirmed }),

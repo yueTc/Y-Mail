@@ -69,7 +69,7 @@ const FUNCTION_LABEL: Record<AiFunction, string> = {
 };
 
 /** 逐次确认的功能；在功能级模型列表里平铺展示。 */
-const FUNCTION_ORDER: AiFunction[] = ["translate", "summary", "polish", "draft"];
+const FUNCTION_ORDER: AiFunction[] = ["translate", "summary", "polish", "draft", "classify"];
 
 /** 通知智能识别单独放在「高级功能」区，跟普通功能分开显示。 */
 const VERIFY_FUNCTION: AiFunction = "notification_verify";
@@ -174,6 +174,15 @@ export interface AiPanelProps {
   onNotifyAiEnabledChange: (next: boolean) => Promise<void>;
 }
 
+/** 从站点地址里取主机名；解析失败时退回原串，只用于确认弹窗展示。 */
+function hostOf(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).hostname;
+  } catch {
+    return baseUrl;
+  }
+}
+
 /** AI 设置页：站点管理、功能级配置、审计与熔断。 */
 export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: AiPanelProps) {
   const [providers, setProviders] = useState<AiProvider[]>([]);
@@ -187,6 +196,16 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   const [showApiKey, setShowApiKey] = useState(false);
   const [modelsHint, setModelsHint] = useState("");
   const [featureDrafts, setFeatureDrafts] = useState<Record<string, FeatureDraftState>>({});
+  // 「邮件自动分类」开关与把握程度门槛；只存本机，不参与账号同步。
+  const [classifyEnabled, setClassifyEnabled] = useState(false);
+  const [classifyPercent, setClassifyPercent] = useState(75);
+  // 打开自动分类开关前的风险确认：先把要展示的目标记下来，点确认才落盘。
+  const [classifyRisk, setClassifyRisk] = useState<
+    | { providerLabel: string; host: string; model: string; local: boolean }
+    | null
+  >(null);
+  const [classifyNotice, setClassifyNotice] = useState("");
+  const [classifyError, setClassifyError] = useState("");
   // 打开「通知智能识别」开关前的风险确认：先记下要展示的目标，用户点确认才落盘。
   const [verifyRisk, setVerifyRisk] = useState<
     | { providerLabel: string; model: string; local: boolean }
@@ -208,13 +227,16 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
     setLoading(true);
     setError("");
     try {
-      const [nextProviders, nextMaps, nextAudits] = await Promise.all([
+      const [nextProviders, nextMaps, nextAudits, nextSettings] = await Promise.all([
         api.listAiProviders(),
         api.listAiModelMaps(),
         api.listAiAudit(50),
+        api.getAppSettings(),
       ]);
       setProviders(nextProviders);
       setAudits(nextAudits);
+      setClassifyEnabled(nextSettings.classifyEnabled);
+      setClassifyPercent(nextSettings.classifyConfidencePercent);
       setFeatureDrafts((old) => {
         const next: Record<string, FeatureDraftState> = {};
         for (const fn of [...FUNCTION_ORDER, VERIFY_FUNCTION]) {
@@ -403,6 +425,30 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
     [refresh],
   );
 
+  /** 测试一个已存站点的连接；TypeSafe jev 没有模型列表接口，只做一次试探分类。 */
+  const testProvider = useCallback(async (provider: AiProvider) => {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const models = await api.testAiProvider(
+        provider.kind,
+        provider.baseUrl,
+        undefined,
+        provider.id,
+      );
+      setNotice(
+        models.length > 0
+          ? t("连接成功，站点可用模型：{0}", [models.join(t("、"))])
+          : t("连接成功。"),
+      );
+    } catch (caught) {
+      setError(describeError(caught));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
   /** 当前「通知智能识别」选中的站点与模型；没选或站点不存在时为 undefined。 */
   const verifyDraft = featureDrafts[VERIFY_FUNCTION] ?? {
     providerId: "",
@@ -412,6 +458,92 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   const verifyProvider = providers.find(
     (provider) => String(provider.id) === verifyDraft.providerId,
   );
+
+  /** 当前「邮件分类」选中的站点与模型；没选或站点不存在时为 undefined。 */
+  const classifyDraft = featureDrafts.classify ?? {
+    providerId: "",
+    model: "",
+    thinkingLevel: "" as const,
+  };
+  const classifyProvider = providers.find(
+    (provider) => String(provider.id) === classifyDraft.providerId,
+  );
+
+  /**
+   * 点「邮件自动分类」开关：开 → 先检查站点与模型，再弹一次性确认；
+   * 关 → 立即落盘，后台从下一轮起停止外发。
+   */
+  const toggleClassify = useCallback(
+    async (next: boolean) => {
+      setClassifyNotice("");
+      setClassifyError("");
+      if (!next) {
+        try {
+          const saved = await api.setClassifySettings(false, classifyPercent);
+          setClassifyEnabled(saved.classifyEnabled);
+          setClassifyNotice(t("已关闭邮件自动分类，后续新邮件不再自动发给 AI。"));
+        } catch (caught) {
+          setClassifyError(describeError(caught));
+        }
+        return;
+      }
+      if (!classifyDraft.providerId || !classifyProvider) {
+        setClassifyError(t("请先在「邮件分类」里选择 TypeSafe jev 站点，再打开自动分类。"));
+        return;
+      }
+      if (!classifyProvider.enabled) {
+        setClassifyError(t("所选站点已停用，请先启用或换一个站点。"));
+        return;
+      }
+      if (classifyProvider.kind !== "typesafe") {
+        setClassifyError(t("邮件分类只支持 TypeSafe jev 站点。"));
+        return;
+      }
+      const model = classifyDraft.model.trim() || classifyProvider.defaultModel.trim();
+      if (model === "") {
+        setClassifyError(t("请先给邮件分类填写模型，再打开自动分类。"));
+        return;
+      }
+      setClassifyRisk({
+        providerLabel: classifyProvider.label,
+        host: hostOf(classifyProvider.baseUrl),
+        model,
+        local: providerIsLocal(classifyProvider),
+      });
+    },
+    [classifyDraft.model, classifyDraft.providerId, classifyPercent, classifyProvider],
+  );
+
+  /** 确认弹窗里点「确认开启」：先把分类功能存到站点上，再打开开关。 */
+  const confirmEnableClassify = useCallback(async () => {
+    try {
+      await api.setAiFeature(
+        "classify",
+        Number(classifyDraft.providerId),
+        classifyDraft.model,
+        classifyDraft.thinkingLevel === "" ? undefined : classifyDraft.thinkingLevel,
+      );
+      const saved = await api.setClassifySettings(true, classifyPercent);
+      setClassifyEnabled(saved.classifyEnabled);
+      setClassifyRisk(null);
+      setClassifyNotice(t("已开启邮件自动分类：新邮件正文会自动发给所选 AI，不再逐封确认。"));
+    } catch (caught) {
+      setClassifyRisk(null);
+      setClassifyError(describeError(caught));
+    }
+  }, [classifyDraft.model, classifyDraft.providerId, classifyDraft.thinkingLevel, classifyPercent]);
+
+  /** 门槛输入失焦时落盘；越界的整数会被拉回 50–99。 */
+  const saveClassifyPercent = useCallback(async () => {
+    const clamped = Math.min(99, Math.max(50, Math.round(classifyPercent)));
+    setClassifyError("");
+    try {
+      const saved = await api.setClassifySettings(classifyEnabled, clamped);
+      setClassifyPercent(saved.classifyConfidencePercent);
+    } catch (caught) {
+      setClassifyError(describeError(caught));
+    }
+  }, [classifyEnabled, classifyPercent]);
 
   /**
    * 点开关时的入口：开 → 先检查站点模型，再弹风险确认；关 → 立即落盘。
@@ -601,8 +733,13 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
             <div className="card-actions">
               <button type="button" onClick={() => startEdit(provider)} disabled={busy}>
                 {t("编辑")}</button>
-              <button type="button" onClick={() => void refreshModels(provider.id)} disabled={busy}>
-                {t("拉取模型")}</button>
+              {provider.kind === "typesafe" ? (
+                <button type="button" onClick={() => void testProvider(provider)} disabled={busy}>
+                  {t("测试连接")}</button>
+              ) : (
+                <button type="button" onClick={() => void refreshModels(provider.id)} disabled={busy}>
+                  {t("拉取模型")}</button>
+              )}
               <button type="button" className="danger" onClick={() => void removeProvider(provider)} disabled={busy}>
                 {t("删除")}</button>
             </div>
@@ -632,15 +769,32 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
               {t("站点类型")}<select
                 aria-label={t("AI 站点类型")}
                 value={editing.kind}
-                onChange={(event) =>
-                  setEditing((old) =>
-                    old ? { ...old, kind: event.target.value as AiProviderKind } : old,
-                  )
-                }
+                onChange={(event) => {
+                  const kind = event.target.value as AiProviderKind;
+                  setEditing((old) => {
+                    if (!old) return old;
+                    // TypeSafe jev 只有分类接口：地址与模型都有官方默认值，空着就预填。
+                    const preset =
+                      kind === "typesafe"
+                        ? { baseUrl: "https://api.typesafe.ai/v1", defaultModel: "jev-latest" }
+                        : undefined;
+                    return {
+                      ...old,
+                      kind,
+                      baseUrl:
+                        preset && old.baseUrl.trim() === "" ? preset.baseUrl : old.baseUrl,
+                      defaultModel:
+                        preset && old.defaultModel.trim() === ""
+                          ? preset.defaultModel
+                          : old.defaultModel,
+                    };
+                  });
+                }}
               >
                 <option value="openai_compatible">{t("OpenAI 兼容站点")}</option>
                 <option value="deepl">DeepL</option>
                 <option value="ollama">{t("本机 Ollama")}</option>
+                <option value="typesafe">{t("TypeSafe jev")}</option>
               </select>
             </label>
           </div>
@@ -731,7 +885,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
             <button type="button" className="primary" onClick={() => void saveProvider()} disabled={busy}>
               {t("保存")}</button>
             <button type="button" onClick={() => void testDraft()} disabled={busy}>
-              {t("测试连接并拉取模型")}</button>
+              {editing.kind === "typesafe" ? t("测试连接") : t("测试连接并拉取模型")}</button>
             <button type="button" onClick={() => setEditing(undefined)} disabled={busy}>
               {t("取消")}</button>
           </div>
@@ -758,12 +912,16 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
                     }))
                   }
                 >
-                  <option value="">{t("自动选择第一个启用站点")}</option>
-                  {providers.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.label}{provider.enabled ? "" : t("（已停用）")}
-                    </option>
-                  ))}
+                  <option value="">
+                    {fn === "classify" ? t("请选择站点") : t("自动选择第一个启用站点")}
+                  </option>
+                  {providers
+                    .filter((provider) => provider.supportedFunctions.includes(fn))
+                    .map((provider) => (
+                      <option key={provider.id} value={provider.id}>
+                        {provider.label}{provider.enabled ? "" : t("（已停用）")}
+                      </option>
+                    ))}
                 </select>
               </label>
               <label className="secret-field">
@@ -814,6 +972,40 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
           );
         })}
       </div>
+
+      <h3>{t("邮件自动分类")}</h3>
+      <p className="hint">
+        {t("打开后，新邮件正文会自动发给所选 TypeSafe jev 站点做分类；模型只返回标签名和把握程度，标签与颜色只存本机。默认关闭。")}
+      </p>
+      <section className="ai-feature-card">
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            aria-label={t("开启邮件自动分类")}
+            checked={classifyEnabled}
+            onChange={(event) => void toggleClassify(event.target.checked)}
+          />
+          <span>{t("开启邮件自动分类")}</span>
+        </label>
+        <label className="secret-field">
+          {t("把握程度门槛")}<input
+            type="number"
+            min={50}
+            max={99}
+            aria-label={t("把握程度门槛")}
+            value={classifyPercent}
+            onChange={(event) => setClassifyPercent(Number(event.target.value))}
+            onBlur={() => void saveClassifyPercent()}
+          />
+        </label>
+        <p className="hint">{t("允许 50–99，默认 75；低于门槛的邮件归到「其他」。")}</p>
+        {classifyNotice && <p className="notice" role="status">{classifyNotice}</p>}
+        {classifyError && (
+          <p className="error" role="alert">
+            {t("操作失败：")}{classifyError}
+          </p>
+        )}
+      </section>
 
       <h3>{t("通知智能识别（高级功能）")}</h3>
       <p className="hint">
@@ -968,6 +1160,37 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {classifyRisk && (
+        <div className="ai-modal-backdrop" role="presentation">
+          <section
+            className="ai-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("确认开启邮件自动分类")}
+          >
+            <h3>{t("确认开启邮件自动分类")}</h3>
+            <p>{t("开启后，每一封新落地邮件的正文都会自动发往下面的目标做分类，不再逐封确认。")}</p>
+            <dl className="ai-modal-targets">
+              <dt>{t("站点")}</dt>
+              <dd>{classifyRisk.providerLabel}</dd>
+              <dt>{t("完整域名")}</dt>
+              <dd>{classifyRisk.host}</dd>
+              <dt>{t("用哪个模型")}</dt>
+              <dd>{classifyRisk.model}</dd>
+              <dt>{t("是不是本地服务")}</dt>
+              <dd>{classifyRisk.local ? t("是，本地服务，内容不离开这台电脑") : t("不是，内容会发送到远程站点")}</dd>
+            </dl>
+            <p className="hint">{t("关掉这个开关会立刻停止自动外发；已经贴好的本地标签会保留。")}</p>
+            <div className="form-actions">
+              <button type="button" className="primary" onClick={() => void confirmEnableClassify()}>
+                {t("确认开启")}</button>
+              <button type="button" onClick={() => setClassifyRisk(null)}>
+                {t("取消")}</button>
+            </div>
+          </section>
         </div>
       )}
 

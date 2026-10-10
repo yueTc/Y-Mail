@@ -26,7 +26,27 @@ import { api } from "../api";
 
 vi.mock("../RichTextEditor");
 
-vi.mock("../api", () => ({
+vi.mock("../api", () => {
+  const baseSettings = {
+    dataDir: "",
+    attachmentDir: "",
+    notifyNewMail: true,
+    notifyAiEnabled: false,
+    blockRemoteImagesByDefault: true,
+    minimizeToTrayOnClose: true,
+    startMinimizedToTray: false,
+    autoCheckUpdate: false,
+    updateCheckIntervalHours: 24,
+    syncPollIntervalSeconds: 60,
+    defaultDataDir: "",
+    defaultAttachmentDir: "",
+    activeDataDir: "",
+    activeAttachmentDir: "",
+    firstRun: false,
+    classifyEnabled: false,
+    classifyConfidencePercent: 75,
+  };
+  return {
   describeError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
   api: {
     getMessageBody: vi.fn(),
@@ -59,8 +79,17 @@ vi.mock("../api", () => ({
     disableAllAi: vi.fn(),
     clearAiCache: vi.fn(),
     checkNotificationLatency: vi.fn(),
+    getAppSettings: vi.fn(async () => ({ ...baseSettings })),
+    setClassifySettings: vi.fn(
+      async (enabled: boolean, confidencePercent: number) => ({
+        ...baseSettings,
+        classifyEnabled: enabled,
+        classifyConfidencePercent: confidencePercent,
+      }),
+    ),
   },
-}));
+  };
+});
 
 const MESSAGE: InboxMessage = {
   id: 42,
@@ -575,6 +604,7 @@ describe("通知智能识别开关", () => {
     thinkingLevel: "off",
     enabled: true,
     hasKey: false,
+    supportedFunctions: ["translate", "summary", "polish", "draft", "notification_verify"],
   };
 
   const VERIFY_MAP: AiModelMap = {
@@ -738,5 +768,57 @@ describe("通知智能识别开关", () => {
     await screen.findByText(/请先选择站点和模型，再检查延迟。/);
     expect(screen.queryByRole("dialog", { name: "确认检查延迟" })).toBeNull();
     expect(api.checkNotificationLatency).not.toHaveBeenCalled();
+  });
+});
+
+describe("邮件自动分类设置", () => {
+  const openAiProvider: AiProvider = {
+    id: 1,
+    label: "中转站",
+    kind: "openai_compatible",
+    baseUrl: "https://api.example.com/v1",
+    defaultModel: "gpt",
+    models: ["gpt"],
+    thinkingLevel: "off",
+    enabled: true,
+    hasKey: true,
+    supportedFunctions: ["translate", "summary", "polish", "draft", "notification_verify"],
+  };
+  const typeSafeProvider: AiProvider = {
+    id: 2,
+    label: "jev",
+    kind: "typesafe",
+    baseUrl: "https://api.typesafe.ai/v1",
+    defaultModel: "jev-latest",
+    models: [],
+    thinkingLevel: "off",
+    enabled: true,
+    hasKey: true,
+    supportedFunctions: ["classify"],
+  };
+
+  function prepare() {
+    vi.mocked(api.listAiProviders).mockResolvedValue([openAiProvider, typeSafeProvider]);
+    vi.mocked(api.listAiModelMaps).mockResolvedValue([]);
+    vi.mocked(api.listAiAudit).mockResolvedValue([]);
+    return render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={vi.fn()} />);
+  }
+
+  it("邮件分类的站点下拉只列支持分类的 TypeSafe jev", async () => {
+    prepare();
+    const select = await screen.findByLabelText("邮件分类站点");
+    const texts = within(select)
+      .getAllByRole("option")
+      .map((option) => option.textContent ?? "");
+    expect(texts.some((text) => text.includes("jev"))).toBe(true);
+    expect(texts.some((text) => text.includes("中转站"))).toBe(false);
+  });
+
+  it("自动分类开关默认关闭，门槛默认 75", async () => {
+    prepare();
+    const toggle = await screen.findByLabelText("开启邮件自动分类");
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    const threshold = screen.getByLabelText("把握程度门槛") as HTMLInputElement;
+    expect(threshold.value).toBe("75");
   });
 });

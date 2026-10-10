@@ -25,8 +25,8 @@ pub mod sync;
 pub mod sync_settings;
 
 pub use ai::{
-    AiAuthorizationPreview, AiProviderInput, AiProviderView, AiTarget, AiTextOutcome, AiTranslation,
-    ClassifyPreview, ClassifyPreviewTarget, NotificationLatency, CLASSIFY_BODY_MAX_CHARS,
+    ai_provider_supports, AiAuthorizationPreview, AiProviderInput, AiProviderView, AiTarget, AiTextOutcome,
+    AiTranslation, ClassifyPreview, ClassifyPreviewTarget, NotificationLatency, CLASSIFY_BODY_MAX_CHARS,
     TYPESAFE_PROBE_MODEL,
 };
 pub use checks::ConnectionReport;

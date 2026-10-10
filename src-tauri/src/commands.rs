@@ -9,9 +9,9 @@
 use std::path::{Path, PathBuf};
 
 use mail_core::{
-    decode_encoded_words, AccountInboxSummary, AiAuthorizationPreview, AiFunction, AiModelMapEntry,
-    AiProviderInput, AiProviderKind, AiProviderView, AiTextOutcome, AiThinkingLevel, AiTranslation,
-    ClassifyPreview, ConnectionReport, ContactDraft, ContactExportKind, ContactImportEntry,
+    ai_provider_supports, decode_encoded_words, AccountInboxSummary, AiAuthorizationPreview, AiFunction,
+    AiModelMapEntry, AiProviderInput, AiProviderKind, AiProviderView, AiTextOutcome, AiThinkingLevel,
+    AiTranslation, ClassifyPreview, ConnectionReport, ContactDraft, ContactExportKind, ContactImportEntry,
     ContactImportMode, ContactScope, EngineError, InboxFolder, InboxMessage, InboxQuery, InboxThread,
     MailEngine, MailLabel, NewOutbox, OutboxKind, SearchHit, SearchQuery, SnippetSegment, StoredAiAudit,
     StoredAttachment, StoredContact, StoredOutbox, StoredSignature,
@@ -25,8 +25,9 @@ use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::settings::{
-    AppSettings, SYNC_POLL_INTERVAL_MAX_SECONDS, SYNC_POLL_INTERVAL_MIN_SECONDS,
-    UPDATE_CHECK_INTERVAL_MAX_HOURS, UPDATE_CHECK_INTERVAL_MIN_HOURS,
+    AppSettings, CLASSIFY_CONFIDENCE_MAX_PERCENT, CLASSIFY_CONFIDENCE_MIN_PERCENT,
+    SYNC_POLL_INTERVAL_MAX_SECONDS, SYNC_POLL_INTERVAL_MIN_SECONDS, UPDATE_CHECK_INTERVAL_MAX_HOURS,
+    UPDATE_CHECK_INTERVAL_MIN_HOURS,
 };
 use crate::state::AppState;
 use crate::storage_dir::{self, ChangeDataDirResult, MigrationStart};
@@ -578,6 +579,10 @@ pub struct AppSettingsDto {
     pub active_data_dir: String,
     /// 当前引擎实际在用的附件目录。
     pub active_attachment_dir: String,
+    /// 「邮件自动分类」开关；默认关，只存本机，不同步。
+    pub classify_enabled: bool,
+    /// 分类把握程度门槛（百分数，50–99）；默认 75，只存本机，不同步。
+    pub classify_confidence_percent: u8,
     /// 是不是全新安装后的第一次启动；界面据此弹「数据放哪」向导。
     pub first_run: bool,
 }
@@ -658,6 +663,27 @@ pub async fn set_app_settings(
         .save_settings(settings.clone())
         .map_err(|error| CommandError::new(format!("保存设置失败：{error}")))?;
     bridge_synced_toggles(state.inner(), &settings).await;
+    Ok(build_settings_dto(state.inner()))
+}
+
+/// 保存「邮件自动分类」开关与把握程度门槛。
+///
+/// 这两个字段只存本机，不参与账号同步；门槛越界直接报错、不写盘。
+#[tauri::command]
+pub async fn set_classify_settings(
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+    confidence_percent: u8,
+) -> Result<AppSettingsDto, CommandError> {
+    if !(CLASSIFY_CONFIDENCE_MIN_PERCENT..=CLASSIFY_CONFIDENCE_MAX_PERCENT).contains(&confidence_percent) {
+        return Err(CommandError::input("把握程度门槛要在 50 到 99 之间"));
+    }
+    let mut settings = state.settings_snapshot();
+    settings.classify_enabled = enabled;
+    settings.classify_confidence_percent = confidence_percent;
+    state
+        .save_settings(settings)
+        .map_err(|error| CommandError::new(format!("保存设置失败：{error}")))?;
     Ok(build_settings_dto(state.inner()))
 }
 
@@ -1012,6 +1038,8 @@ fn build_settings_dto(state: &AppState) -> AppSettingsDto {
         auto_check_update: settings.auto_check_update,
         update_check_interval_hours: settings.update_check_interval_hours,
         sync_poll_interval_seconds: settings.sync_poll_interval_seconds,
+        classify_enabled: settings.classify_enabled,
+        classify_confidence_percent: settings.normalized_classify_confidence_percent(),
         default_data_dir: strip_verbatim_prefix(&default_dir.to_string_lossy()),
         default_attachment_dir: strip_verbatim_prefix(
             &settings.effective_attachment_dir(default_dir).to_string_lossy(),
@@ -3198,6 +3226,8 @@ pub struct AiProviderDto {
     pub enabled: bool,
     /// 保险箱里是否已有密钥。
     pub has_key: bool,
+    /// 这个站点类型支持的功能标识（邮件分类只认 TypeSafe jev）。
+    pub supported_functions: Vec<String>,
 }
 
 impl AiProviderDto {
@@ -3212,6 +3242,11 @@ impl AiProviderDto {
             thinking_level: view.thinking_level.as_str().to_string(),
             enabled: view.enabled,
             has_key: view.has_key,
+            supported_functions: ALL_AI_FUNCTIONS
+                .iter()
+                .filter(|function| ai_provider_supports(view.kind, **function))
+                .map(|function| function.as_str().to_string())
+                .collect(),
         }
     }
 }
@@ -3473,6 +3508,16 @@ impl AiAuditDto {
         }
     }
 }
+
+/// 全部 AI 功能，按界面展示顺序；用来算站点支持哪些功能。
+const ALL_AI_FUNCTIONS: [AiFunction; 6] = [
+    AiFunction::Translate,
+    AiFunction::Summary,
+    AiFunction::Polish,
+    AiFunction::Draft,
+    AiFunction::NotificationVerify,
+    AiFunction::Classify,
+];
 
 fn parse_ai_function(value: &str) -> Result<AiFunction, CommandError> {
     AiFunction::parse(value).ok_or_else(|| {

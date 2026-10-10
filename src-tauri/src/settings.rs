@@ -215,6 +215,23 @@ mod tests {
     }
 
     #[test]
+    fn classify_threshold_percent_is_clamped_to_50_99() {
+        let mut settings = AppSettings {
+            classify_confidence_percent: 10,
+            ..Default::default()
+        };
+        assert_eq!(settings.normalized_classify_confidence_percent(), 75);
+        settings.classify_confidence_percent = 120;
+        assert_eq!(settings.normalized_classify_confidence_percent(), 75);
+        settings.classify_confidence_percent = 80;
+        assert_eq!(settings.normalized_classify_confidence_percent(), 80);
+        settings.classify_confidence_percent = 50;
+        assert_eq!(settings.normalized_classify_confidence_percent(), 50);
+        settings.classify_confidence_percent = 99;
+        assert_eq!(settings.normalized_classify_confidence_percent(), 99);
+    }
+
+    #[test]
     fn save_then_load_round_trips() {
         let dir = std::env::temp_dir().join(format!(
             "ymail-settings-test-{}-{}",

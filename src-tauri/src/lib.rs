@@ -55,6 +55,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_app_settings,
             commands::set_app_settings,
+            commands::set_classify_settings,
             commands::change_data_dir,
             commands::open_data_dir,
             commands::restart_app,

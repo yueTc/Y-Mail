@@ -59,6 +59,8 @@ const BASE_SETTINGS: AppSettings = {
   activeDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",
   activeAttachmentDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop/downloads",
   firstRun: false,
+  classifyEnabled: false,
+  classifyConfidencePercent: 75,
 };
 
 const UPDATE_INFO = {

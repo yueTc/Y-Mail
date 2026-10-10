@@ -62,6 +62,11 @@ pub fn provider_function(function: AiFunction) -> ProviderFunction {
     }
 }
 
+/// 站点类型是否支持某个功能；命令层与界面用它过滤功能级站点下拉。
+pub fn ai_provider_supports(kind: AiProviderKind, function: AiFunction) -> bool {
+    provider_kind(kind).supports(provider_function(function))
+}
+
 /// 思考程度在存储层与 AI 层之间的映射。
 fn thinking_level(level: AiThinkingLevel) -> ThinkingLevel {
     match level {
