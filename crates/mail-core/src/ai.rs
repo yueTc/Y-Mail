@@ -34,6 +34,9 @@ pub const NOTIFICATION_VERIFY_TIMEOUT: Duration = Duration::from_secs(15);
 /// TypeSafe jev 的默认模型名；官方推荐值。
 pub const TYPESAFE_PROBE_MODEL: &str = "jev-latest";
 
+/// 分类外发的正文上限：只发前 2000 个字符。
+pub const CLASSIFY_BODY_MAX_CHARS: usize = 2000;
+
 /// 一次外发授权令牌的有效期。
 pub const AI_AUTHORIZATION_TTL: Duration = Duration::from_secs(300);
 
@@ -187,6 +190,36 @@ pub struct AiAuthorizationPreview {
     pub from_cache: bool,
 }
 
+/// 一批邮件的分类外发确认预览。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassifyPreview {
+    /// 站点主键。
+    pub provider_id: i64,
+    /// 站点显示名。
+    pub provider_label: String,
+    /// 外发域名。
+    pub host: String,
+    /// 模型。
+    pub model: String,
+    /// 是否本机服务。
+    pub local: bool,
+    /// 一次性授权令牌。
+    pub authorization_token: String,
+    /// 令牌有效期（秒）。
+    pub expires_in_seconds: u64,
+    /// 本次要分类的邮件与各自内容哈希。
+    pub targets: Vec<ClassifyPreviewTarget>,
+}
+
+/// 分类预览里的一封目标邮件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassifyPreviewTarget {
+    /// 邮件主键。
+    pub message_id: i64,
+    /// 外发正文的内容哈希；只用于校验，不包含正文。
+    pub content_hash: String,
+}
+
 /// 已经确认、等待真正外发的一次性授权。
 #[derive(Clone)]
 pub struct PendingAiAuthorization {
@@ -210,6 +243,10 @@ pub struct PendingAiAuthorization {
     pub target_language: String,
     /// 内容哈希。
     pub content_hash: String,
+    /// 目标邮件编号；普通单封功能为空。
+    pub message_ids: Vec<i64>,
+    /// 每封邮件外发正文的哈希；普通单封功能只放一条。
+    pub content_hashes: Vec<String>,
     /// 过期时刻。
     pub expires_at: Instant,
 }
@@ -570,6 +607,99 @@ impl MailEngine {
         })
     }
 
+    /// 分类前的外发确认预览：读本地正文算哈希并回一次性令牌；不发网络请求。
+    ///
+    /// 传入的邮件编号会去重并保持顺序；任何一封没有正文都会整体拒绝。
+    pub fn preview_classify_messages(&self, message_ids: &[i64]) -> Result<ClassifyPreview, EngineError> {
+        if message_ids.is_empty() {
+            return Err(EngineError::BadRequest("请先选择要分类的邮件".to_string()));
+        }
+        let mut unique: Vec<i64> = Vec::new();
+        for id in message_ids {
+            if !unique.contains(id) {
+                unique.push(*id);
+            }
+        }
+        let target = self.resolve_ai_target(AiFunction::Classify)?;
+        let mut targets = Vec::with_capacity(unique.len());
+        let mut hashes = Vec::with_capacity(unique.len());
+        for id in &unique {
+            let body = self.store().get_message_body(*id)?.ok_or_else(|| {
+                EngineError::BadRequest("邮件正文还没下载，请先打开一次这封邮件".to_string())
+            })?;
+            let text = truncate_classify_body(&classify_body_text(&body));
+            if text.trim().is_empty() {
+                return Err(EngineError::BadRequest("这封邮件没有可以分类的正文".to_string()));
+            }
+            let hash = hash_text(&text);
+            hashes.push(hash.clone());
+            targets.push(ClassifyPreviewTarget {
+                message_id: *id,
+                content_hash: hash,
+            });
+        }
+        let token = self.store_pending_authorization(
+            AiFunction::Classify,
+            &target,
+            "",
+            hashes.first().cloned().unwrap_or_default(),
+            unique,
+            hashes,
+        )?;
+        Ok(ClassifyPreview {
+            provider_id: target.provider_id,
+            provider_label: target.provider_label.clone(),
+            host: host_of(&target.base_url),
+            model: target.model.clone(),
+            local: target.local,
+            authorization_token: token,
+            expires_in_seconds: AI_AUTHORIZATION_TTL.as_secs(),
+            targets,
+        })
+    }
+
+    /// 校验并一次性消费分类令牌；重新读正文逐封比对哈希，返回邮件编号。
+    ///
+    /// 令牌无论校验成功与否都只消费一次；哈希、数量、顺序任何不一致都整体拒绝。
+    pub fn consume_classify_authorization(&self, token: &str) -> Result<Vec<i64>, EngineError> {
+        let pending = self.take_pending_classify(token)?;
+        if pending.message_ids.is_empty() || pending.message_ids.len() != pending.content_hashes.len() {
+            return Err(EngineError::AiAuthorizationInvalid);
+        }
+        let mut hashes = Vec::with_capacity(pending.message_ids.len());
+        for id in &pending.message_ids {
+            let body = self
+                .store()
+                .get_message_body(*id)?
+                .ok_or(EngineError::AiAuthorizationInvalid)?;
+            let text = truncate_classify_body(&classify_body_text(&body));
+            hashes.push(hash_text(&text));
+        }
+        if hashes != pending.content_hashes {
+            return Err(EngineError::AiAuthorizationInvalid);
+        }
+        Ok(pending.message_ids)
+    }
+
+    fn take_pending_classify(&self, token: &str) -> Result<PendingAiAuthorization, EngineError> {
+        if token.trim().is_empty() {
+            return Err(EngineError::AiAuthorizationRequired);
+        }
+        let now = Instant::now();
+        let mut guard = self
+            .ai_authorizations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(pending) = guard.get(token).cloned() else {
+            return Err(EngineError::AiAuthorizationInvalid);
+        };
+        guard.remove(token);
+        drop(guard);
+        if pending.expires_at <= now || pending.function != AiFunction::Classify {
+            return Err(EngineError::AiAuthorizationInvalid);
+        }
+        Ok(pending)
+    }
     /// 预览阶段只读本地正文；返回内容哈希与是否命中缓存。
     fn authorization_source(
         &self,
@@ -638,13 +768,33 @@ impl MailEngine {
         Ok((source_hash, from_cache))
     }
 
-    /// 生成一次性外发授权令牌。
+    /// 生成一次性外发授权令牌（单封功能）。
     fn issue_authorization(
         &self,
         function: AiFunction,
         target: &AiTarget,
         target_language: &str,
         content_hash: &str,
+    ) -> Result<String, EngineError> {
+        self.store_pending_authorization(
+            function,
+            target,
+            target_language,
+            content_hash.to_string(),
+            Vec::new(),
+            vec![content_hash.to_string()],
+        )
+    }
+
+    /// 生成一次性外发授权令牌并放进待授权表。
+    fn store_pending_authorization(
+        &self,
+        function: AiFunction,
+        target: &AiTarget,
+        target_language: &str,
+        content_hash: String,
+        message_ids: Vec<i64>,
+        content_hashes: Vec<String>,
     ) -> Result<String, EngineError> {
         let mut bytes = [0_u8; 24];
         getrandom::fill(&mut bytes)
@@ -660,7 +810,9 @@ impl MailEngine {
             thinking_level: target.thinking_level,
             local: target.local,
             target_language: target_language.to_string(),
-            content_hash: content_hash.to_string(),
+            content_hash,
+            message_ids,
+            content_hashes,
             expires_at: Instant::now() + AI_AUTHORIZATION_TTL,
         };
         self.ai_authorizations
@@ -669,7 +821,6 @@ impl MailEngine {
             .insert(token.clone(), pending);
         Ok(token)
     }
-
     /// 校验并一次性消费授权令牌。缓存命中不调用这里，也不需要令牌。
     #[allow(clippy::too_many_arguments)]
     fn consume_authorization(
@@ -1309,6 +1460,29 @@ fn cache_key(function: AiFunction, target: &AiTarget, target_lang: &str, source_
     ))
 }
 
+/// 分类要外发的正文纯文本：优先纯文本，没有就按现有切段逻辑取 HTML 文字。
+fn classify_body_text(body: &mail_store::StoredMessageBody) -> String {
+    body.text_plain
+        .clone()
+        .or_else(|| {
+            body.html_sanitized.as_deref().map(|html| {
+                split_html(html)
+                    .into_iter()
+                    .map(|segment| segment.text)
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            })
+        })
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+/// 截取分类正文；最多前 2000 个字符。
+fn truncate_classify_body(text: &str) -> String {
+    text.chars().take(CLASSIFY_BODY_MAX_CHARS).collect()
+}
+
 /// 文本哈希（十六进制小写）。
 fn hash_text(text: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -1472,6 +1646,119 @@ mod tests {
             .resolve_ai_target(AiFunction::Translate)
             .expect_err("jev 做不了翻译，应拒绝");
         assert!(matches!(error, EngineError::BadRequest(_)), "{error:?}");
+    }
+
+    fn seed_message_with_body(engine: &MailEngine, uid: u32, body: &str) -> i64 {
+        let store = engine.store();
+        let draft = mail_domain::AccountDraft {
+            display_name: "测试".to_string(),
+            email: format!("u{uid}@example.com"),
+            auth_type: mail_domain::AuthType::Password,
+            username: format!("u{uid}@example.com"),
+            imap: mail_domain::ServerConfig {
+                host: "imap.example.com".to_string(),
+                port: 993,
+                security: mail_domain::Security::Tls,
+            },
+            smtp: mail_domain::ServerConfig {
+                host: "smtp.example.com".to_string(),
+                port: 465,
+                security: mail_domain::Security::Tls,
+            },
+            proxy: AccountProxyMode::InheritGlobal,
+            color: String::new(),
+            enabled: true,
+            oauth_provider: None,
+            oauth_client_id: String::new(),
+        };
+        let account_id = store.insert_account(&draft, None).expect("插入账号").0;
+        let folder_id = store
+            .upsert_folder(account_id, "INBOX", "/", mail_domain::FolderKind::Inbox)
+            .expect("插入文件夹");
+        store
+            .insert_messages(&[mail_store::NewMessage {
+                account_id,
+                folder_id,
+                uid,
+                message_id_header: format!("<m{uid}@example.com>"),
+                thread_key: format!("thread-{uid}"),
+                subject: format!("主题 {uid}"),
+                from_name: "张三".to_string(),
+                from_addr: "zhangsan@example.com".to_string(),
+                to_json: "[]".to_string(),
+                cc_json: "[]".to_string(),
+                date_utc: "2026-10-10T01:00:00Z".to_string(),
+                size: 1000,
+                has_attachments: false,
+                is_read: false,
+                is_flagged: false,
+                is_answered: false,
+                is_draft: false,
+            }])
+            .expect("插入邮件");
+        let id = store
+            .list_inbox_messages(&mail_store::InboxQuery {
+                account_id: Some(account_id),
+                folder_id: Some(folder_id),
+                unread_only: false,
+                flagged_only: false,
+                folder_kind: None,
+                offset: 0,
+                limit: 10,
+            })
+            .expect("读回收件箱")
+            .into_iter()
+            .find(|message| message.uid == uid)
+            .expect("应能读回刚插的邮件")
+            .id;
+        store.save_message_body(id, Some(body), None).expect("写入正文");
+        id
+    }
+
+    #[test]
+    fn classify_authorization_is_one_time_and_bound_to_message_hashes() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let provider_id = add_typesafe(&engine);
+        engine
+            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
+            .expect("配置分类");
+        let first = seed_message_with_body(&engine, 1, "账单已出，请查收");
+        let second = seed_message_with_body(&engine, 2, "明天上午开会");
+
+        let preview = engine
+            .preview_classify_messages(&[first, second])
+            .expect("分类预览");
+        assert!(!preview.authorization_token.is_empty());
+        assert_eq!(preview.targets.len(), 2);
+        assert_eq!(preview.targets[0].message_id, first);
+        assert_eq!(preview.targets[1].message_id, second);
+        assert_eq!(preview.host, "api.typesafe.ai");
+        assert!(!preview.local);
+        assert_eq!(preview.model, "jev-latest");
+
+        // 改掉第二封正文后，令牌必须失效，且不允许部分执行。
+        engine
+            .store()
+            .save_message_body(second, Some("改过的正文"), None)
+            .expect("改写正文");
+        let error = engine
+            .consume_classify_authorization(&preview.authorization_token)
+            .expect_err("正文变了应拒绝");
+        assert!(matches!(error, EngineError::AiAuthorizationInvalid));
+
+        // 重新预览后第一次能消费，第二次必须拒绝（一次性）。
+        let preview = engine
+            .preview_classify_messages(&[first, second])
+            .expect("再预览");
+        let ids = engine
+            .consume_classify_authorization(&preview.authorization_token)
+            .expect("第一次消费应成功");
+        assert_eq!(ids, vec![first, second]);
+        let error = engine
+            .consume_classify_authorization(&preview.authorization_token)
+            .expect_err("令牌只能用一次");
+        assert!(matches!(error, EngineError::AiAuthorizationInvalid));
     }
 
     fn engine(dir: &std::path::Path) -> MailEngine {
