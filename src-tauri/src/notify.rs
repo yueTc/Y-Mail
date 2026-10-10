@@ -147,6 +147,11 @@ pub fn spawn(
     });
 }
 
+/// 分类开关关着时后台消费直接返回：不读正文、不调模型、队列原样留着。
+fn classify_drain_enabled(enabled: &AtomicBool) -> bool {
+    enabled.load(Ordering::Relaxed)
+}
+
 /// 从号码列表里截出这一轮要处理的（最多 20 个）。
 fn take_classify_batch(ids: Vec<i64>) -> Vec<i64> {
     ids.into_iter().take(CLASSIFY_BATCH_LIMIT).collect()
@@ -157,7 +162,7 @@ fn take_classify_batch(ids: Vec<i64>) -> Vec<i64> {
 /// 开关关着时原样保留队列、一次模型都不调；开着时每轮最多处理 20 封。
 /// 每封独立取一次引擎锁，避免长时间占住界面命令要用的锁；存储锁绝不跨 await。
 async fn drain_classify_queue(app: &AppHandle, enabled: &AtomicBool, percent: &AtomicU8) {
-    if !enabled.load(Ordering::Relaxed) {
+    if !classify_drain_enabled(enabled) {
         return;
     }
     let ids = {
@@ -475,13 +480,24 @@ fn show_system_notification(app: &AppHandle, title: String, body: String, _messa
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        classify_drain_enabled, safe_action_value, should_pop_system_notification, should_run_verification,
+        take_classify_batch, verification_lines, SafeAction,
+    };
     #[cfg(windows)]
     use super::{notification_display_name, DEFAULT_NOTIFICATION_NAME};
-    use super::{
-        safe_action_value, should_pop_system_notification, should_run_verification, take_classify_batch,
-        verification_lines, SafeAction,
-    };
     use mail_core::VerificationFinding;
+
+    #[test]
+    fn classify_drain_stops_when_switch_is_off() {
+        let off = std::sync::atomic::AtomicBool::new(false);
+        assert!(
+            !classify_drain_enabled(&off),
+            "开关关着时不消费队列、一次模型都不调"
+        );
+        let on = std::sync::atomic::AtomicBool::new(true);
+        assert!(classify_drain_enabled(&on));
+    }
 
     #[test]
     fn classify_batch_is_capped_at_twenty() {

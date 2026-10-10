@@ -2037,6 +2037,9 @@ mod tests {
                 .is_none(),
             "失败不能贴标签"
         );
+        for audit in first_engine.list_ai_audit(10).expect("审计") {
+            assert!(!audit.detail.contains("随便一封邮件"), "审计不能记正文");
+        }
 
         // 2）网络连接不上：同样不贴标签，且不影响下一封独立邮件。
         let dir2 = tempfile::tempdir().expect("临时目录");
@@ -2055,6 +2058,78 @@ mod tests {
             .get_message_label(message)
             .expect("读标签")
             .is_none());
+    }
+
+    /// 假 HTTP 服务：收一次请求，返回指定状态与正文；用来测错误脱敏。
+    async fn fake_status_server(status: &'static str, payload: &'static str) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+        let port = listener.local_addr().expect("地址").port();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("接受连接");
+            let mut buf = vec![0u8; 8192];
+            let _ = socket.read(&mut buf).await;
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                payload.len()
+            );
+            socket.write_all(response.as_bytes()).await.expect("写响应");
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn classify_error_never_leaks_the_api_key_or_body() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let port = fake_status_server(
+            "401 Unauthorized",
+            r#"{"error":{"message":"Incorrect API key provided: sk-live-secret-123"}}"#,
+        )
+        .await;
+        let secret = Secret::new("sk-live-secret-123");
+        let provider_id = engine
+            .save_ai_provider(
+                &AiProviderInput {
+                    id: None,
+                    label: "jev".to_string(),
+                    kind: AiProviderKind::TypeSafe,
+                    base_url: format!("http://127.0.0.1:{port}/v1"),
+                    default_model: "jev-latest".to_string(),
+                    models: Vec::new(),
+                    thinking_level: AiThinkingLevel::Off,
+                    enabled: true,
+                },
+                Some(&secret),
+            )
+            .expect("保存站点")
+            .id;
+        engine
+            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
+            .expect("配置分类");
+        let message = seed_message_with_body(&engine, 91, "正文里有敏感内容，不该进审计");
+
+        let error = engine
+            .classify_message(message, 0.75)
+            .await
+            .expect_err("站点报错时应返回错误");
+        let text = error.to_string();
+        assert!(!text.contains("sk-live-secret-123"), "错误里不能出现密钥：{text}");
+        assert!(
+            engine
+                .store()
+                .get_message_label(message)
+                .expect("读标签")
+                .is_none(),
+            "报错时不能贴标签"
+        );
+
+        let audits = engine.list_ai_audit(10).expect("审计");
+        for audit in audits {
+            assert!(!audit.detail.contains("sk-live-secret-123"), "审计不能记密钥");
+            assert!(!audit.detail.contains("正文里有敏感内容"), "审计不能记正文");
+            assert!(!audit.provider_label.contains("正文里有敏感内容"));
+        }
     }
 
     fn engine(dir: &std::path::Path) -> MailEngine {
