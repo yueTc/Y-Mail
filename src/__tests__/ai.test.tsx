@@ -826,6 +826,19 @@ describe("邮件自动分类设置", () => {
     expect(texts.some((text) => text.includes("中转站"))).toBe(false);
   });
 
+  it("没有 TypeSafe jev 站点时明确提示去哪儿新增", async () => {
+    vi.mocked(api.listAiProviders).mockResolvedValue([openAiProvider]);
+    vi.mocked(api.listAiModelMaps).mockResolvedValue([]);
+    vi.mocked(api.listAiAudit).mockResolvedValue([]);
+    vi.mocked(api.listMailLabels).mockResolvedValue([]);
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={vi.fn()} />);
+    expect(
+      await screen.findByText(
+        "还没有 TypeSafe jev 站点：请先到上面的「AI 站点」里新增一个，再回来选。",
+      ),
+    ).toBeTruthy();
+  });
+
   it("自动分类开关默认关闭，门槛默认 75", async () => {
     prepare();
     const toggle = await screen.findByLabelText("开启邮件自动分类");

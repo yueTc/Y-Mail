@@ -1044,7 +1044,11 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       <div className="ai-feature-list">
         {FUNCTION_ORDER.map((fn) => {
           const draft = featureDrafts[fn] ?? { providerId: "", model: "", thinkingLevel: "" };
-          const selected = providers.find((provider) => String(provider.id) === draft.providerId);
+          // 只列支持这个功能的站点：分类这一行就只会出现 TypeSafe jev。
+          const candidates = providers.filter((provider) =>
+            provider.supportedFunctions.includes(fn),
+          );
+          const selected = candidates.find((provider) => String(provider.id) === draft.providerId);
           return (
             <section key={fn} className="ai-feature-card">
               <h4>{t(FUNCTION_LABEL[fn])}</h4>
@@ -1062,15 +1066,20 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
                   <option value="">
                     {fn === "classify" ? t("请选择站点") : t("自动选择第一个启用站点")}
                   </option>
-                  {providers
-                    .filter((provider) => provider.supportedFunctions.includes(fn))
-                    .map((provider) => (
-                      <option key={provider.id} value={provider.id}>
-                        {provider.label}{provider.enabled ? "" : t("（已停用）")}
-                      </option>
-                    ))}
+                  {candidates.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.label}{provider.enabled ? "" : t("（已停用）")}
+                    </option>
+                  ))}
                 </select>
               </label>
+              {candidates.length === 0 && (
+                <p className="hint">
+                  {fn === "classify"
+                    ? t("还没有 TypeSafe jev 站点：请先到上面的「AI 站点」里新增一个，再回来选。")
+                    : t("还没有支持这个功能的站点。")}
+                </p>
+              )}
               <label className="secret-field">
                 {t("模型")}<input
                   aria-label={t("{0}模型", [t(FUNCTION_LABEL[fn])])}

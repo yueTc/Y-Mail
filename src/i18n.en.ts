@@ -556,6 +556,8 @@ export const EN: Record<string, string> = {
   "把握程度门槛": "Confidence threshold",
   "允许 50–99，默认 75；低于门槛的邮件归到「其他」。": "Allowed range 50–99, default 75; emails below the threshold go to “Other”.",
   "请选择站点": "Choose a site",
+  "还没有 TypeSafe jev 站点：请先到上面的「AI 站点」里新增一个，再回来选。": "No TypeSafe jev site yet: add one under AI sites above, then come back and choose it.",
+  "还没有支持这个功能的站点。": "No site supports this feature yet.",
   "请先在「邮件分类」里选择 TypeSafe jev 站点，再打开自动分类。": "Choose a TypeSafe jev site under Email classification before turning on automatic classification.",
   "所选站点已停用，请先启用或换一个站点。": "The chosen site is disabled; enable it or pick another site.",
   "邮件分类只支持 TypeSafe jev 站点。": "Email classification supports only TypeSafe jev sites.",
