@@ -1673,10 +1673,9 @@ impl InboxMessageDto {
             account_name: message.account_display_name.clone(),
             account_color: message.account_color.clone(),
             folder_path: message.folder_path.clone(),
-            // 收件箱查询带出标签由下一步接上；这一版还没有数据源时一律输出 null。
-            label_id: None,
-            label_name: None,
-            label_color: None,
+            label_id: message.label_id,
+            label_name: message.label_name.clone(),
+            label_color: message.label_color.clone(),
         }
     }
 }

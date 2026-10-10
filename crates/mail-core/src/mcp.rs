@@ -866,6 +866,9 @@ mod tests {
             account_display_name: "我".to_string(),
             account_color: "#3366ff".to_string(),
             folder_path: "INBOX".to_string(),
+            label_id: None,
+            label_name: None,
+            label_color: None,
         };
         let view = McpMessageView::from(&message);
         assert_eq!(view.subject, "你好");

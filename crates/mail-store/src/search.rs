@@ -14,7 +14,7 @@ use rusqlite::ToSql;
 
 use crate::connection::Store;
 use crate::error::StoreError;
-use crate::inbox::{row_to_message, InboxMessage, INBOX_COLUMNS};
+use crate::inbox::{row_to_message, InboxMessage, INBOX_COLUMNS, LABEL_JOIN};
 
 /// 高亮片段的控制字符：FTS 的 snippet() 用它标记命中范围。
 const HL_START: char = '\u{1}';
@@ -306,6 +306,7 @@ impl Store {
              FROM message m \
              JOIN folder f ON f.id = m.folder_id \
              JOIN account a ON a.id = m.account_id \
+             {LABEL_JOIN} \
              {} \
              WHERE {where_sql} \
              ORDER BY m.date_utc DESC, m.id DESC \
@@ -338,7 +339,7 @@ impl Store {
 }
 
 /// 收件箱行结构的列数（`INBOX_COLUMNS` 的列数）。
-const INBOX_COLUMN_COUNT: usize = 19;
+const INBOX_COLUMN_COUNT: usize = 22;
 
 fn fts_join(use_fts: bool) -> &'static str {
     if use_fts {
@@ -438,6 +439,15 @@ fn fallback_snippet(message: &InboxMessage, parsed: &ParsedQuery, body_window: &
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn search_column_count_matches_inbox_columns() {
+        assert_eq!(super::INBOX_COLUMN_COUNT, 22);
+        assert_eq!(
+            super::INBOX_COLUMN_COUNT,
+            crate::inbox::INBOX_COLUMNS.split(',').count()
+        );
+    }
+
     use mail_domain::FolderKind;
 
     use super::{parse_query, SearchQuery};

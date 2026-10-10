@@ -52,6 +52,12 @@ pub struct InboxMessage {
     pub account_color: String,
     /// 所属文件夹路径。
     pub folder_path: String,
+    /// 本地标签主键；没有标签为 None。
+    pub label_id: Option<i64>,
+    /// 标签名；没有标签为 None。
+    pub label_name: Option<String>,
+    /// 标签颜色键；没有标签为 None。
+    pub label_color: Option<String>,
 }
 
 /// 折叠后的一条会话线程。
@@ -125,7 +131,12 @@ impl Default for InboxQuery {
 pub(crate) const INBOX_COLUMNS: &str = "m.id, m.account_id, m.folder_id, m.uid, m.thread_key, \
     m.subject, m.from_name, m.from_addr, m.date_utc, m.size, \
     m.has_attachments, m.is_read, m.is_flagged, m.snippet, m.message_id_header, \
-    a.email, a.display_name, a.color, f.full_path";
+    a.email, a.display_name, a.color, f.full_path, \
+    ml.label_id, l.name, l.color";
+
+/// 收件箱查询统一带的标签关联：没有标签时三列全空。
+pub(crate) const LABEL_JOIN: &str = "LEFT JOIN message_label ml ON ml.message_id = m.id \
+    LEFT JOIN mail_label l ON l.id = ml.label_id";
 
 /// 作用范围过滤：?1 账号编号，?2 文件夹编号，?3 文件夹类型，?5 是否只看红旗。
 ///
@@ -141,10 +152,13 @@ const THREAD_BASE: &str = "SELECT m.id, m.account_id, m.folder_id, m.uid, m.thre
     m.subject, m.from_name, m.from_addr, m.date_utc, m.size, \
     m.has_attachments, m.is_read, m.is_flagged, m.snippet, m.message_id_header, \
     a.email, a.display_name, a.color, f.full_path, \
+    ml.label_id, l.name, l.color, \
     COALESCE(NULLIF(m.thread_key, ''), NULLIF(m.message_id_header, ''), '#' || m.id) AS tkey \
     FROM message m \
     JOIN folder f ON f.id = m.folder_id \
-    JOIN account a ON a.id = m.account_id";
+    JOIN account a ON a.id = m.account_id \
+    LEFT JOIN message_label ml ON ml.message_id = m.id \
+    LEFT JOIN mail_label l ON l.id = ml.label_id";
 
 /// 线程聚合的排序与计数（窗口函数，SQLite 3.25 起可用）。
 const THREAD_RANKED: &str = "SELECT base.*, \
@@ -201,6 +215,9 @@ pub(crate) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxM
         account_display_name: row.get(16)?,
         account_color: row.get(17)?,
         folder_path: row.get(18)?,
+        label_id: row.get(19)?,
+        label_name: row.get(20)?,
+        label_color: row.get(21)?,
     })
 }
 
@@ -208,13 +225,13 @@ pub(crate) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxM
 fn row_to_thread(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxThread> {
     let mut latest = row_to_message(row)?;
     let account_id: i64 = row.get(1)?;
-    let thread_key: String = row.get(19)?;
+    let thread_key: String = row.get(22)?;
     latest.thread_key = thread_key.clone();
     Ok(InboxThread {
         account_id,
         thread_key,
-        message_count: row.get(21)?,
-        unread_count: row.get(22)?,
+        message_count: row.get(24)?,
+        unread_count: row.get(25)?,
         latest,
     })
 }
@@ -226,6 +243,7 @@ impl Store {
             "SELECT {INBOX_COLUMNS} FROM message m \
              JOIN folder f ON f.id = m.folder_id \
              JOIN account a ON a.id = m.account_id \
+             {LABEL_JOIN} \
              WHERE {SCOPE_FILTER} AND (?4 = 0 OR m.is_read = 0) \
              AND (?5 = 0 OR m.is_flagged = 1) \
              ORDER BY m.date_utc DESC, m.id DESC LIMIT ?6 OFFSET ?7"
@@ -321,7 +339,7 @@ impl Store {
     /// 不在本方法里触碰正文缓存，正文由读信模块单独读取。
     pub fn get_inbox_message(&self, message_id: i64) -> Result<Option<InboxMessage>, StoreError> {
         let sql = format!(
-            "SELECT {INBOX_COLUMNS} FROM message m JOIN folder f ON f.id = m.folder_id JOIN account a ON a.id = m.account_id WHERE m.id = ?1"
+            "SELECT {INBOX_COLUMNS} FROM message m JOIN folder f ON f.id = m.folder_id JOIN account a ON a.id = m.account_id {LABEL_JOIN} WHERE m.id = ?1"
         );
         self.conn()
             .query_row(&sql, [message_id], row_to_message)
@@ -380,6 +398,7 @@ impl Store {
             "SELECT {INBOX_COLUMNS} FROM message m \
              JOIN folder f ON f.id = m.folder_id \
              JOIN account a ON a.id = m.account_id \
+             {LABEL_JOIN} \
              WHERE m.account_id = ?1 AND f.kind = 'inbox' \
                AND COALESCE(NULLIF(m.thread_key, ''), NULLIF(m.message_id_header, ''), '#' || m.id) = ?2 \
              ORDER BY m.date_utc DESC, m.id DESC LIMIT ?3"
@@ -537,6 +556,53 @@ mod tests {
             is_answered: false,
             is_draft: false,
         }
+    }
+
+    #[test]
+    fn inbox_thread_uses_latest_message_label() {
+        let store = migrated();
+        let a = account(&store, "a@example.com", "#111111");
+        let fa = inbox(&store, a);
+        store
+            .insert_messages(&[
+                message(a, fa, 1, "t1", "<m1@x>", "2026-10-01T00:00:00Z", true),
+                message(a, fa, 2, "t1", "<m2@x>", "2026-10-02T00:00:00Z", true),
+            ])
+            .expect("插入邮件");
+        let ids: Vec<i64> = {
+            let ids: Vec<i64> = store
+                .list_inbox_messages(&InboxQuery {
+                    account_id: Some(a),
+                    ..Default::default()
+                })
+                .expect("读邮件")
+                .into_iter()
+                .map(|message| message.id)
+                .collect();
+            ids
+        };
+        let labels = store.list_mail_labels().expect("标签");
+        let bill = labels.iter().find(|label| label.name == "账单").expect("账单").id;
+        let notice = labels.iter().find(|label| label.name == "通知").expect("通知").id;
+        let older = *ids.iter().min().expect("旧邮件");
+        let newer = *ids.iter().max().expect("新邮件");
+        store
+            .set_message_label(older, bill, crate::MailLabelSource::Auto, None)
+            .expect("旧邮件贴账单");
+        store
+            .set_message_label(newer, notice, crate::MailLabelSource::Auto, None)
+            .expect("新邮件贴通知");
+
+        let threads = store
+            .list_inbox_threads(&InboxQuery {
+                account_id: Some(a),
+                ..Default::default()
+            })
+            .expect("读线程");
+        assert_eq!(threads.len(), 1, "同一个线程应折叠成一行");
+        assert_eq!(threads[0].latest.label_id, Some(notice));
+        assert_eq!(threads[0].latest.label_name.as_deref(), Some("通知"));
+        assert_eq!(threads[0].latest.label_color.as_deref(), Some("teal"));
     }
 
     #[test]
