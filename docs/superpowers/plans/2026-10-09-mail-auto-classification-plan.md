@@ -1,6 +1,6 @@
 # 邮件自动分类贴标签 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 | 项 | 值 |
 |---|---|
@@ -85,7 +85,7 @@
 - Consumes: 现有迁移器 run_migrations，第 12 条迁移。
 - Produces: mail_label、message_label 两张表；ai_provider 的 kind 放开 typesafe；ai_model_map 的 function 放开 classify；八条带颜色预置标签；color 只接受固定色板键。
 
-- [ ] **Step 1: 先写失败测试**
+- [x] **Step 1: 先写失败测试**
 
 在 crates/mail-store/src/migrations/mod.rs 的测试模块里，把最新版本断言改成 13，并补：
 
@@ -129,13 +129,13 @@
         assert!(function.contains("classify"), "功能约束要包含 classify：{function}");
     }
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p mail-store migration_0013_creates_mail_labels -- --nocapture
 
 Expected: FAIL，提示找不到 mail_label 表或迁移版本仍是 12。
 
-- [ ] **Step 3: 写迁移 SQL**
+- [x] **Step 3: 写迁移 SQL**
 
 新建 crates/mail-store/src/migrations/sql/0013_mail_label_classification.sql，内容至少包含：
 
@@ -216,7 +216,7 @@ Expected: FAIL，提示找不到 mail_label 表或迁移版本仍是 12。
         ('客户', 'blue', 10, 0), ('账单', 'orange', 20, 0), ('通知', 'teal', 30, 0), ('推广', 'purple', 40, 0),
         ('招聘', 'green', 50, 0), ('同事', 'indigo', 60, 0), ('家人', 'pink', 70, 0), ('其他', 'gray', 1000, 1);
 
-- [ ] **Step 4: 注册迁移并把所有版本断言改成 13**
+- [x] **Step 4: 注册迁移并把所有版本断言改成 13**
 
 在 crates/mail-store/src/migrations/mod.rs 的静态迁移数组末尾加：
 
@@ -228,13 +228,13 @@ Expected: FAIL，提示找不到 mail_label 表或迁移版本仍是 12。
 
 同时更新最新支持版本、迁移数量、测试里的版本数组和 supported_version() 断言。
 
-- [ ] **Step 5: 跑迁移测试**
+- [x] **Step 5: 跑迁移测试**
 
 Run: cargo test -p mail-store migration_0013_creates_mail_labels -- --nocapture
 
 Expected: PASS；另外跑一次 cargo test -p mail-store migrations -- --nocapture，全部通过。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
     git add crates/mail-store/src/migrations/mod.rs crates/mail-store/src/migrations/sql/0013_mail_label_classification.sql
     git commit -m "数据：新增邮件标签与分类功能迁移"
@@ -252,7 +252,7 @@ Expected: PASS；另外跑一次 cargo test -p mail-store migrations -- --nocapt
 - Consumes: Store、StoreError、message 主键。
 - Produces: MailLabel、MailLabelSource、MAIL_LABEL_COLORS；list_mail_labels、create_mail_label、rename_mail_label、delete_mail_label、reorder_mail_labels、set_mail_label_color。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 crates/mail-store/src/label.rs 底部写：
 
@@ -315,13 +315,13 @@ Expected: PASS；另外跑一次 cargo test -p mail-store migrations -- --nocapt
         }
     }
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p mail-store labels_can_be_created_renamed_deleted_and_reordered fallback_label_cannot_be_deleted fallback_label_color_is_fixed_gray -- --nocapture
 
 Expected: FAIL，提示 label 模块、颜色字段或方法不存在。
 
-- [ ] **Step 3: 定义结构与方法签名**
+- [x] **Step 3: 定义结构与方法签名**
 
 在 crates/mail-store/src/label.rs 写：
 
@@ -352,17 +352,17 @@ Expected: FAIL，提示 label 模块、颜色字段或方法不存在。
 
 在 Store 的 impl 块实现：list_mail_labels、create_mail_label、rename_mail_label、delete_mail_label、reorder_mail_labels、set_mail_label_color。list_mail_labels 必须返回 color。create_mail_label 按 MAIL_LABEL_COLORS 顺序挑第一个尚未使用的颜色；全部用过时用当前标签数量对色板长度取模。set_mail_label_color 只接受固定色板键，并在写入前校验；删除标签前先查 is_fallback，是兜底标签返回 StoreError::InvalidData("兜底标签不能删除")；兜底标签改色返回 StoreError::InvalidData("兜底标签颜色不能修改")。reorder_mail_labels 要求传入全部标签 ID、不能重复，并在事务里按顺序更新 sort_order。所有 SQL 用参数绑定。
 
-- [ ] **Step 4: 导出模块**
+- [x] **Step 4: 导出模块**
 
 在 crates/mail-store/src/lib.rs 加 pub mod label;，并在 pub use 区加 MailLabel、MailLabelSource、MAIL_LABEL_COLORS。
 
-- [ ] **Step 5: 跑测试**
+- [x] **Step 5: 跑测试**
 
 Run: cargo test -p mail-store labels_can_be_created_renamed_deleted_and_reordered fallback_label_cannot_be_deleted fallback_label_color_is_fixed_gray -- --nocapture
 
 Expected: PASS。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
     git add crates/mail-store/src/label.rs crates/mail-store/src/lib.rs
     git commit -m "数据：实现本地分类标签增删改查"
@@ -380,7 +380,7 @@ Expected: PASS。
 - Consumes: MailLabel、MailLabelSource、message 表、mail_label 表。
 - Produces: StoredMessageLabel；get_message_label、set_message_label、clear_message_label、list_message_ids_with_label。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 补三个测试：
 
@@ -401,13 +401,13 @@ Expected: PASS。
 
 测试里的 message 插入复用已有 test helper 的 SQL 字段；不要用内存桩，直接跑真实迁移。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p mail-store setting_a_label_replaces_the_previous_one deleting_a_label_clears_its_message_rows deleting_a_message_clears_its_label_row -- --nocapture
 
 Expected: FAIL，提示方法不存在或外键未级联。
 
-- [ ] **Step 3: 实现 Upsert 与读取**
+- [x] **Step 3: 实现 Upsert 与读取**
 
 在同一个 Store impl 块实现：
 
@@ -427,13 +427,13 @@ Expected: FAIL，提示方法不存在或外键未级联。
 
     pub fn list_message_ids_with_label(&self, label_name: &str) -> Result<Vec<i64>, StoreError>
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: cargo test -p mail-store label -- --nocapture
 
 Expected: 标签相关测试全部 PASS，包括级联。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add crates/mail-store/src/label.rs crates/mail-store/src/lib.rs
     git commit -m "数据：实现邮件标签写入与级联清理"
@@ -450,7 +450,7 @@ Expected: 标签相关测试全部 PASS，包括级联。
 - Consumes: NewMessage。
 - Produces: insert_messages_returning_ids(&[NewMessage]) -> Result<Vec<i64>, StoreError>；旧 insert_messages 保持返回 usize。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 crates/mail-store/src/sync.rs 测试模块补：
 
@@ -466,13 +466,13 @@ Expected: 标签相关测试全部 PASS，包括级联。
         assert_eq!(count, 0);
     }
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p mail-store inserting_messages_returns_only_new_ids -- --nocapture
 
 Expected: FAIL，方法不存在。
 
-- [ ] **Step 3: 实现新接口**
+- [x] **Step 3: 实现新接口**
 
 把现有插入循环改成同一个事务里记录 last_insert_rowid()，返回成功写入的编号；如果现有 SQL 用 INSERT OR IGNORE，用 changes() 判断是否真的插入。旧接口：
 
@@ -480,13 +480,13 @@ Expected: FAIL，方法不存在。
         Ok(self.insert_messages_returning_ids(messages)?.len())
     }
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: cargo test -p mail-store inserting_messages_returns_only_new_ids -- --nocapture
 
 Expected: PASS；再跑 cargo test -p mail-store sync:: -- --nocapture 确认旧断言不变。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add crates/mail-store/src/sync.rs
     git commit -m "数据：新邮件插入返回本地邮件编号"
@@ -507,7 +507,7 @@ Expected: PASS；再跑 cargo test -p mail-store sync:: -- --nocapture 确认旧
 - Consumes: 现有三类站点枚举、AiFunction。
 - Produces: mail-ai::ProviderFunction；ProviderKind::TypeSafe；ProviderKind::supports(ProviderFunction) -> bool；AiProviderKind::TypeSafe；mail-core::provider_function(AiFunction) -> ProviderFunction。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 crates/mail-ai/src/provider.rs 测试模块补：
 
@@ -521,13 +521,13 @@ Expected: PASS；再跑 cargo test -p mail-store sync:: -- --nocapture 确认旧
 
 mail-ai 不依赖 mail-store，所以这里禁止引用 AiFunction。固定方案：在 crates/mail-ai/src/provider.rs 定义 ProviderFunction；在 crates/mail-core/src/ai.rs 写 provider_function(AiFunction) -> ProviderFunction 做一对一映射。不要改 Cargo.toml 制造反向依赖。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p mail-ai typesafe_only_supports_classification -- --nocapture
 
 Expected: FAIL，TypeSafe 不存在。
 
-- [ ] **Step 3: 加枚举与映射**
+- [x] **Step 3: 加枚举与映射**
 
 定义 ProviderFunction，至少包含 Translation、Summary、Polish、Draft、NotificationVerify、Classification；ProviderKind 与 AiProviderKind 都加 TypeSafe。as_str/parse 接受 typesafe，label 返回「TypeSafe jev」，default_base_url 返回 https://api.typesafe.ai/v1。ProviderKind::supports 严格按下面这张表实现：
 
@@ -536,13 +536,13 @@ Expected: FAIL，TypeSafe 不存在。
     Ollama：翻译、摘要、润色、起草、通知识别
     TypeSafe：邮件分类
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: cargo test -p mail-ai typesafe_only_supports_classification -- --nocapture
 
 Expected: PASS；站点枚举往返测试也 PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add crates/mail-ai/src/provider.rs crates/mail-store/src/ai.rs crates/mail-core/src/ai.rs
     git commit -m "AI：新增 TypeSafe jev 站点与能力声明"
@@ -560,7 +560,7 @@ Expected: PASS；站点枚举往返测试也 PASS。
 - Consumes: Endpoint、ProxyRoute、Secret、model、正文纯文本、标签名数组。
 - Produces: ClassifyOutcome { choice: String, confidence: f64 }；classify_mail(route, endpoint, model, state, choices, timeout)。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 client.rs 测试模块补：
 
@@ -582,13 +582,13 @@ Expected: PASS；站点枚举往返测试也 PASS。
 
 再加两个失败用例：confidence 超过 1、choice 不在候选里，都返回 AiError::Protocol。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p mail-ai typesafe_classify_sends_systemone_request_and_parses_answer -- --nocapture
 
 Expected: FAIL，classify_mail 不存在。
 
-- [ ] **Step 3: 实现请求**
+- [x] **Step 3: 实现请求**
 
 classify_mail 只接受 TypeSafe；请求体固定为：
 
@@ -605,13 +605,13 @@ classify_mail 只接受 TypeSafe；请求体固定为：
 
 URL 是 join_url(endpoint.base_url, "systemone")，认证头复用 Bearer。解析 answers.category.choice 与 answers.category.confidence；校验 choice 在 choices 里、confidence 在 0..=1、不能为空。错误正文继续走 status_error 清洗。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: cargo test -p mail-ai typesafe_classify -- --nocapture
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add crates/mail-ai/src/client.rs crates/mail-ai/src/error.rs
     git commit -m "AI：接入 TypeSafe jev 分类请求"
@@ -630,7 +630,7 @@ Expected: PASS。
 - Consumes: TypeSafe classify_mail。
 - Produces: test_ai_provider 对 TypeSafe 返回 vec!["jev-latest"]；固定探针不读真实邮件。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 补：
 
@@ -644,23 +644,23 @@ Expected: PASS。
 
     const TYPESAFE_PROBE_STATE: &str = "这是一封测试邮件：您的账单已生成。";
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p mail-core typesafe_test_connection_returns_fixed_model_name -- --nocapture
 
 Expected: FAIL，TypeSafe 走到 list_models 分支。
 
-- [ ] **Step 3: 在 test_ai_provider 分支**
+- [x] **Step 3: 在 test_ai_provider 分支**
 
 在 crates/mail-core/src/ai.rs::test_ai_provider 开头判断 kind == TypeSafe：调 classify_mail，成功返回 vec!["jev-latest".to_string()]；失败返回清洗后的错误。不要拉取模型。修 src-tauri/src/commands.rs 的类型解析错误文案，加入 typesafe。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: cargo test -p mail-core typesafe_test_connection_returns_fixed_model_name -- --nocapture
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add crates/mail-ai/src/prompt.rs crates/mail-core/src/ai.rs src-tauri/src/commands.rs
     git commit -m "AI：TypeSafe 使用固定探针测试连接"
@@ -679,7 +679,7 @@ Expected: PASS。
 - Consumes: AiFunction、AiModelMapEntry、ProviderKind 能力表。
 - Produces: AiFunction::Classify；resolve_ai_target(Classify) 只接受启用且 TypeSafe 的映射。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 补：
 
@@ -694,23 +694,23 @@ Expected: PASS。
         // 建 TypeSafe 站点 + classify 映射，断言 target.kind == TypeSafe。
     }
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p mail-core classify_never_falls_back_to_a_chat_provider -- --nocapture
 
 Expected: FAIL，当前无映射会取第一个启用站点。
 
-- [ ] **Step 3: 加 Classify 与能力校验**
+- [x] **Step 3: 加 Classify 与能力校验**
 
 AiFunction 加 Classify，as_str/parse 支持 classify。resolve_ai_target 先按 function 调 provider_kind 能力判断；Classify 没有显式映射时返回 EngineError::BadRequest("邮件分类还没有配置 TypeSafe jev 站点")，不得走 find(first enabled)。有映射但站点不支持该功能时返回 EngineError::BadRequest。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: cargo test -p mail-core classify_ -- --nocapture
 
 Expected: PASS；再跑 cargo test -p mail-store ai -- --nocapture。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add crates/mail-store/src/ai.rs crates/mail-core/src/ai.rs src/api.ts
     git commit -m "AI：新增邮件分类功能映射与能力约束"
@@ -729,7 +729,7 @@ Expected: PASS；再跑 cargo test -p mail-store ai -- --nocapture。
 - Consumes: AiAuthorizationPreview、PendingAiAuthorization、内容哈希、邮件编号列表。
 - Produces: preview_classify_messages、consume_classify_authorization；令牌带 message_ids 与每封 content_hash。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 补两封邮件：
 
@@ -740,13 +740,13 @@ Expected: PASS；再跑 cargo test -p mail-store ai -- --nocapture。
         // 第一次成功消费后第二次必须拒绝。
     }
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p mail-core classify_authorization -- --nocapture
 
 Expected: FAIL，预览和消费方法不存在。
 
-- [ ] **Step 3: 扩展授权结构**
+- [x] **Step 3: 扩展授权结构**
 
 给 PendingAiAuthorization 增加：
 
@@ -755,13 +755,13 @@ Expected: FAIL，预览和消费方法不存在。
 
 普通翻译等单封功能填长度 1 的向量。预览返回目标邮件编号、站点、完整域名、模型、local、每封 content_hash 和 token。执行时令牌一次性，重新读取每封正文，逐封比较哈希；目标数量、顺序、内容任一不对就拒绝，绝不部分执行。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: cargo test -p mail-core classify_authorization -- --nocapture
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add crates/mail-core/src/ai.rs
     git commit -m "安全：增加批量分类一次性授权"
@@ -780,7 +780,7 @@ Expected: PASS。
 - Consumes: get_message_body、classify_mail、list_mail_labels、set_message_label。
 - Produces: classify_message(message_id, threshold) -> Result<ClassifyOutcome, EngineError>；只写标签，不通知识别，不发信。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 用假 TypeSafe 服务器覆盖：
 
@@ -790,13 +790,13 @@ Expected: PASS。
 
 测试只构造最小 message 与 body，不依赖真实邮箱。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p mail-core classify_message_ -- --nocapture
 
 Expected: FAIL，方法不存在。
 
-- [ ] **Step 3: 实现编排**
+- [x] **Step 3: 实现编排**
 
 流程必须严格按规格 4.2：
 
@@ -810,13 +810,13 @@ Expected: FAIL，方法不存在。
 
 自动流程在写入前检查已有 message_label；手动流程允许覆盖。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: cargo test -p mail-core classify_message_ -- --nocapture
 
 Expected: PASS，且断言 ai_audit 不含正文片段。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add crates/mail-core/src/ai.rs crates/mail-core/src/reading.rs crates/mail-store/src/label.rs
     git commit -m "分类：实现阈值判定与本地落标签"
@@ -836,7 +836,7 @@ Expected: PASS，且断言 ai_audit 不含正文片段。
 - Consumes: insert_messages_returning_ids、classify_message、AppState 分类开关与门槛。
 - Produces: MailEngine::enqueue_classify_ids、drain_classify_queue；notify 轮询每轮最多处理 20 封。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 mail-core 补：
 
@@ -854,24 +854,24 @@ Expected: PASS，且断言 ai_audit 不含正文片段。
         assert_eq!(take_classify_batch(ids), vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
     }
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p mail-core new_message_ids_are_enqueued_without_waiting_for_ai -- --nocapture
 
 Expected: FAIL，队列方法不存在。
 
-- [ ] **Step 3: 插入后投编号，轮询里消费**
+- [x] **Step 3: 插入后投编号，轮询里消费**
 
 fetcher.rs 调 insert_messages_returning_ids；拿到 ids 后只做 enqueue，不做 await 模型。队列实现用 std::sync::Mutex<VecDeque<i64>>，锁内只 push；notify.rs 每轮从队列取最多 20 个，逐个调用 engine.classify_message。分类开关关时只保留队列不处理；门槛从 Arc<AtomicU8> 读取并除以 100 变 0.50–0.99。存储锁绝不跨 await。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: cargo test -p mail-core new_message_ids_are_enqueued_without_waiting_for_ai -- --nocapture
 Run: cargo test -p ymail classify_batch_is_capped_at_twenty -- --nocapture
 
 Expected: PASS。src-tauri/Cargo.toml 已确认 package 名是 ymail，命令直接使用 -p ymail，不再按其他包名替换。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add crates/mail-core/src/sync/fetcher.rs crates/mail-core/src/engine.rs src-tauri/src/notify.rs src-tauri/src/state.rs
     git commit -m "分类：新邮件后台队列串行分类"
@@ -890,7 +890,7 @@ Expected: PASS。src-tauri/Cargo.toml 已确认 package 名是 ymail，命令直
 - Consumes: Store 标签接口、MailEngine 分类授权接口。
 - Produces: list_mail_labels、create_mail_label、rename_mail_label、delete_mail_label、reorder_mail_labels、set_mail_label_color、preview_classify_messages、classify_messages、set_message_label；MailLabelDto 增加 color；InboxMessageDto 增加 labelId、labelName、labelColor。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 commands.rs 测试模块补：
 
@@ -904,29 +904,29 @@ Expected: PASS。src-tauri/Cargo.toml 已确认 package 名是 ymail，命令直
 
 在 src/api.ts 的类型测试里断言 InboxMessage 有 labelId: number | null、labelName: string | null 和 labelColor: string | null；MailLabel 有 color: string。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p ymail label_dto_never_contains_secret_fields -- --nocapture
 Run: npm run test -- --run src/api.test.ts
 
 Expected: FAIL，DTO 或类型不存在。
 
-- [ ] **Step 3: 加 DTO 与命令**
+- [x] **Step 3: 加 DTO 与命令**
 
 命令参数全部用 camelCase 的 serde rename_all。create/rename/delete/reorder 只接受标签 ID 与名称；set_mail_label_color(label_id, color) 只接受固定色板键；所有名称 trim 后非空、长度不超过 64。preview_classify_messages(message_ids: Vec<i64>) 返回站点、域名、模型、local、每封 messageId/contentHash/token。classify_messages(token: String) 只消费服务端保存的待授权，不接受前端再传 messageIds。set_message_label(message_id, label_id: Option<i64>) 使用 source=manual。
 
-- [ ] **Step 4: 注册命令与列表字段**
+- [x] **Step 4: 注册命令与列表字段**
 
 在 src-tauri/src/lib.rs 的 invoke_handler 注册全部新命令。MailLabelDto 带出 color。InboxMessageDto::from_message 带出 label_id、label_name、label_color；没有标签时三个字段都输出 null。
 
-- [ ] **Step 5: 跑测试**
+- [x] **Step 5: 跑测试**
 
 Run: cargo test -p ymail label_dto_never_contains_secret_fields -- --nocapture
 Run: npm run test -- --run src/api.test.ts
 
 Expected: PASS。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
     git add src-tauri/src/commands.rs src-tauri/src/lib.rs src/api.ts
     git commit -m "命令：新增标签管理与分类预览接口"
@@ -944,7 +944,7 @@ Expected: PASS。
 - Consumes: message_label、mail_label。
 - Produces: InboxMessage.label_id、InboxMessage.label_name、InboxMessage.label_color；INBOX_COLUMNS 从 19 列变 22 列；线程最新一封带标签和颜色。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 补：
 
@@ -960,13 +960,13 @@ Expected: PASS。
         assert_eq!(INBOX_COLUMNS_COUNT, crate::inbox::INBOX_COLUMNS.split(',').count());
     }
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p mail-store inbox_thread_uses_latest_message_label search_column_count_matches_inbox_columns -- --nocapture
 
 Expected: FAIL，字段/列数不存在。
 
-- [ ] **Step 3: 改列与 JOIN**
+- [x] **Step 3: 改列与 JOIN**
 
 INBOX_COLUMNS 末尾加：
 
@@ -979,14 +979,14 @@ THREAD_BASE 同步加三列，并在 FROM message m 后补：
 
 线程窗口按新列位置取值：tkey 变 22，rn/message_count/unread_count 顺延。row_to_message 读取 19/20/21 标签下标，row_to_thread 同步改下标。get_inbox_message、list_inbox_messages、list_thread_messages、count 相关查询都补相同 JOIN，避免列错位。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: cargo test -p mail-store inbox -- --nocapture
 Run: cargo test -p mail-store search -- --nocapture
 
 Expected: PASS，特别是折叠行和搜索分页。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add crates/mail-store/src/inbox.rs crates/mail-store/src/search.rs
     git commit -m "收件箱：查询带出标签并保持线程最新标签"
@@ -1005,7 +1005,7 @@ Expected: PASS，特别是折叠行和搜索分页。
 - Consumes: SearchQuery、list_message_ids_with_label。
 - Produces: SearchQuery.label: Option<String>；label: 可与 from:/has:/is:/before: 叠加。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 补：
 
@@ -1019,13 +1019,13 @@ Expected: PASS，特别是折叠行和搜索分页。
         // 只传 label:账单 不创建/读取 FTS 命中，仍返回普通数据库结果。
     }
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p mail-store label_filter -- --nocapture
 
 Expected: FAIL，解析器把 label: 当普通关键词。
 
-- [ ] **Step 3: 扩展解析与 SQL**
+- [x] **Step 3: 扩展解析与 SQL**
 
 解析器新增 label: 前缀，值去首尾空白。SQL 过滤条件用 EXISTS：
 
@@ -1037,14 +1037,14 @@ Expected: FAIL，解析器把 label: 当普通关键词。
 
 只有 label:、没有关键词时走普通数据库过滤；有其它关键词时把 EXISTS 叠加到 FTS 结果的 SQL 条件里。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: cargo test -p mail-store label_filter -- --nocapture
 Run: cargo test -p mail-core search -- --nocapture
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add crates/mail-store/src/search.rs crates/mail-core/src/search.rs src/api.ts
     git commit -m "搜索：支持 label 标签筛选"
@@ -1068,7 +1068,7 @@ Expected: PASS。
 - Consumes: AppSettings、AppState、AiProviderKind::TypeSafe、AiFunction::Classify。
 - Produces: classify_enabled、classify_confidence_percent；AI 面板只列支持分类的站点。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 settings.rs 补：
 
@@ -1085,14 +1085,14 @@ settings.rs 补：
 
 React 测试断言分类行只出现 TypeSafe，OpenAI 站点不出现在候选。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p ymail classify_threshold_percent_is_clamped_to_50_99 -- --nocapture
 Run: npm run test -- --run src/__tests__/ai.test.tsx
 
 Expected: FAIL。
 
-- [ ] **Step 3: 加字段与原子状态**
+- [x] **Step 3: 加字段与原子状态**
 
 AppSettings 加：
 
@@ -1101,18 +1101,18 @@ AppSettings 加：
 
 默认 false / 75。AppState 加 Arc<AtomicBool> classify_enabled、Arc<AtomicU8> classify_confidence_percent；save_settings 更新两者。confirm 弹窗中的门槛展示为百分数，内部转 0.50–0.99。apply_synced_toggles 不加这两个字段。
 
-- [ ] **Step 4: 接前端表单**
+- [x] **Step 4: 接前端表单**
 
 AiPanel 的站点类型新增「TypeSafe jev」；TypeSafe 不显示拉模型按钮，显示测试连接；模型默认 jev-latest，可改。FUNCTION_ORDER 增加邮件分类。功能级站点下拉按 supports(function) 过滤。打开自动分类开关先弹确认，确认后才调用保存。
 
-- [ ] **Step 5: 跑测试**
+- [x] **Step 5: 跑测试**
 
 Run: cargo test -p ymail classify_threshold_percent_is_clamped_to_50_99 -- --nocapture
 Run: npm run test -- --run src/__tests__/ai.test.tsx
 
 Expected: PASS。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
     git add src-tauri/src/settings.rs src-tauri/src/state.rs src-tauri/src/lib.rs src/AiPanel.tsx src/api.ts src/i18n.en.ts src/__tests__/ai.test.tsx
     git commit -m "界面：加入分类开关门槛与 jev 配置"
@@ -1132,7 +1132,7 @@ Expected: PASS。
 - Consumes: list_mail_labels、create_mail_label、rename_mail_label、delete_mail_label、reorder_mail_labels、set_mail_label_color。
 - Produces: 「分类标签管理」区；新增、改名、改颜色、删除、上下调序；每项有胶囊预览；兜底标签删除和改色按钮禁用。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 React 测试断言：
 
@@ -1145,23 +1145,23 @@ React 测试断言：
     - 点改名后名称变化；
     - 点上移后顺序变化。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: npm run test -- --run src/__tests__/ai.test.tsx
 
 Expected: FAIL，标题不存在。
 
-- [ ] **Step 3: 实现管理区**
+- [x] **Step 3: 实现管理区**
 
 放在 AI 功能页功能映射之后、审计之前。颜色选择器只列 MAIL_LABEL_COLORS 的十项，不提供任意取色器或十六进制输入；每项用同样的胶囊样式做预览，预览节点带 data-label-preview={label.color}。名称输入 trim 后为空不提交，超过 64 字符给中文错误。删除前弹确认，提示该标签下邮件会变成没有标签；兜底标签禁用删除和改色。所有成功操作重新拉 list_mail_labels，不靠本地猜顺序或颜色。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: npm run test -- --run src/__tests__/ai.test.tsx
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add src/AiPanel.tsx src/api.ts src/i18n.en.ts src/index.css src/__tests__/ai.test.tsx
     git commit -m "界面：在 AI 功能里增加分类标签管理"
@@ -1181,17 +1181,17 @@ Expected: PASS。
 - Consumes: InboxMessage.labelId、labelName、labelColor；SearchQuery label；MAIL_LABEL_COLORS。
 - Produces: 彩色完整胶囊放在时间前面；点标签设置 label:标签名；搜索提示包含 label:。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 测试数据带 labelName: "账单"、labelColor: "orange"，断言标签节点在 .inbox-row-time 的前一个兄弟节点，且带 data-label-color="orange"；点击后搜索框值为 label:账单，并触发列表筛选。无标签时不渲染胶囊。平铺、子邮件和会话折叠三种行都要覆盖。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: npm run test -- --run src/__tests__/flaggedView.test.tsx src/__tests__/inbox.test.tsx
 
 Expected: FAIL。
 
-- [ ] **Step 3: 实现显示与点击**
+- [x] **Step 3: 实现显示与点击**
 
 邮件行结构：
 
@@ -1204,13 +1204,13 @@ Expected: FAIL。
 
 胶囊只包裹标签文字，整块紧挨时间放在时间前面，不额外换行。标签点击 stopPropagation，设置搜索为 label:标签名；搜索提示改成「搜索邮件，支持 from: / has: / is: / before: / label:」。在 src/index.css 的 .inbox-row-time 前补 .inbox-row-label 的完整圆角、内边距、边框和文字样式，并为十种 data-label-color 分别写浅色与深色两组映射；颜色值只来自 CSS，不拼到 DOM 的 style 属性里。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: npm run test -- --run src/__tests__/flaggedView.test.tsx src/__tests__/inbox.test.tsx
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add src/InboxPanel.tsx src/api.ts src/i18n.en.ts src/index.css src/__tests__/flaggedView.test.tsx src/__tests__/inbox.test.tsx
     git commit -m "界面：邮件标签显示在时间前并支持点选筛选"
@@ -1229,7 +1229,7 @@ Expected: PASS。
 - Consumes: preview_classify_messages、classify_messages。
 - Produces: 单封右键「立即分类」；确认弹窗；成功后刷新列表。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 React 测试：
 
@@ -1238,23 +1238,23 @@ React 测试：
     - 取消不调用 classify_messages；
     - 确认后只传该邮件编号，成功后刷新列表。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: npm run test -- --run src/__tests__/inbox.test.tsx
 
 Expected: FAIL。
 
-- [ ] **Step 3: 实现单封菜单与确认**
+- [x] **Step 3: 实现单封菜单与确认**
 
 只把当前 row.message.id 放进 preview 参数。菜单项点击后先 preview，再用返回信息组装确认框；用户确认后调 classify_messages(token)。关闭菜单、点别处、按 Escape 都取消。当前不做多选，不留批量入口。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: npm run test -- --run src/__tests__/inbox.test.tsx
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add src/InboxPanel.tsx src/api.ts src/i18n.en.ts src/__tests__/inbox.test.tsx
     git commit -m "界面：收件箱右键支持单封立即分类"
@@ -1274,27 +1274,27 @@ Expected: PASS。
 - Consumes: list_mail_labels、set_message_label。
 - Produces: 读信页标签下拉；选标签或清空后刷新列表。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 断言下拉列出八条标签并保留每条 color 数据，能选「账单」，能选「清除标签」，保存后调用 set_message_label 并触发列表刷新。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: npm run test -- --run src/__tests__/reader.test.tsx
 
 Expected: FAIL。
 
-- [ ] **Step 3: 实现下拉**
+- [x] **Step 3: 实现下拉**
 
 下拉值用 labelId 的字符串，清空传 null。保存成功后只刷新列表，不重载正文。失败显示中文提示，不乐观改界面。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: npm run test -- --run src/__tests__/reader.test.tsx
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add src/MessageReader.tsx src/api.ts src/i18n.en.ts src/index.css src/__tests__/reader.test.tsx
     git commit -m "界面：读信页支持手动修改标签"
@@ -1314,7 +1314,7 @@ Expected: PASS。
 - Consumes: ai_audit、分类编排、确认流程。
 - Produces: 正文不入审计、密钥不入错误、关闭开关立即停止。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 补：
 
@@ -1322,23 +1322,23 @@ Expected: PASS。
     - 用假服务器返回包含密钥的错误正文，断言错误字符串不含密钥；
     - classify_enabled=false 时后台消费函数直接返回，不调用模型。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: cargo test -p mail-core ai_audit -- --nocapture
 
 Expected: 至少一条失败，定位泄漏点。
 
-- [ ] **Step 3: 修正最小实现**
+- [x] **Step 3: 修正最小实现**
 
 所有 tracing::debug 只记 message_id、provider_id、model、错误类别。错误文案继续用 AiError 的清洗结果。开关关闭分支放在读正文之前。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 Run: cargo test -p mail-core ai_audit -- --nocapture
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
     git add crates/mail-core/src/ai.rs src-tauri/src/notify.rs
     git commit -m "安全：补齐分类审计与关闭开关测试"
@@ -1351,31 +1351,31 @@ Expected: PASS。
 - No new files.
 - Modify only if 四关发现真实问题。
 
-- [ ] **Step 1: 格式化检查**
+- [x] **Step 1: 格式化检查**
 
 Run: cargo fmt --all --check
 
 Expected: 退出码 0。
 
-- [ ] **Step 2: Rust 静态检查**
+- [x] **Step 2: Rust 静态检查**
 
 Run: cargo clippy --workspace --all-targets -- -D warnings
 
 Expected: 退出码 0，无 warning。
 
-- [ ] **Step 3: Rust 测试**
+- [x] **Step 3: Rust 测试**
 
 Run: cargo test --workspace
 
 Expected: 全部 PASS。
 
-- [ ] **Step 4: 前端构建**
+- [x] **Step 4: 前端构建**
 
 Run: npm run build
 
 Expected: 退出码 0。
 
-- [ ] **Step 5: 提交修复**
+- [x] **Step 5: 提交修复**
 
     git add -A
     git commit -m "验证：邮件自动分类贴标签四关通过"
@@ -1387,16 +1387,16 @@ Expected: 退出码 0。
 - Modify: .ai-memory/project_memory.md
 - Modify: .ai-memory/20261010/daily.md
 
-- [ ] **Step 1: 写交接**
+- [x] **Step 1: 写交接**
 
 记录已完成范围、相关文件、未完成项、风险、四关命令与结果。不要贴密钥、数据库文件或正文。
 
-- [ ] **Step 2: 自查文件**
+- [x] **Step 2: 自查文件**
 
 Run: git status --short
 Expected: 只能看到三个记忆文件修改；没有 *.db、.env、构建产物。
 
-- [ ] **Step 3: 提交**
+- [x] **Step 3: 提交**
 
     git add .ai-memory/handoff.md .ai-memory/project_memory.md .ai-memory/20261010/daily.md
     git commit -m "记忆：记录邮件自动分类实现结果"
