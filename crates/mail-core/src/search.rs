@@ -112,6 +112,89 @@ mod tests {
     }
 
     #[test]
+    fn 标签筛选能搜到贴了标签的邮件() {
+        use mail_domain::FolderKind;
+        use mail_store::{InboxQuery, MailLabelSource, NewMessage};
+
+        let (_dir, engine) = engine();
+        let store = engine.store();
+        let draft = mail_domain::AccountDraft {
+            display_name: "测试".to_string(),
+            email: "t@example.com".to_string(),
+            auth_type: mail_domain::AuthType::Password,
+            username: "t@example.com".to_string(),
+            imap: mail_domain::ServerConfig {
+                host: "imap.example.com".to_string(),
+                port: 993,
+                security: mail_domain::Security::Tls,
+            },
+            smtp: mail_domain::ServerConfig {
+                host: "smtp.example.com".to_string(),
+                port: 465,
+                security: mail_domain::Security::Tls,
+            },
+            proxy: mail_domain::AccountProxyMode::InheritGlobal,
+            color: String::new(),
+            enabled: true,
+            oauth_provider: None,
+            oauth_client_id: String::new(),
+        };
+        let account_id = store.insert_account(&draft, None).expect("插入账号").0;
+        let folder_id = store
+            .upsert_folder(account_id, "INBOX", "/", FolderKind::Inbox)
+            .expect("插入文件夹");
+        store
+            .insert_messages(&[NewMessage {
+                account_id,
+                folder_id,
+                uid: 1,
+                message_id_header: "<m1@x>".to_string(),
+                thread_key: "t1".to_string(),
+                subject: "本月账单".to_string(),
+                from_name: "张三".to_string(),
+                from_addr: "z@example.com".to_string(),
+                to_json: "[]".to_string(),
+                cc_json: "[]".to_string(),
+                date_utc: "2026-10-10T01:00:00Z".to_string(),
+                size: 1000,
+                has_attachments: false,
+                is_read: true,
+                is_flagged: false,
+                is_answered: false,
+                is_draft: false,
+            }])
+            .expect("插入邮件");
+        let message_id = store
+            .list_inbox_messages(&InboxQuery {
+                account_id: Some(account_id),
+                ..Default::default()
+            })
+            .expect("读邮件")
+            .first()
+            .expect("应有邮件")
+            .id;
+        let label_id = store
+            .list_mail_labels()
+            .expect("标签")
+            .into_iter()
+            .find(|label| label.name == "账单")
+            .expect("预置账单")
+            .id;
+        store
+            .set_message_label(message_id, label_id, MailLabelSource::Auto, Some(0.9))
+            .expect("贴标签");
+        // 引擎的 store() 是普通互斥锁，调用引擎方法前必须先放掉手里的守卫。
+        drop(store);
+
+        let page = engine
+            .search_messages(&SearchQuery::new("label:账单", Some(account_id), 0, 50))
+            .expect("搜索标签");
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].message.label_name.as_deref(), Some("账单"));
+        assert_eq!(page.items[0].message.label_color.as_deref(), Some("orange"));
+    }
+
+    #[test]
     fn 空库搜索返回空页() {
         let (_dir, engine) = engine();
         let page = engine

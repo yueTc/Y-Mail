@@ -366,7 +366,7 @@ export type OutboxKind = "new" | "reply" | "forward";
 /** 发件队列里一条记录的状态。 */
 export type OutboxState = "draft" | "queued" | "sending" | "sent" | "failed";
 
-/** 搜索条件；`deep` 为真时先联网补一批未同步的历史。 */
+/** 搜索条件；`deep` 为真时先联网补一批未同步的历史。raw 支持 from: / has: / is: / before: / label:。 */
 export interface SearchQuery {
   raw: string;
   accountId?: number;

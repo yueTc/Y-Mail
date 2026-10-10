@@ -89,6 +89,8 @@ pub(crate) struct ParsedQuery {
     pub unread_only: bool,
     /// `before:YYYY-MM-DD`。
     pub before: Option<String>,
+    /// `label:标签名`；按名称精确匹配，英文忽略大小写。
+    pub label: Option<String>,
 }
 
 impl ParsedQuery {
@@ -99,6 +101,7 @@ impl ParsedQuery {
             || self.has_attachment
             || self.unread_only
             || self.before.is_some()
+            || self.label.is_some()
     }
 }
 
@@ -128,6 +131,13 @@ pub(crate) fn parse_query(raw: &str) -> ParsedQuery {
         if let Some(value) = token.strip_prefix("before:") {
             if is_iso_date(value) {
                 parsed.before = Some(value.to_string());
+                continue;
+            }
+        }
+        if let Some(value) = token.strip_prefix("label:") {
+            let value = value.trim_matches('"').trim();
+            if !value.is_empty() {
+                parsed.label = Some(value.to_string());
                 continue;
             }
         }
@@ -213,6 +223,17 @@ fn build_filter(parsed: &ParsedQuery, use_fts: bool) -> FilterBuilder {
     if let Some(before) = &parsed.before {
         let index = builder.push_param(format!("{before}T00:00:00Z"));
         builder.sql.push(format!("m.date_utc < ?{index}"));
+    }
+    if let Some(label) = &parsed.label {
+        // 标签名精确匹配；中文按原样，英文忽略大小写。颜色永不参与匹配。
+        let exact = builder.push_param(label.clone());
+        let folded = builder.push_param(label.clone());
+        builder.sql.push(format!(
+            "EXISTS (SELECT 1 FROM message_label ml2 \
+             JOIN mail_label l2 ON l2.id = ml2.label_id \
+             WHERE ml2.message_id = m.id \
+               AND (l2.name = ?{exact} OR LOWER(l2.name) = LOWER(?{folded})))"
+        ));
     }
     builder
 }
@@ -534,6 +555,91 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("查邮件主键")
+    }
+
+    #[test]
+    fn label_filter_is_case_insensitive_for_ascii_and_exact_for_chinese() {
+        let store = migrated();
+        let a = account(&store, "a@example.com");
+        let f = inbox(&store, a);
+        store
+            .insert_messages(&[
+                message(
+                    a,
+                    f,
+                    1,
+                    "账单邮件",
+                    "张三",
+                    "zhangsan@example.com",
+                    "2026-10-04T10:00:00Z",
+                    true,
+                    false,
+                ),
+                message(
+                    a,
+                    f,
+                    2,
+                    "英文标签邮件",
+                    "李四",
+                    "lisi@example.com",
+                    "2026-10-04T11:00:00Z",
+                    true,
+                    false,
+                ),
+            ])
+            .expect("插入邮件");
+        let chinese_message = message_id(&store, 1);
+        let english_message = message_id(&store, 2);
+        let chinese_label = store
+            .list_mail_labels()
+            .expect("标签")
+            .into_iter()
+            .find(|label| label.name == "账单")
+            .expect("预置账单")
+            .id;
+        let english_label = store.create_mail_label("bills").expect("英文标签");
+        store
+            .set_message_label(chinese_message, chinese_label, crate::MailLabelSource::Auto, None)
+            .expect("贴中文标签");
+        store
+            .set_message_label(english_message, english_label, crate::MailLabelSource::Auto, None)
+            .expect("贴英文标签");
+
+        let chinese = store
+            .search_messages(&SearchQuery::new("label:账单", Some(a), 0, 50))
+            .expect("中文标签搜索");
+        assert_eq!(chinese.total, 1);
+        assert_eq!(chinese.items[0].message.id, chinese_message);
+
+        let upper = store
+            .search_messages(&SearchQuery::new("label:BILLS", Some(a), 0, 50))
+            .expect("英文标签大写搜索");
+        assert_eq!(upper.total, 1, "英文标签忽略大小写");
+
+        let partial = store
+            .search_messages(&SearchQuery::new("label:bill", Some(a), 0, 50))
+            .expect("英文前缀不应命中");
+        assert_eq!(partial.total, 0, "英文标签要精确匹配，不做前缀");
+
+        let chinese_partial = store
+            .search_messages(&SearchQuery::new("label:账单x", Some(a), 0, 50))
+            .expect("中文前缀不应命中");
+        assert_eq!(chinese_partial.total, 0, "中文标签要精确匹配");
+
+        // 只有 label:、没有关键词，也要返回普通数据库结果。
+        assert_eq!(chinese.items.len(), 1, "label: 单独用时不进全文检索");
+
+        // 与 from: 叠加。
+        let stacked = store
+            .search_messages(&SearchQuery::new("label:账单 from:zhangsan", Some(a), 0, 50))
+            .expect("叠加搜索");
+        assert_eq!(stacked.total, 1);
+        assert_eq!(stacked.items[0].message.id, chinese_message);
+
+        let stacked_miss = store
+            .search_messages(&SearchQuery::new("label:账单 from:lisi", Some(a), 0, 50))
+            .expect("叠加不命中");
+        assert_eq!(stacked_miss.total, 0);
     }
 
     #[test]

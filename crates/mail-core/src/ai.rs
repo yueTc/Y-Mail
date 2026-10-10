@@ -1693,7 +1693,9 @@ mod tests {
             "应补上超链接地址：{text}"
         );
     }
-    /// 假 HTTP 服务：收一次请求，把原始请求文本回传；返回固定 JSON。
+    /// 假 HTTP 服务：收一次完整请求，把原始请求文本回传给测试；返回固定 JSON。
+    ///
+    /// 必须按 Content-Length 读完整包：并行跑测试时一次 read 可能只拿到半个请求体。
     async fn fake_capture_server(payload: &'static str) -> (u16, std::sync::mpsc::Receiver<String>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("绑定");
@@ -1701,10 +1703,23 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("接受连接");
-            let mut buf = vec![0u8; 8192];
-            let read = socket.read(&mut buf).await.expect("读请求");
-            let request = String::from_utf8_lossy(&buf[..read]).to_string();
-            let _ = tx.send(request);
+            let mut buf = vec![0u8; 4096];
+            let mut request = Vec::new();
+            loop {
+                let read = socket.read(&mut buf).await.expect("读请求");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..read]);
+                if let Some(header_end) = find_header_end(&request) {
+                    let content_length = content_length_of(&request[..header_end]);
+                    if request.len() >= header_end + 4 + content_length {
+                        break;
+                    }
+                }
+            }
+            let text = String::from_utf8_lossy(&request).to_string();
+            let _ = tx.send(text);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
                 payload.len()
@@ -1714,6 +1729,25 @@ mod tests {
         (port, rx)
     }
 
+    /// 找请求头结束位置（`\r\n\r\n`）。
+    fn find_header_end(bytes: &[u8]) -> Option<usize> {
+        bytes.windows(4).position(|window| window == b"\r\n\r\n")
+    }
+
+    /// 从请求头里取 Content-Length；没有就按 0 处理。
+    fn content_length_of(headers: &[u8]) -> usize {
+        String::from_utf8_lossy(headers)
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                if name.eq_ignore_ascii_case("content-length") {
+                    value.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0)
+    }
     #[tokio::test]
     async fn typesafe_test_connection_returns_fixed_model_name() {
         let dir = tempfile::tempdir().expect("临时目录");

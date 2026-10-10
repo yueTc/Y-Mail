@@ -9,7 +9,7 @@ use rusqlite::OptionalExtension;
 
 use crate::connection::Store;
 use crate::error::StoreError;
-use crate::inbox::{row_to_message, InboxMessage, INBOX_COLUMNS};
+use crate::inbox::{row_to_message, InboxMessage, INBOX_COLUMNS, LABEL_JOIN};
 
 /// MCP 总开关的 setting 键。
 pub const MCP_ENABLED_KEY: &str = "mcp.enabled";
@@ -123,6 +123,7 @@ impl Store {
             "SELECT {INBOX_COLUMNS} FROM message m \
              JOIN folder f ON f.id = m.folder_id \
              JOIN account a ON a.id = m.account_id \
+             {LABEL_JOIN} \
              WHERE m.id = ?1"
         );
         self.conn()
