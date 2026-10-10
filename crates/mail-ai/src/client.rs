@@ -131,15 +131,24 @@ pub async fn classify_mail(
     }
     let url = systemone_url(endpoint.base_url);
     let headers = auth_headers(endpoint)?;
+    // 官方形状（docs.typesafe.ai/api）：
+    // - questions 是「问题编号 → 问题对象」的对象，不是数组；
+    // - choice 的选项放在 criteria 里，键是选项名、值是说明；
+    //   我们只有标签名，说明给 null（官方明确说选项不需要额外说明时用 null）。
+    let mut criteria = serde_json::Map::new();
+    for choice in choices {
+        criteria.insert(choice.clone(), Value::Null);
+    }
     let body = json!({
         "state": state,
         "model": model,
-        "questions": [{
-            "name": "category",
-            "type": "choice",
-            "criteria": "请只从候选标签中选择最匹配的一项",
-            "choices": choices
-        }]
+        "questions": {
+            "category": {
+                "type": "choice",
+                "instructions": "Classify this email: pick exactly one of the categories listed in criteria.",
+                "criteria": criteria
+            }
+        }
     });
     let payload = body.to_string();
     let response = request(route, "POST", &url, &headers, Some(&payload), timeout).await?;
@@ -548,9 +557,12 @@ mod tests {
         assert!(request.contains("POST /v1/systemone"), "{request}");
         assert!(request.contains("\"state\":\"本月账单已出\""), "{request}");
         assert!(request.contains("\"model\":\"jev-latest\""), "{request}");
-        assert!(request.contains("\"name\":\"category\""), "{request}");
+        assert!(request.contains("\"category\""), "{request}");
         assert!(request.contains("\"type\":\"choice\""), "{request}");
-        assert!(request.contains("其他"), "{request}");
+        assert!(request.contains("\"instructions\""), "{request}");
+        assert!(request.contains("\"criteria\""), "{request}");
+        assert!(request.contains("\"账单\":null"), "{request}");
+        assert!(request.contains("\"其他\":null"), "{request}");
     }
 
     #[tokio::test]
