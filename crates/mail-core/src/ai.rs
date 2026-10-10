@@ -11,9 +11,9 @@
 use std::time::{Duration, Instant};
 
 use mail_ai::{
-    anchor_targets, chat, is_local_host, list_models, normalize_base_url, parse_verification, prompt,
-    split_html, split_text, translate, AiError, ChatOutcome, Endpoint, ProviderFunction, ProviderKind,
-    ThinkingLevel, TranslationOutcome, VerificationFinding,
+    anchor_targets, chat, classify_mail, is_local_host, list_models, normalize_base_url, parse_verification,
+    prompt, split_html, split_text, translate, AiError, ChatOutcome, Endpoint, ProviderFunction,
+    ProviderKind, ThinkingLevel, TranslationOutcome, VerificationFinding,
 };
 use mail_domain::account::AccountProxyMode;
 use mail_domain::proxy::Secret;
@@ -30,6 +30,9 @@ pub const AI_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// 通知识别的单封等待上限；超了就退回普通通知。
 pub const NOTIFICATION_VERIFY_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// TypeSafe jev 的默认模型名；官方推荐值。
+pub const TYPESAFE_PROBE_MODEL: &str = "jev-latest";
 
 /// 一次外发授权令牌的有效期。
 pub const AI_AUTHORIZATION_TTL: Duration = Duration::from_secs(300);
@@ -436,6 +439,23 @@ impl MailEngine {
             base_url: &base_url,
             api_key: secret,
         };
+        if kind == AiProviderKind::TypeSafe {
+            // jev 没有「拉模型列表」接口，测试连接改成一次极小的试探分类请求。
+            let choices = prompt::TYPESAFE_PROBE_CHOICES
+                .iter()
+                .map(|choice| (*choice).to_string())
+                .collect::<Vec<_>>();
+            classify_mail(
+                route.as_ref(),
+                &endpoint,
+                TYPESAFE_PROBE_MODEL,
+                prompt::TYPESAFE_PROBE_STATE,
+                &choices,
+                NOTIFICATION_VERIFY_TIMEOUT,
+            )
+            .await?;
+            return Ok(vec![TYPESAFE_PROBE_MODEL.to_string()]);
+        }
         Ok(list_models(route.as_ref(), &endpoint, AI_TIMEOUT).await?)
     }
 
@@ -1328,6 +1348,50 @@ mod tests {
             "应补上超链接地址：{text}"
         );
     }
+    /// 假 HTTP 服务：收一次请求，把原始请求文本回传；返回固定 JSON。
+    async fn fake_capture_server(payload: &'static str) -> (u16, std::sync::mpsc::Receiver<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+        let port = listener.local_addr().expect("地址").port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("接受连接");
+            let mut buf = vec![0u8; 8192];
+            let read = socket.read(&mut buf).await.expect("读请求");
+            let request = String::from_utf8_lossy(&buf[..read]).to_string();
+            let _ = tx.send(request);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                payload.len()
+            );
+            socket.write_all(response.as_bytes()).await.expect("写响应");
+        });
+        (port, rx)
+    }
+
+    #[tokio::test]
+    async fn typesafe_test_connection_returns_fixed_model_name() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let (port, captured) =
+            fake_capture_server(r#"{"answers":{"category":{"choice":"账单","confidence":0.92}}}"#).await;
+        let base = format!("http://127.0.0.1:{port}/v1");
+
+        let models = engine
+            .test_ai_provider(AiProviderKind::TypeSafe, &base, None, None)
+            .await
+            .expect("TypeSafe 测试连接应成功");
+        assert_eq!(models, vec!["jev-latest".to_string()]);
+
+        let request = captured.recv().expect("拿到请求");
+        assert!(request.contains("POST /v1/systemone"), "{request}");
+        assert!(
+            request.contains(prompt::TYPESAFE_PROBE_STATE),
+            "请求体里应是固定探针：{request}"
+        );
+        assert!(request.contains("\"model\":\"jev-latest\""), "{request}");
+    }
+
     fn engine(dir: &std::path::Path) -> MailEngine {
         MailEngine::initialize_with_secrets(
             dir,

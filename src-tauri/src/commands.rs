@@ -3119,7 +3119,7 @@ pub struct AiProviderDraftDto {
     pub id: Option<i64>,
     /// 便于识别的站点名称。
     pub label: String,
-    /// 站点类型：openai_compatible / deepl / ollama。
+    /// 站点类型：openai_compatible / deepl / ollama / typesafe。
     pub kind: String,
     /// 站点根地址。
     pub base_url: String,
@@ -3139,8 +3139,9 @@ pub struct AiProviderDraftDto {
 
 impl AiProviderDraftDto {
     fn to_input(&self) -> Result<AiProviderInput, CommandError> {
-        let kind = AiProviderKind::parse(&self.kind)
-            .ok_or_else(|| CommandError::input("AI 站点类型只能是 openai_compatible、deepl 或 ollama"))?;
+        let kind = AiProviderKind::parse(&self.kind).ok_or_else(|| {
+            CommandError::input("AI 站点类型只能是 openai_compatible、deepl、ollama 或 typesafe")
+        })?;
         let level = self.thinking_level.trim().to_ascii_lowercase();
         if !matches!(level.as_str(), "" | "off" | "low" | "medium" | "high") {
             return Err(CommandError::input("思考程度只能是 off、low、medium 或 high"));
@@ -3452,8 +3453,9 @@ pub async fn test_ai_provider(
     api_key: Option<String>,
     id: Option<i64>,
 ) -> Result<Vec<String>, CommandError> {
-    let kind = AiProviderKind::parse(&kind)
-        .ok_or_else(|| CommandError::input("AI 站点类型只能是 openai_compatible、deepl 或 ollama"))?;
+    let kind = AiProviderKind::parse(&kind).ok_or_else(|| {
+        CommandError::input("AI 站点类型只能是 openai_compatible、deepl、ollama 或 typesafe")
+    })?;
     let secret = api_key.map(Secret::new);
     let engine = state.engine().await;
     let models = engine
