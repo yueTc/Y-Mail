@@ -55,6 +55,7 @@ pub fn provider_function(function: AiFunction) -> ProviderFunction {
         AiFunction::Polish => ProviderFunction::Polish,
         AiFunction::Draft => ProviderFunction::Draft,
         AiFunction::NotificationVerify => ProviderFunction::NotificationVerify,
+        AiFunction::Classify => ProviderFunction::Classification,
     }
 }
 
@@ -617,6 +618,11 @@ impl MailEngine {
                     "通知智能识别是后台自动功能，不走逐次授权".to_string(),
                 ));
             }
+            AiFunction::Classify => {
+                return Err(EngineError::BadRequest(
+                    "邮件分类请走专门的分类预览接口".to_string(),
+                ));
+            }
         };
         if source.trim().is_empty() {
             return Err(EngineError::BadRequest(
@@ -1125,13 +1131,27 @@ impl MailEngine {
                 .get_ai_provider(entry.provider_id)?
                 .filter(|provider| provider.enabled)
                 .ok_or(EngineError::AiProviderNotFound(entry.provider_id))?,
-            None => self
-                .store()
-                .list_ai_providers()?
-                .into_iter()
-                .find(|provider| provider.enabled)
-                .ok_or(EngineError::AiDisabled)?,
+            None => {
+                if function == AiFunction::Classify {
+                    // 分类只认显式配好的 TypeSafe jev，绝不回退到第一个启用站点。
+                    return Err(EngineError::BadRequest(
+                        "邮件分类还没有配置 TypeSafe jev 站点".to_string(),
+                    ));
+                }
+                self.store()
+                    .list_ai_providers()?
+                    .into_iter()
+                    .find(|provider| provider.enabled)
+                    .ok_or(EngineError::AiDisabled)?
+            }
         };
+        // 站点能力校验：分类只认 TypeSafe jev，聊天类站点也做不了分类。
+        if !provider_kind(provider.kind).supports(provider_function(function)) {
+            return Err(EngineError::BadRequest(format!(
+                "站点「{}」不支持这个功能，请到设置里换成支持的站点",
+                provider.label
+            )));
+        }
         let model = map
             .as_ref()
             .map(|entry| entry.model.trim())
@@ -1390,6 +1410,68 @@ mod tests {
             "请求体里应是固定探针：{request}"
         );
         assert!(request.contains("\"model\":\"jev-latest\""), "{request}");
+    }
+
+    fn add_typesafe(engine: &MailEngine) -> i64 {
+        engine
+            .save_ai_provider(
+                &AiProviderInput {
+                    id: None,
+                    label: "jev".to_string(),
+                    kind: AiProviderKind::TypeSafe,
+                    base_url: "https://api.typesafe.ai/v1".to_string(),
+                    default_model: "jev-latest".to_string(),
+                    models: Vec::new(),
+                    thinking_level: AiThinkingLevel::Off,
+                    enabled: true,
+                },
+                None,
+            )
+            .expect("保存 TypeSafe 站点")
+            .id
+    }
+
+    #[test]
+    fn classify_never_falls_back_to_a_chat_provider() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        add_ollama(&engine);
+
+        let error = engine
+            .resolve_ai_target(AiFunction::Classify)
+            .expect_err("没有分类映射时不能回退到聊天站点");
+        assert!(matches!(error, EngineError::BadRequest(_)), "{error:?}");
+    }
+
+    #[test]
+    fn classify_uses_configured_typesafe_provider() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let provider_id = add_typesafe(&engine);
+        engine
+            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
+            .expect("配置分类");
+
+        let target = engine
+            .resolve_ai_target(AiFunction::Classify)
+            .expect("应能解析分类目标");
+        assert_eq!(target.kind, AiProviderKind::TypeSafe);
+        assert_eq!(target.model, "jev-latest");
+    }
+
+    #[test]
+    fn chat_function_rejects_typesafe_provider() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let provider_id = add_typesafe(&engine);
+        engine
+            .set_ai_feature(AiFunction::Translate, provider_id, "jev-latest", None)
+            .expect("写入映射");
+
+        let error = engine
+            .resolve_ai_target(AiFunction::Translate)
+            .expect_err("jev 做不了翻译，应拒绝");
+        assert!(matches!(error, EngineError::BadRequest(_)), "{error:?}");
     }
 
     fn engine(dir: &std::path::Path) -> MailEngine {

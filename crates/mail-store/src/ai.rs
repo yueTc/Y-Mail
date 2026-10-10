@@ -100,6 +100,8 @@ pub enum AiFunction {
     Draft,
     /// 通知识别：判断邮件正文里有没有验证码或验证链接。
     NotificationVerify,
+    /// 邮件分类：给邮件贴一个本地标签。
+    Classify,
 }
 
 impl AiFunction {
@@ -111,6 +113,7 @@ impl AiFunction {
             Self::Polish => "polish",
             Self::Draft => "draft",
             Self::NotificationVerify => "notification_verify",
+            Self::Classify => "classify",
         }
     }
 
@@ -122,6 +125,7 @@ impl AiFunction {
             "polish" => Some(Self::Polish),
             "draft" => Some(Self::Draft),
             "notification_verify" => Some(Self::NotificationVerify),
+            "classify" => Some(Self::Classify),
             _ => None,
         }
     }
