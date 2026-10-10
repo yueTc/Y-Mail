@@ -447,11 +447,16 @@ impl Store {
 
     /// 批量写入邮件元数据；重复的 (账号, 文件夹, UID) 跳过。返回真正写入的条数。
     pub fn insert_messages(&self, messages: &[NewMessage]) -> Result<usize, StoreError> {
+        Ok(self.insert_messages_returning_ids(messages)?.len())
+    }
+
+    /// 批量写入邮件元数据，返回真正新插入的本地邮件编号（重复的跳过）。
+    pub fn insert_messages_returning_ids(&self, messages: &[NewMessage]) -> Result<Vec<i64>, StoreError> {
         if messages.is_empty() {
-            return Ok(0);
+            return Ok(Vec::new());
         }
         let tx = self.conn().unchecked_transaction()?;
-        let mut inserted = 0usize;
+        let mut inserted_ids = Vec::new();
         {
             let mut stmt = tx.prepare(
                 "INSERT OR IGNORE INTO message (
@@ -461,7 +466,7 @@ impl Store {
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             )?;
             for message in messages {
-                inserted += stmt.execute(rusqlite::params![
+                let changed = stmt.execute(rusqlite::params![
                     message.account_id,
                     message.folder_id,
                     i64::from(message.uid),
@@ -480,6 +485,9 @@ impl Store {
                     i64::from(message.is_answered),
                     i64::from(message.is_draft),
                 ])?;
+                if changed > 0 {
+                    inserted_ids.push(tx.last_insert_rowid());
+                }
             }
         }
         // 已存在的邮件不重写整行，只刷新「有附件」这一项：老库第一次跑新的
@@ -499,7 +507,7 @@ impl Store {
             }
         }
         tx.commit()?;
-        Ok(inserted)
+        Ok(inserted_ids)
     }
 
     /// 刷新一封邮件的标志（远端 → 本地）。
@@ -801,6 +809,34 @@ mod tests {
             is_answered: false,
             is_draft: false,
         }
+    }
+
+    #[test]
+    fn inserting_messages_returns_only_new_ids() {
+        let store = migrated();
+        let account_id = account(&store);
+        let folder_id = store
+            .upsert_folder(account_id, "INBOX", "/", FolderKind::Inbox)
+            .expect("插入文件夹");
+        let batch = vec![
+            message(account_id, folder_id, 100),
+            message(account_id, folder_id, 101),
+        ];
+
+        let ids = store.insert_messages_returning_ids(&batch).expect("首次插入");
+        assert_eq!(ids.len(), 2, "两封新邮件应回两个编号");
+        assert!(ids[0] > 0 && ids[1] > 0 && ids[0] != ids[1]);
+
+        let again = store
+            .insert_messages_returning_ids(&batch[..1])
+            .expect("重复插入");
+        assert!(again.is_empty(), "重复邮件不应回编号");
+
+        let count = store.insert_messages(&batch[..1]).expect("旧接口");
+        assert_eq!(count, 0, "旧接口仍返回真正写入的条数");
+
+        let fresh = vec![message(account_id, folder_id, 102)];
+        assert_eq!(store.insert_messages(&fresh).expect("新插入"), 1);
     }
 
     #[test]
