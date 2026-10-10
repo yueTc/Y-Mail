@@ -949,7 +949,11 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
             {t("站点地址")}<input
               aria-label={t("AI 站点地址")}
               value={editing.baseUrl}
-              placeholder={t("例如 https://api.example.com/v1，本机 Ollama 可填 http://127.0.0.1:11434")}
+              placeholder={
+                editing.kind === "typesafe"
+                  ? t("填到 /v1 为止，例如 https://api.typesafe.ai/v1，不要带 /systemone")
+                  : t("例如 https://api.example.com/v1，本机 Ollama 可填 http://127.0.0.1:11434")
+              }
               onChange={(event) =>
                 setEditing((old) => (old ? { ...old, baseUrl: event.target.value } : old))
               }

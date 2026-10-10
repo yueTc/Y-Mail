@@ -86,6 +86,19 @@ pub async fn list_models(
     Ok(models)
 }
 
+/// TypeSafe 分类接口的地址。
+///
+/// 站点地址填到 `/v1` 就行；如果用户直接把完整地址 `.../systemone` 填了进来，
+/// 也不能再拼一次，否则会变成 `/v1/systemone/systemone` 这种 404 路径。
+fn systemone_url(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.to_ascii_lowercase().ends_with("/systemone") {
+        trimmed.to_string()
+    } else {
+        join_url(trimmed, "systemone")
+    }
+}
+
 /// 一次邮件分类的结果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassifyOutcome {
@@ -116,7 +129,7 @@ pub async fn classify_mail(
     if state.trim().is_empty() || choices.is_empty() {
         return Err(AiError::Protocol);
     }
-    let url = join_url(endpoint.base_url, "systemone");
+    let url = systemone_url(endpoint.base_url);
     let headers = auth_headers(endpoint)?;
     let body = json!({
         "state": state,
@@ -495,6 +508,22 @@ mod tests {
             })
             .unwrap_or(0)
     }
+    #[test]
+    fn systemone_地址不会重复拼() {
+        assert_eq!(
+            systemone_url("https://pool.futureppo.top/v1"),
+            "https://pool.futureppo.top/v1/systemone"
+        );
+        assert_eq!(
+            systemone_url("https://pool.futureppo.top/v1/systemone"),
+            "https://pool.futureppo.top/v1/systemone"
+        );
+        assert_eq!(
+            systemone_url("https://pool.futureppo.top/v1/systemone/"),
+            "https://pool.futureppo.top/v1/systemone"
+        );
+    }
+
     #[tokio::test]
     async fn typesafe_classify_sends_systemone_request_and_parses_answer() {
         let (port, captured) =

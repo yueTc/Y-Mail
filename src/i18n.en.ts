@@ -546,6 +546,7 @@ export const EN: Record<string, string> = {
   "靛": "Indigo",
   "紫": "Purple",
   "粉": "Pink",
+  "填到 /v1 为止，例如 https://api.typesafe.ai/v1，不要带 /systemone": "Fill in up to /v1, e.g. https://api.typesafe.ai/v1; do not append /systemone",
   "TypeSafe jev": "TypeSafe jev",
   "邮件分类": "Email classification",
   "邮件自动分类": "Automatic email classification",
