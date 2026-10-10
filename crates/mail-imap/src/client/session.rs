@@ -108,6 +108,114 @@ impl ImapClient {
         Ok(status)
     }
 
+    /// 在服务器上新建一个文件夹；`server_path` 必须是已编码的服务器路径。
+    pub async fn create_folder(&mut self, server_path: &str) -> Result<(), ConnectionError> {
+        let name = quote_imap_string(server_path)?;
+        let reply = self.command(&format!("CREATE {name}")).await?;
+        if reply.status != "OK" {
+            return Err(ConnectionError::rejected(format!(
+                "新建文件夹失败：{}",
+                reply.detail
+            )));
+        }
+        Ok(())
+    }
+
+    /// 在服务器上重命名文件夹；两个参数都必须是已编码的服务器路径。
+    pub async fn rename_folder(&mut self, from: &str, to: &str) -> Result<(), ConnectionError> {
+        let from = quote_imap_string(from)?;
+        let to = quote_imap_string(to)?;
+        let reply = self.command(&format!("RENAME {from} {to}")).await?;
+        if reply.status != "OK" {
+            return Err(ConnectionError::rejected(format!(
+                "重命名文件夹失败：{}",
+                reply.detail
+            )));
+        }
+        Ok(())
+    }
+
+    /// 在服务器上删除一个空文件夹；`server_path` 必须是已编码的服务器路径。
+    pub async fn delete_folder(&mut self, server_path: &str) -> Result<(), ConnectionError> {
+        let name = quote_imap_string(server_path)?;
+        let reply = self.command(&format!("DELETE {name}")).await?;
+        if reply.status != "OK" {
+            return Err(ConnectionError::rejected(format!(
+                "删除文件夹失败：{}",
+                reply.detail
+            )));
+        }
+        Ok(())
+    }
+
+    /// 把一封邮件复制到目标文件夹（目标必须是已编码的服务器路径）。
+    pub async fn uid_copy(&mut self, uid: u32, destination: &str) -> Result<(), ConnectionError> {
+        let target = quote_imap_string(destination)?;
+        let command = format!("UID COPY {uid} {target}");
+        let mut reply = self.command(&command).await?;
+        if reply.status != "OK" && needs_reselect(&reply.detail) && self.recover_selection().await {
+            reply = self.command(&command).await?;
+        }
+        if reply.status != "OK" {
+            return Err(ConnectionError::rejected(format!(
+                "复制邮件失败：{}",
+                reply.detail
+            )));
+        }
+        Ok(())
+    }
+
+    /// 把一封邮件移到目标文件夹。
+    ///
+    /// 服务器支持 `MOVE` 扩展就用一条 `UID MOVE`；否则回退成
+    /// 「复制 → 标记删除 → 清理」。目标必须是已编码的服务器路径。
+    pub async fn uid_move(&mut self, uid: u32, destination: &str) -> Result<(), ConnectionError> {
+        let target = quote_imap_string(destination)?;
+        if self.supports("MOVE") {
+            let command = format!("UID MOVE {uid} {target}");
+            let mut reply = self.command(&command).await?;
+            if reply.status != "OK" && needs_reselect(&reply.detail) && self.recover_selection().await {
+                reply = self.command(&command).await?;
+            }
+            if reply.status == "OK" {
+                return Ok(());
+            }
+            tracing::debug!(detail = %reply.detail, "UID MOVE 被拒绝，改用复制加删除");
+        }
+        self.uid_copy(uid, destination).await?;
+        self.uid_delete(uid).await
+    }
+
+    /// 彻底删除一封邮件：打上 `\Deleted` 标记后清理。
+    ///
+    /// 支持 `UIDPLUS` 时只清理这一封，避免误清同文件夹里其它已标记删除的邮件。
+    pub async fn uid_delete(&mut self, uid: u32) -> Result<(), ConnectionError> {
+        let command = format!("UID STORE {uid} +FLAGS.SILENT (\\Deleted)");
+        let mut reply = self.command(&command).await?;
+        if reply.status != "OK" && needs_reselect(&reply.detail) && self.recover_selection().await {
+            reply = self.command(&command).await?;
+        }
+        if reply.status != "OK" {
+            return Err(ConnectionError::rejected(format!(
+                "删除邮件失败：{}",
+                reply.detail
+            )));
+        }
+        let expunge = if self.supports("UIDPLUS") {
+            format!("UID EXPUNGE {uid}")
+        } else {
+            "EXPUNGE".to_string()
+        };
+        let reply = self.command(&expunge).await?;
+        if reply.status != "OK" {
+            return Err(ConnectionError::rejected(format!(
+                "清理已删除邮件失败：{}",
+                reply.detail
+            )));
+        }
+        Ok(())
+    }
+
     /// 上一次打开的文件夹仍然有效时，重新打开它；失败返回 false。
     async fn recover_selection(&mut self) -> bool {
         let folder = match self.selected_folder.clone() {

@@ -8,10 +8,12 @@
 //!
 //! 本模块以只读查询为主；唯一写入口是按主键切换邮件已读状态（`set_message_read`）。
 
+use mail_domain::{folder_allows_children, folder_changeable, FolderKind};
 use rusqlite::OptionalExtension;
 
 use crate::connection::Store;
 use crate::error::StoreError;
+use crate::sync::decode_attributes;
 
 /// 统一收件箱的一行邮件（已带上账号色标等展示字段）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -453,13 +455,24 @@ pub struct InboxFolder {
     pub message_count: i64,
     /// 本地未读条数。
     pub unread_count: i64,
+    /// 服务器原始路径；老数据可能为空。
+    pub server_path: String,
+    /// 层级分隔符。
+    pub delimiter: String,
+    /// 服务器 LIST 返回的属性。
+    pub attributes: Vec<String>,
+    /// 能不能重命名或删除。
+    pub changeable: bool,
+    /// 能不能新建子文件夹。
+    pub allows_children: bool,
 }
 
 impl Store {
     /// 列出全部账号的文件夹及各文件夹的本地邮件条数（收件箱排最前）。
     pub fn list_inbox_folders(&self) -> Result<Vec<InboxFolder>, StoreError> {
         let sql = "SELECT f.account_id, f.id, f.full_path, f.kind, \
-            COUNT(m.id), COALESCE(SUM(CASE WHEN m.is_read = 0 THEN 1 ELSE 0 END), 0) \
+            COUNT(m.id), COALESCE(SUM(CASE WHEN m.is_read = 0 THEN 1 ELSE 0 END), 0), \
+            COALESCE(f.server_path, ''), f.delimiter, f.attributes \
             FROM folder f \
             LEFT JOIN message m ON m.folder_id = f.id \
             GROUP BY f.id \
@@ -471,13 +484,24 @@ impl Store {
         let mut rows = stmt.query([])?;
         let mut items = Vec::new();
         while let Some(row) = rows.next()? {
+            let full_path: String = row.get(2)?;
+            let kind: String = row.get(3)?;
+            let attributes = decode_attributes(&row.get::<_, String>(8)?);
+            let folder_kind = FolderKind::parse(&kind).unwrap_or(FolderKind::Custom);
+            let changeable = folder_changeable(&full_path, folder_kind, &attributes);
+            let allows_children = folder_allows_children(folder_kind, &attributes);
             items.push(InboxFolder {
                 account_id: row.get(0)?,
                 folder_id: row.get(1)?,
-                full_path: row.get(2)?,
-                kind: row.get(3)?,
+                full_path,
+                kind,
                 message_count: row.get(4)?,
                 unread_count: row.get(5)?,
+                server_path: row.get(6)?,
+                delimiter: row.get(7)?,
+                attributes,
+                changeable,
+                allows_children,
             });
         }
         Ok(items)

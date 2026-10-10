@@ -29,6 +29,7 @@ pub(super) fn align_folders(ctx: &Arc<WorkerContext>, folders: &[FolderInfo]) ->
             server_path: info.server_path.clone(),
             delimiter: info.delimiter.clone(),
             kind: FolderKind::classify(&info.full_path, &info.attributes),
+            attributes: info.attributes.clone(),
         })
         .collect();
     let store = lock_store(&ctx.store);
@@ -50,12 +51,13 @@ pub(super) async fn sync_folder(
     let folder_id = {
         let store = lock_store(&ctx.store);
         store
-            .upsert_folder_mapped(
+            .upsert_folder_with_attributes(
                 ctx.account_id,
                 &info.full_path,
                 &info.server_path,
                 &info.delimiter,
                 kind,
+                &info.attributes,
             )
             .map_err(Failure::store)?
     };

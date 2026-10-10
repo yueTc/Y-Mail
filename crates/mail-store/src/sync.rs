@@ -36,6 +36,8 @@ pub struct StoredFolder {
     pub last_sync_at: Option<String>,
     /// 服务器报告的未读数。
     pub unread_count: i64,
+    /// 服务器 LIST 返回的文件夹属性（如 `\Sent`、`\Noselect`）。
+    pub attributes: Vec<String>,
 }
 
 /// 准备对齐到本地的一条服务器文件夹。
@@ -49,6 +51,8 @@ pub struct NewFolder {
     pub delimiter: String,
     /// 归类结果。
     pub kind: FolderKind,
+    /// 服务器 LIST 返回的原始属性。
+    pub attributes: Vec<String>,
 }
 
 /// 一条还没得到服务器确认的红旗变更。
@@ -129,7 +133,7 @@ pub struct StoredSyncJob {
 }
 
 const SELECT_FOLDER: &str = "SELECT id, account_id, full_path, server_path, delimiter, kind, \
-    uidvalidity, uidnext, synced_min_uid, last_sync_at, unread_count FROM folder";
+    uidvalidity, uidnext, synced_min_uid, last_sync_at, unread_count, attributes FROM folder";
 
 fn row_to_folder(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredFolder> {
     let kind: String = row.get(5)?;
@@ -148,7 +152,17 @@ fn row_to_folder(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredFolder> {
         synced_min_uid: synced_min_uid.and_then(|value| u32::try_from(value).ok()),
         last_sync_at: row.get(9)?,
         unread_count: row.get(10)?,
+        attributes: decode_attributes(&row.get::<_, String>(11)?),
     })
+}
+
+/// 服务器属性按 JSON 数组存库；坏数据退回空列表，不让一行脏数据拖垮列表。
+fn encode_attributes(attributes: &[String]) -> String {
+    serde_json::to_string(attributes).unwrap_or_else(|_| "[]".to_string())
+}
+
+pub(crate) fn decode_attributes(raw: &str) -> Vec<String> {
+    serde_json::from_str(raw).unwrap_or_default()
 }
 
 const SELECT_SYNC_JOB: &str = "SELECT id, account_id, folder_id, kind, state, progress, error, \
@@ -192,6 +206,20 @@ fn merge_folder_rows(
     Ok(())
 }
 
+/// 只在「整段相同」或「后跟分隔符」时替换前缀，避免 `a` 误伤 `ab`。
+fn replace_path_prefix(value: &str, old: &str, new: &str, delimiter: &str) -> Option<String> {
+    if value == old {
+        return Some(new.to_string());
+    }
+    if delimiter.is_empty() {
+        return None;
+    }
+    let prefix = format!("{old}{delimiter}");
+    value
+        .strip_prefix(&prefix)
+        .map(|rest| format!("{new}{delimiter}{rest}"))
+}
+
 /// 在事务里按“服务器原始名优先、旧乱码名兜底”的规则写入或更新一行文件夹。
 fn upsert_folder_tx(
     tx: &rusqlite::Transaction<'_>,
@@ -200,7 +228,9 @@ fn upsert_folder_tx(
     server_path: &str,
     delimiter: &str,
     kind: FolderKind,
+    attributes: &[String],
 ) -> Result<i64, StoreError> {
+    let attributes_json = encode_attributes(attributes);
     let target: Option<i64> = tx
         .query_row(
             "SELECT id FROM folder WHERE account_id = ?1 AND server_path = ?2",
@@ -234,10 +264,10 @@ fn upsert_folder_tx(
             merge_folder_rows(tx, target_id, source_id)?;
         }
         tx.execute(
-            "UPDATE folder SET full_path = ?2, delimiter = ?3, kind = ?4, \
+            "UPDATE folder SET full_path = ?2, delimiter = ?3, kind = ?4, attributes = ?5, \
                  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
              WHERE id = ?1",
-            rusqlite::params![target_id, full_path, delimiter, kind.as_str()],
+            rusqlite::params![target_id, full_path, delimiter, kind.as_str(), attributes_json],
         )?;
         return Ok(target_id);
     }
@@ -248,27 +278,47 @@ fn upsert_folder_tx(
         }
         tx.execute(
             "UPDATE folder SET full_path = ?2, server_path = ?3, delimiter = ?4, kind = ?5, \
-                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+                 attributes = ?6, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
              WHERE id = ?1",
-            rusqlite::params![legacy_id, full_path, server_path, delimiter, kind.as_str()],
+            rusqlite::params![
+                legacy_id,
+                full_path,
+                server_path,
+                delimiter,
+                kind.as_str(),
+                attributes_json
+            ],
         )?;
         return Ok(legacy_id);
     }
 
     if let Some(displayed_id) = displayed {
         tx.execute(
-            "UPDATE folder SET server_path = ?2, delimiter = ?3, kind = ?4, \
+            "UPDATE folder SET server_path = ?2, delimiter = ?3, kind = ?4, attributes = ?5, \
                  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
              WHERE id = ?1",
-            rusqlite::params![displayed_id, server_path, delimiter, kind.as_str()],
+            rusqlite::params![
+                displayed_id,
+                server_path,
+                delimiter,
+                kind.as_str(),
+                attributes_json
+            ],
         )?;
         return Ok(displayed_id);
     }
 
     tx.execute(
-        "INSERT INTO folder (account_id, full_path, server_path, delimiter, kind) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![account_id, full_path, server_path, delimiter, kind.as_str()],
+        "INSERT INTO folder (account_id, full_path, server_path, delimiter, kind, attributes) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            account_id,
+            full_path,
+            server_path,
+            delimiter,
+            kind.as_str(),
+            attributes_json
+        ],
     )?;
     Ok(tx.last_insert_rowid())
 }
@@ -282,7 +332,7 @@ impl Store {
         delimiter: &str,
         kind: FolderKind,
     ) -> Result<i64, StoreError> {
-        self.upsert_folder_mapped(account_id, full_path, full_path, delimiter, kind)
+        self.upsert_folder_with_attributes(account_id, full_path, full_path, delimiter, kind, &[])
     }
 
     /// 按显示名 + 服务器原始名写入一个文件夹，返回主键。
@@ -294,8 +344,29 @@ impl Store {
         delimiter: &str,
         kind: FolderKind,
     ) -> Result<i64, StoreError> {
+        self.upsert_folder_with_attributes(account_id, full_path, server_path, delimiter, kind, &[])
+    }
+
+    /// 按显示名 + 服务器原始名 + 服务器属性写入一个文件夹，返回主键。
+    pub fn upsert_folder_with_attributes(
+        &self,
+        account_id: i64,
+        full_path: &str,
+        server_path: &str,
+        delimiter: &str,
+        kind: FolderKind,
+        attributes: &[String],
+    ) -> Result<i64, StoreError> {
         let tx = self.conn().unchecked_transaction()?;
-        let id = upsert_folder_tx(&tx, account_id, full_path, server_path, delimiter, kind)?;
+        let id = upsert_folder_tx(
+            &tx,
+            account_id,
+            full_path,
+            server_path,
+            delimiter,
+            kind,
+            attributes,
+        )?;
         tx.commit()?;
         Ok(id)
     }
@@ -312,6 +383,7 @@ impl Store {
                 &folder.server_path,
                 &folder.delimiter,
                 folder.kind,
+                &folder.attributes,
             )?;
             kept_ids.push(id);
         }
@@ -665,6 +737,64 @@ impl Store {
         Ok(count)
     }
 
+    /// 删除一个本地文件夹记录；下面的邮件靠外键级联清理。
+    pub fn delete_folder(&self, folder_id: i64) -> Result<(), StoreError> {
+        self.conn()
+            .execute("DELETE FROM folder WHERE id = ?1", [folder_id])?;
+        Ok(())
+    }
+
+    /// 删除一条本地邮件记录（服务商已确认删除后调用）。
+    pub fn delete_message(&self, message_id: i64) -> Result<(), StoreError> {
+        self.conn()
+            .execute("DELETE FROM message WHERE id = ?1", [message_id])?;
+        Ok(())
+    }
+
+    /// 重命名文件夹后，把本地路径按前缀整体替换（含子文件夹）。
+    ///
+    /// 服务商对层级文件夹的改名常会级联；先做前缀替换，能让本地记录和
+    /// 服务器新列表对上，不至于留下旧路径的孤儿行。
+    pub fn rename_folder_prefix(
+        &self,
+        account_id: i64,
+        old_server_path: &str,
+        new_server_path: &str,
+        old_full_path: &str,
+        new_full_path: &str,
+        delimiter: &str,
+    ) -> Result<usize, StoreError> {
+        let tx = self.conn().unchecked_transaction()?;
+        let rows: Vec<(i64, String, Option<String>)> = {
+            let mut stmt =
+                tx.prepare("SELECT id, full_path, server_path FROM folder WHERE account_id = ?1")?;
+            let mut out = Vec::new();
+            let mut iter = stmt.query([account_id])?;
+            while let Some(row) = iter.next()? {
+                out.push((row.get(0)?, row.get(1)?, row.get(2)?));
+            }
+            out
+        };
+        let mut changed = 0usize;
+        for (id, full_path, server_path) in rows {
+            let next_full = replace_path_prefix(&full_path, old_full_path, new_full_path, delimiter);
+            let next_server = server_path
+                .as_deref()
+                .and_then(|value| replace_path_prefix(value, old_server_path, new_server_path, delimiter));
+            if next_full.is_none() && next_server.is_none() {
+                continue;
+            }
+            tx.execute(
+                "UPDATE folder SET full_path = ?2, server_path = ?3, \
+                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?1",
+                rusqlite::params![id, next_full.unwrap_or(full_path), next_server.or(server_path)],
+            )?;
+            changed += 1;
+        }
+        tx.commit()?;
+        Ok(changed)
+    }
+
     /// 账号下的邮件总条数。
     pub fn count_account_messages(&self, account_id: i64) -> Result<i64, StoreError> {
         let count: i64 = self.conn().query_row(
@@ -892,6 +1022,7 @@ mod tests {
                     server_path: "&Xn9USpCuTvY-".to_string(),
                     delimiter: "/".to_string(),
                     kind: FolderKind::Custom,
+                    attributes: Vec::new(),
                 }],
             )
             .expect("对齐文件夹");
@@ -948,6 +1079,7 @@ mod tests {
                     server_path: "&Xn9USpCuTvY-".to_string(),
                     delimiter: "/".to_string(),
                     kind: FolderKind::Custom,
+                    attributes: Vec::new(),
                 }],
             )
             .expect("对齐文件夹");
@@ -1007,6 +1139,7 @@ mod tests {
                     server_path: "&g0l6P3ux-".to_string(),
                     delimiter: "/".to_string(),
                     kind: FolderKind::Draft,
+                    attributes: Vec::new(),
                 }],
             )
             .expect("align");
@@ -1194,6 +1327,120 @@ mod tests {
         assert_eq!(
             store.get_setting("sync.enabled").expect("读设置").as_deref(),
             Some("false")
+        );
+    }
+
+    #[test]
+    fn 文件夹属性可存取且会被对齐覆盖() {
+        let store = migrated();
+        let account_id = account(&store);
+        let id = store
+            .upsert_folder_with_attributes(
+                account_id,
+                "归档",
+                "&AAA-",
+                "/",
+                FolderKind::Custom,
+                &["\\HasNoChildren".to_string(), "\\Noselect".to_string()],
+            )
+            .expect("插入带属性文件夹");
+        let folder = store.get_folder_by_id(id).expect("取").expect("应有");
+        assert_eq!(folder.server_path.as_deref(), Some("&AAA-"));
+        assert_eq!(folder.attributes, vec!["\\HasNoChildren", "\\Noselect"]);
+
+        // 再次对齐时属性应被服务器新列表整体覆盖。
+        store
+            .align_folders(
+                account_id,
+                &[NewFolder {
+                    full_path: "归档".to_string(),
+                    server_path: "&AAA-".to_string(),
+                    delimiter: "/".to_string(),
+                    kind: FolderKind::Custom,
+                    attributes: vec!["\\HasChildren".to_string()],
+                }],
+            )
+            .expect("对齐");
+        let folder = store.get_folder_by_id(id).expect("取").expect("应有");
+        assert_eq!(folder.attributes, vec!["\\HasChildren"]);
+    }
+
+    #[test]
+    fn 删除文件夹会级联清掉下面邮件() {
+        let store = migrated();
+        let account_id = account(&store);
+        let folder_id = store
+            .upsert_folder(account_id, "待删", "/", FolderKind::Custom)
+            .expect("插入文件夹");
+        let ids = store
+            .insert_messages_returning_ids(&[message(account_id, folder_id, 1)])
+            .expect("写邮件");
+        assert_eq!(ids.len(), 1);
+
+        store.delete_folder(folder_id).expect("删文件夹");
+        assert!(store.get_folder_by_id(folder_id).expect("取").is_none());
+        assert!(
+            store.message_location(ids[0]).expect("定位").is_none(),
+            "文件夹删掉后邮件应被级联清理"
+        );
+    }
+
+    #[test]
+    fn 删除邮件只清指定那一封() {
+        let store = migrated();
+        let account_id = account(&store);
+        let folder_id = store
+            .upsert_folder(account_id, "INBOX", "/", FolderKind::Inbox)
+            .expect("插入文件夹");
+        let ids = store
+            .insert_messages_returning_ids(&[
+                message(account_id, folder_id, 1),
+                message(account_id, folder_id, 2),
+            ])
+            .expect("写两封邮件");
+
+        store.delete_message(ids[0]).expect("删第一封");
+        assert!(store.message_location(ids[0]).expect("定位").is_none());
+        assert!(
+            store.message_location(ids[1]).expect("定位").is_some(),
+            "第二封应还在"
+        );
+        assert_eq!(store.count_folder_messages(folder_id).expect("数"), 1);
+    }
+
+    #[test]
+    fn 重命名文件夹会按前缀带子文件夹一起改() {
+        let store = migrated();
+        let account_id = account(&store);
+        store
+            .upsert_folder_mapped(account_id, "项目", "&AAA-", "/", FolderKind::Custom)
+            .expect("父文件夹");
+        store
+            .upsert_folder_mapped(account_id, "项目/2026", "&AAA-/2026", "/", FolderKind::Custom)
+            .expect("子文件夹");
+        store
+            .upsert_folder_mapped(account_id, "别的", "&BBB-", "/", FolderKind::Custom)
+            .expect("无关文件夹");
+
+        let changed = store
+            .rename_folder_prefix(account_id, "&AAA-", "&CCC-", "项目", "策划", "/")
+            .expect("前缀替换");
+        assert_eq!(changed, 2, "父和子都该改");
+
+        assert!(store.get_folder(account_id, "项目").expect("取旧").is_none());
+        let child = store
+            .get_folder(account_id, "策划/2026")
+            .expect("取子")
+            .expect("应有");
+        assert_eq!(child.server_path.as_deref(), Some("&CCC-/2026"));
+        let unrelated = store
+            .get_folder(account_id, "别的")
+            .expect("取无关")
+            .expect("应有");
+        assert_eq!(
+            unrelated.server_path.as_deref(),
+            Some("&BBB-"),
+            "无关文件夹不该被改"
         );
     }
 }

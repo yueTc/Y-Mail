@@ -1800,6 +1800,12 @@ pub struct InboxFolderDto {
     pub message_count: i64,
     /// 本地未读条数。
     pub unread_count: i64,
+    /// 层级分隔符；服务器不支持层级时为空串。
+    pub delimiter: String,
+    /// 能不能重命名或删除。
+    pub changeable: bool,
+    /// 能不能新建子文件夹。
+    pub allows_children: bool,
 }
 
 impl InboxFolderDto {
@@ -1811,6 +1817,9 @@ impl InboxFolderDto {
             kind: folder.kind.clone(),
             message_count: folder.message_count,
             unread_count: folder.unread_count,
+            delimiter: folder.delimiter.clone(),
+            changeable: folder.changeable,
+            allows_children: folder.allows_children,
         }
     }
 }
@@ -1824,6 +1833,93 @@ pub async fn list_inbox_folders(
     let folders = engine.inbox_folders()?;
     Ok(folders.iter().map(InboxFolderDto::from_folder).collect())
 }
+/// 在一个账号下新建文件夹；`parent_folder_id` 为空表示建在根下。
+#[tauri::command]
+pub async fn create_mail_folder(
+    state: tauri::State<'_, AppState>,
+    account_id: i64,
+    parent_folder_id: Option<i64>,
+    name: String,
+) -> Result<(), CommandError> {
+    if account_id <= 0 {
+        return Err(CommandError::input("账号编号不合法"));
+    }
+    let engine = state.engine().await;
+    engine.create_folder(account_id, parent_folder_id, &name).await?;
+    Ok(())
+}
+
+/// 重命名一个文件夹。
+#[tauri::command]
+pub async fn rename_mail_folder(
+    state: tauri::State<'_, AppState>,
+    folder_id: i64,
+    new_name: String,
+) -> Result<(), CommandError> {
+    if folder_id <= 0 {
+        return Err(CommandError::input("文件夹编号不合法"));
+    }
+    let engine = state.engine().await;
+    engine.rename_folder(folder_id, &new_name).await?;
+    Ok(())
+}
+
+/// 删除一个空文件夹。
+#[tauri::command]
+pub async fn delete_mail_folder(
+    state: tauri::State<'_, AppState>,
+    folder_id: i64,
+) -> Result<(), CommandError> {
+    if folder_id <= 0 {
+        return Err(CommandError::input("文件夹编号不合法"));
+    }
+    let engine = state.engine().await;
+    engine.delete_folder(folder_id).await?;
+    Ok(())
+}
+
+/// 删除一封邮件前的预览结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteMessagePreviewDto {
+    /// 移到「已删除」时的目标文件夹名；彻底删除时为 None。
+    pub target_folder: Option<String>,
+    /// 是否会被彻底删除。
+    pub permanent: bool,
+}
+
+/// 看看删除这封邮件会走哪条路：移到已删除，还是彻底删除。
+#[tauri::command]
+pub async fn preview_delete_message(
+    state: tauri::State<'_, AppState>,
+    message_id: i64,
+) -> Result<DeleteMessagePreviewDto, CommandError> {
+    if message_id <= 0 {
+        return Err(CommandError::input("邮件编号不合法"));
+    }
+    let engine = state.engine().await;
+    let preview = engine.preview_delete_message(message_id)?;
+    Ok(DeleteMessagePreviewDto {
+        target_folder: preview.target_folder,
+        permanent: preview.permanent,
+    })
+}
+
+/// 删除一封邮件并同步到服务商。
+#[tauri::command]
+pub async fn delete_message(
+    state: tauri::State<'_, AppState>,
+    message_id: i64,
+    permanent: bool,
+) -> Result<(), CommandError> {
+    if message_id <= 0 {
+        return Err(CommandError::input("邮件编号不合法"));
+    }
+    let engine = state.engine().await;
+    engine.delete_message(message_id, permanent).await?;
+    Ok(())
+}
+
 /// 收件箱总览：各账号未读与邮件合计。
 #[tauri::command]
 pub async fn inbox_summary(state: tauri::State<'_, AppState>) -> Result<InboxSummaryDto, CommandError> {

@@ -65,6 +65,14 @@ impl FolderKind {
         matches!(self, Self::Inbox)
     }
 
+    /// 是否是服务商维护的系统文件夹（不允许用户改名或删除）。
+    pub fn is_system(self) -> bool {
+        matches!(
+            self,
+            Self::Inbox | Self::Sent | Self::Draft | Self::Trash | Self::Junk
+        )
+    }
+
     /// 由服务器 LIST 返回的属性与文件夹路径推断类别。
     ///
     /// 优先用服务器广告的专用属性（\\Sent / \\Drafts / \\Trash / \\Junk）；
@@ -98,6 +106,37 @@ impl FolderKind {
             _ => Self::Custom,
         }
     }
+}
+
+/// 文件夹能不能被用户重命名或删除。
+///
+/// 判定分三层：服务商维护的系统类别（收件箱 / 已发送 / 草稿箱 / 已删除 / 垃圾邮件）、
+/// 协议属性（`\Noselect` 只是空壳、`\NonExistent` 已不存在）、以及 Gmail 的 `[Gmail]` 命名空间。
+pub fn folder_changeable(full_path: &str, kind: FolderKind, attributes: &[String]) -> bool {
+    if kind.is_system() {
+        return false;
+    }
+    if full_path.trim().eq_ignore_ascii_case("INBOX") {
+        return false;
+    }
+    if full_path.trim_start().starts_with("[Gmail]") {
+        return false;
+    }
+    !has_protocol_attribute(attributes, "\\Noselect") && !has_protocol_attribute(attributes, "\\NonExistent")
+}
+
+/// 文件夹下能不能新建子文件夹。
+///
+/// 带 `\\NoInferiors` 的文件夹服务器明确说不能再分层；系统文件夹也不开放。
+pub fn folder_allows_children(kind: FolderKind, attributes: &[String]) -> bool {
+    if kind.is_system() {
+        return false;
+    }
+    !has_protocol_attribute(attributes, "\\Noselect") && !has_protocol_attribute(attributes, "\\NoInferiors")
+}
+
+fn has_protocol_attribute(attributes: &[String], name: &str) -> bool {
+    attributes.iter().any(|item| item.eq_ignore_ascii_case(name))
 }
 
 /// 历史补齐的覆盖范围（规格 R3：全部 / 近 1 年 / 近 3 年 / 自定义）。
@@ -300,7 +339,10 @@ pub fn normalize_subject(subject: &str) -> String {
 mod tests {
     use std::time::Duration;
 
-    use super::{backoff_delay, normalize_subject, thread_key, FolderKind, HistoryRange, SyncJobKind};
+    use super::{
+        backoff_delay, folder_allows_children, folder_changeable, normalize_subject, thread_key, FolderKind,
+        HistoryRange, SyncJobKind,
+    };
 
     #[test]
     fn 文件夹按专用属性归类() {
@@ -349,5 +391,43 @@ mod tests {
         assert_eq!(normalize_subject("回复: 报价"), "报价");
         assert_eq!(thread_key("Re: 周报", Some("<abc@x>")), "周报");
         assert_eq!(thread_key("", Some("<ABC@x>")), "abc@x");
+    }
+
+    #[test]
+    fn 系统文件夹和收件箱不允许改也不能建子文件夹() {
+        for kind in [
+            FolderKind::Inbox,
+            FolderKind::Sent,
+            FolderKind::Draft,
+            FolderKind::Trash,
+            FolderKind::Junk,
+        ] {
+            assert!(!folder_changeable("随便", kind, &[]), "{kind:?} 不应开放改名删除");
+            assert!(
+                !folder_allows_children(kind, &[]),
+                "{kind:?} 不应开放新建子文件夹"
+            );
+        }
+        // 类别认不出来，但路径就是收件箱时也要挡住。
+        assert!(!folder_changeable("inbox", FolderKind::Custom, &[]));
+        // 自定义文件夹默认两层都开放。
+        assert!(folder_changeable("项目/2026", FolderKind::Custom, &[]));
+        assert!(folder_allows_children(FolderKind::Custom, &[]));
+    }
+
+    #[test]
+    fn 协议属性会挡住改名与建子文件夹() {
+        let noselect = vec!["\\Noselect".to_string()];
+        let inexistent = vec!["\\NonExistent".to_string()];
+        let no_inferiors = vec!["\\NoInferiors".to_string()];
+        // 空壳和已消失的文件夹既不能改也不能建子文件夹。
+        assert!(!folder_changeable("归档/全部邮件", FolderKind::Custom, &noselect));
+        assert!(!folder_changeable("旧目录", FolderKind::Custom, &inexistent));
+        assert!(!folder_allows_children(FolderKind::Custom, &noselect));
+        // 服务器说不能再分层时，只挡子文件夹，不挡改名。
+        assert!(folder_changeable("项目", FolderKind::Custom, &no_inferiors));
+        assert!(!folder_allows_children(FolderKind::Custom, &no_inferiors));
+        // Gmail 的方括号命名空间不开放改名删除。
+        assert!(!folder_changeable("[Gmail]/全部邮件", FolderKind::Custom, &[]));
     }
 }

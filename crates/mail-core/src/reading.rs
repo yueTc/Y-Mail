@@ -313,7 +313,7 @@ impl MailEngine {
     /// 按账号组装建连参数并连上服务器。
     ///
     /// 与同步工作线程保持同一套口径：账号来自本地库，授权码只在建连前从保险箱取出。
-    async fn connect_client(&self, account_id: i64) -> Result<ImapClient, EngineError> {
+    pub(crate) async fn connect_client(&self, account_id: i64) -> Result<ImapClient, EngineError> {
         let account = {
             let store = lock_store(&self.store);
             store

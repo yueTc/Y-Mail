@@ -277,6 +277,20 @@ export interface InboxFolder {
   kind: string;
   messageCount: number;
   unreadCount: number;
+  /** 层级分隔符；服务器不支持层级时为空串。 */
+  delimiter: string;
+  /** 能不能重命名或删除。 */
+  changeable: boolean;
+  /** 能不能新建子文件夹。 */
+  allowsChildren: boolean;
+}
+
+/** 删除一封邮件前的预览：是移到已删除，还是彻底删除。 */
+export interface DeleteMessagePreview {
+  /** 移到已删除时的目标文件夹名；彻底删除时为 null。 */
+  targetFolder: string | null;
+  /** 是否会被彻底删除。 */
+  permanent: boolean;
 }
 /** 收件箱总览：各账号汇总 + 合计。 */
 export interface InboxSummary {
@@ -891,6 +905,31 @@ export const api = {
   inboxSummary: () => call<InboxSummary>("inbox_summary"),
 
   listInboxFolders: () => call<InboxFolder[]>("list_inbox_folders"),
+
+  /** 在一个账号下新建文件夹；parentFolderId 为空表示建在根下。 */
+  createMailFolder: (accountId: number, parentFolderId: number | undefined, name: string) =>
+    call<void>(
+      "create_mail_folder",
+      parentFolderId === undefined
+        ? { accountId, name }
+        : { accountId, parentFolderId, name },
+    ),
+
+  /** 重命名一个文件夹。 */
+  renameMailFolder: (folderId: number, newName: string) =>
+    call<void>("rename_mail_folder", { folderId, newName }),
+
+  /** 删除一个空文件夹。 */
+  deleteMailFolder: (folderId: number) =>
+    call<void>("delete_mail_folder", { folderId }),
+
+  /** 预览删除一封邮件会走哪条路。 */
+  previewDeleteMessage: (messageId: number) =>
+    call<DeleteMessagePreview>("preview_delete_message", { messageId }),
+
+  /** 删除一封邮件；permanent 为 true 时彻底删除。 */
+  deleteMessage: (messageId: number, permanent: boolean) =>
+    call<void>("delete_message", { messageId, permanent }),
 
   listInboxMessages: (query: InboxQuery = {}) =>
     call<InboxMessagePage>("list_inbox_messages", { query }),

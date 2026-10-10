@@ -25,7 +25,8 @@ pub use proxy::{
     Secret,
 };
 pub use sync::{
-    backoff_delay, normalize_subject, thread_key, FolderKind, HistoryRange, SyncJobKind, SyncJobState,
+    backoff_delay, folder_allows_children, folder_changeable, normalize_subject, thread_key, FolderKind,
+    HistoryRange, SyncJobKind, SyncJobState,
 };
 
 /// 本 crate 的用途标识，供工作区自检与日志使用。

@@ -45,8 +45,7 @@ pub(crate) fn decode(input: &str) -> String {
     output
 }
 
-/// 把正常文本编码成 Modified UTF-7，主要供测试和对称性验证。
-#[cfg(test)]
+/// 把正常文本编码成 Modified UTF-7（RFC 3501 5.1.3），供 CREATE / RENAME 使用。
 pub(crate) fn encode(input: &str) -> String {
     let chars: Vec<char> = input.chars().collect();
     let mut output = String::new();

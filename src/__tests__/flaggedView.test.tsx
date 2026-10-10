@@ -105,6 +105,9 @@ function folder(overrides: Partial<InboxFolder> = {}): InboxFolder {
     kind: "inbox",
     messageCount: 3,
     unreadCount: 2,
+    delimiter: "/",
+    changeable: false,
+    allowsChildren: false,
     ...overrides,
   };
 }

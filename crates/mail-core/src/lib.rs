@@ -12,6 +12,7 @@ pub mod compose;
 pub mod contacts;
 pub mod download;
 pub mod engine;
+pub mod folder_ops;
 pub mod inbox;
 pub mod mcp;
 pub mod oauth;
@@ -38,6 +39,7 @@ pub use contacts::{
 };
 pub use download::SavedExternalAttachment;
 pub use engine::{EngineError, EngineInit, MailEngine, KEYRING_SERVICE};
+pub use folder_ops::DeleteMessagePreview;
 pub use inbox::{InboxMessagePage, InboxThreadPage};
 pub use mail_ai::{sanitize_code, sanitize_link, VerificationFinding};
 pub use mcp::{

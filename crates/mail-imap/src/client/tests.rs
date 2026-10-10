@@ -589,6 +589,159 @@ async fn flag_round_trip_uses_uid_store() {
     client.uid_store_flags(42, false).await.expect("取消");
 }
 
+#[test]
+fn 服务器路径会编码新段并拼上父级() {
+    // 根下新建：只编码名字。
+    assert_eq!(super::build_server_path(None, "/", "广告邮件"), "&Xn9USpCuTvY-");
+    // 有父级：父级用服务器原始名，只有新段编码。
+    assert_eq!(
+        super::build_server_path(Some("INBOX"), "/", "广告邮件"),
+        "INBOX/&Xn9USpCuTvY-"
+    );
+    // 父级为空串时按根下处理，不加分隔符。
+    assert_eq!(super::build_server_path(Some(""), ".", "Sent"), "Sent");
+    // 服务器不支持层级时空分隔符退回斜杠，仍然能拼。
+    assert_eq!(super::build_server_path(Some("A"), "", "B"), "A/B");
+}
+
+#[tokio::test]
+async fn 新建改名删除文件夹会发对应命令() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+    let addr = listener.local_addr().expect("地址");
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("接受");
+        let mut reader = greeting(socket).await;
+        let _ = read_line(&mut reader).await;
+        reader.get_mut().write_all(b"a001 OK\r\n").await.expect("写");
+        let _ = read_line(&mut reader).await;
+        reader
+            .get_mut()
+            .write_all(b"* CAPABILITY IMAP4rev1\r\na002 OK\r\n")
+            .await
+            .expect("写");
+        assert_eq!(read_line(&mut reader).await, "a003 CREATE \"Archive\"");
+        reader
+            .get_mut()
+            .write_all(b"a003 OK CREATE completed\r\n")
+            .await
+            .expect("写");
+        assert_eq!(
+            read_line(&mut reader).await,
+            "a004 RENAME \"Archive\" \"Archive2\""
+        );
+        reader
+            .get_mut()
+            .write_all(b"a004 OK RENAME completed\r\n")
+            .await
+            .expect("写");
+        assert_eq!(read_line(&mut reader).await, "a005 DELETE \"Archive2\"");
+        reader
+            .get_mut()
+            .write_all(b"a005 OK DELETE completed\r\n")
+            .await
+            .expect("写");
+    });
+
+    let mut client = ImapClient::connect(&config(addr.port()), None)
+        .await
+        .expect("连接");
+    client.create_folder("Archive").await.expect("新建");
+    client.rename_folder("Archive", "Archive2").await.expect("改名");
+    client.delete_folder("Archive2").await.expect("删除");
+}
+
+#[tokio::test]
+async fn 移动与彻底删除邮件会发对应命令() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+    let addr = listener.local_addr().expect("地址");
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("接受");
+        let mut reader = greeting(socket).await;
+        let _ = read_line(&mut reader).await;
+        reader.get_mut().write_all(b"a001 OK\r\n").await.expect("写");
+        let _ = read_line(&mut reader).await;
+        // 广告 MOVE 与 UIDPLUS：移动走 UID MOVE，彻底删除走 UID EXPUNGE。
+        reader
+            .get_mut()
+            .write_all(b"* CAPABILITY IMAP4rev1 MOVE UIDPLUS\r\na002 OK\r\n")
+            .await
+            .expect("写");
+        assert_eq!(read_line(&mut reader).await, "a003 UID MOVE 7 \"Trash\"");
+        reader
+            .get_mut()
+            .write_all(b"a003 OK MOVE completed\r\n")
+            .await
+            .expect("写");
+        assert_eq!(
+            read_line(&mut reader).await,
+            "a004 UID STORE 7 +FLAGS.SILENT (\\Deleted)"
+        );
+        reader
+            .get_mut()
+            .write_all(b"a004 OK STORE completed\r\n")
+            .await
+            .expect("写");
+        assert_eq!(read_line(&mut reader).await, "a005 UID EXPUNGE 7");
+        reader
+            .get_mut()
+            .write_all(b"a005 OK EXPUNGE completed\r\n")
+            .await
+            .expect("写");
+    });
+
+    let mut client = ImapClient::connect(&config(addr.port()), None)
+        .await
+        .expect("连接");
+    client.uid_move(7, "Trash").await.expect("移动");
+    client.uid_delete(7).await.expect("彻底删除");
+}
+
+#[tokio::test]
+async fn 服务器不支持move时移动邮件退回复制加删除() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+    let addr = listener.local_addr().expect("地址");
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("接受");
+        let mut reader = greeting(socket).await;
+        let _ = read_line(&mut reader).await;
+        reader.get_mut().write_all(b"a001 OK\r\n").await.expect("写");
+        let _ = read_line(&mut reader).await;
+        // 不广告 MOVE，也没 UIDPLUS。
+        reader
+            .get_mut()
+            .write_all(b"* CAPABILITY IMAP4rev1\r\na002 OK\r\n")
+            .await
+            .expect("写");
+        assert_eq!(read_line(&mut reader).await, "a003 UID COPY 9 \"Trash\"");
+        reader
+            .get_mut()
+            .write_all(b"a003 OK COPY completed\r\n")
+            .await
+            .expect("写");
+        assert_eq!(
+            read_line(&mut reader).await,
+            "a004 UID STORE 9 +FLAGS.SILENT (\\Deleted)"
+        );
+        reader
+            .get_mut()
+            .write_all(b"a004 OK STORE completed\r\n")
+            .await
+            .expect("写");
+        // 没有 UIDPLUS 时退回到整箱 EXPUNGE。
+        assert_eq!(read_line(&mut reader).await, "a005 EXPUNGE");
+        reader
+            .get_mut()
+            .write_all(b"a005 OK EXPUNGE completed\r\n")
+            .await
+            .expect("写");
+    });
+
+    let mut client = ImapClient::connect(&config(addr.port()), None)
+        .await
+        .expect("连接");
+    client.uid_move(9, "Trash").await.expect("移动");
+}
+
 #[tokio::test]
 async fn 回写红旗被服务器拒绝时报错() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");

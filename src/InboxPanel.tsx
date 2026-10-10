@@ -583,6 +583,19 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   // 邮箱栏右键菜单：落在哪个账号上、鼠标位置在哪。
   const [accountMenu, setAccountMenu] = useState<{ accountId: number; x: number; y: number }>();
+  // 文件夹右键菜单：落在哪个文件夹上、鼠标位置在哪。
+  const [folderMenu, setFolderMenu] = useState<{ folder: InboxFolder; x: number; y: number }>();
+  // 文件夹操作弹窗：新建根文件夹 / 新建子文件夹 / 重命名 / 删除。
+  const [folderDialog, setFolderDialog] = useState<{
+    mode: "create" | "create-child" | "rename" | "delete";
+    accountId: number;
+    folder?: InboxFolder;
+    name: string;
+  }>();
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [folderError, setFolderError] = useState("");
+  // 彻底删除一封邮件前的二次确认。
+  const [deleteMessageConfirm, setDeleteMessageConfirm] = useState<InboxMessage>();
   // 邮件右键菜单与「立即分类」的一次性外发确认。
   const [messageMenu, setMessageMenu] = useState<{
     message: InboxMessage;
@@ -781,6 +794,102 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
       setError(describeError(caught));
     }
   }, []);
+
+  // 文件夹右键菜单开着时，点别处 / 按 Esc / 一滚动就收起来。
+  useEffect(() => {
+    if (!folderMenu) return;
+    const close = () => setFolderMenu(undefined);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("click", close);
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("scroll", close, true);
+    return () => {
+      document.removeEventListener("click", close);
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("scroll", close, true);
+    };
+  }, [folderMenu]);
+
+  /** 右键一个文件夹：在鼠标位置开菜单。 */
+  const openFolderMenu = useCallback((event: ReactMouseEvent, folder: InboxFolder) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setFolderMenu({ folder, x: event.clientX, y: event.clientY });
+  }, []);
+
+  /** 开「新建文件夹」弹窗；parent 为空表示建在账号根下。 */
+  const openCreateFolderDialog = useCallback((accountId: number, parent?: InboxFolder) => {
+    setFolderMenu(undefined);
+    setAccountMenu(undefined);
+    setFolderError("");
+    setFolderDialog({
+      mode: parent ? "create-child" : "create",
+      accountId,
+      folder: parent,
+      name: "",
+    });
+  }, []);
+
+  /** 开重命名弹窗；输入框只预填最后一段名字。 */
+  const openRenameFolderDialog = useCallback((folder: InboxFolder) => {
+    setFolderMenu(undefined);
+    setFolderError("");
+    const leaf = folder.delimiter
+      ? folder.fullPath.split(folder.delimiter).pop() ?? folder.fullPath
+      : folder.fullPath;
+    setFolderDialog({
+      mode: "rename",
+      accountId: folder.accountId,
+      folder,
+      name: leaf,
+    });
+  }, []);
+
+  /** 开删除文件夹确认弹窗。 */
+  const openDeleteFolderDialog = useCallback((folder: InboxFolder) => {
+    setFolderMenu(undefined);
+    setFolderError("");
+    setFolderDialog({
+      mode: "delete",
+      accountId: folder.accountId,
+      folder,
+      name: folder.fullPath,
+    });
+  }, []);
+
+  /** 提交文件夹操作：先落服务器，成功后再刷新侧栏。 */
+  const submitFolderDialog = useCallback(async () => {
+    if (!folderDialog) return;
+    const name = folderDialog.name.trim();
+    if (folderDialog.mode !== "delete" && !name) {
+      setFolderError(t("文件夹名字不能为空"));
+      return;
+    }
+    setFolderBusy(true);
+    setFolderError("");
+    try {
+      if (folderDialog.mode === "create") {
+        await api.createMailFolder(folderDialog.accountId, undefined, name);
+      } else if (folderDialog.mode === "create-child") {
+        await api.createMailFolder(folderDialog.accountId, folderDialog.folder?.folderId, name);
+      } else if (folderDialog.mode === "rename" && folderDialog.folder) {
+        await api.renameMailFolder(folderDialog.folder.folderId, name);
+      } else if (folderDialog.mode === "delete" && folderDialog.folder) {
+        await api.deleteMailFolder(folderDialog.folder.folderId);
+      }
+      setFolderDialog(undefined);
+      setStatusNote(
+        folderDialog.mode === "delete" ? t("文件夹已删除") : t("文件夹已同步到服务器"),
+      );
+      await refreshSidebar();
+    } catch (caught) {
+      setFolderError(describeError(caught));
+    } finally {
+      setFolderBusy(false);
+    }
+  }, [folderDialog, refreshSidebar]);
 
   // 邮件右键菜单开着时，点别处 / 按 Esc / 一滚动就收起来。
   useEffect(() => {
@@ -1003,6 +1112,42 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
     await refreshSidebar();
     await load(true);
   }, [refreshSidebar, load]);
+
+  /** 点「删除」：先问后端会走哪条路；彻底删除才弹二次确认。 */
+  const startDeleteMessage = useCallback(
+    async (message: InboxMessage) => {
+      setMessageMenu(undefined);
+      try {
+        const preview = await api.previewDeleteMessage(message.id);
+        if (preview.permanent) {
+          setDeleteMessageConfirm(message);
+          return;
+        }
+        await api.deleteMessage(message.id, false);
+        setStatusNote(t("邮件已移到「已删除」"));
+        await refreshAll();
+      } catch (caught) {
+        setError(describeError(caught));
+      }
+    },
+    [refreshAll],
+  );
+
+  /** 二次确认后彻底删除一封邮件。 */
+  const confirmDeleteMessage = useCallback(async () => {
+    if (!deleteMessageConfirm) return;
+    setFolderBusy(true);
+    try {
+      await api.deleteMessage(deleteMessageConfirm.id, true);
+      setDeleteMessageConfirm(undefined);
+      setStatusNote(t("邮件已彻底删除"));
+      await refreshAll();
+    } catch (caught) {
+      setError(describeError(caught));
+    } finally {
+      setFolderBusy(false);
+    }
+  }, [deleteMessageConfirm, refreshAll]);
 
   /** 打开邮件：本地先乐观标已读，失败回滚并提示；未读筛选下移出列表。 */
   const openMessage = useCallback(
@@ -1315,6 +1460,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
                           ? "sidebar-item sidebar-folder active"
                           : "sidebar-item sidebar-folder"
                       }
+                      onContextMenu={(event) => openFolderMenu(event, entry.folder)}
                       onClick={() => {
                         setSelectedAccount(entry.folder.accountId);
                         setSelectedFolder(entry.folder);
@@ -1604,6 +1750,58 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
           onClick={() => void editAccount(accountMenu.accountId)}
         >
           {t("编辑")}</button>
+        <button
+          type="button"
+          role="menuitem"
+          className="context-menu-item"
+          onClick={() => openCreateFolderDialog(accountMenu.accountId)}
+        >
+          {t("新建文件夹")}</button>
+      </div>
+    )}
+
+    {folderMenu && (
+      <div
+        className="context-menu"
+        role="menu"
+        aria-label={t("文件夹菜单")}
+        style={{
+          left: Math.min(folderMenu.x, Math.max(8, window.innerWidth - 240)),
+          top: Math.min(folderMenu.y, Math.max(8, window.innerHeight - 170)),
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        {folderMenu.folder.allowsChildren && (
+          <button
+            type="button"
+            role="menuitem"
+            className="context-menu-item"
+            onClick={() => openCreateFolderDialog(folderMenu.folder.accountId, folderMenu.folder)}
+          >
+            {t("新建子文件夹")}</button>
+        )}
+        {folderMenu.folder.changeable && (
+          <button
+            type="button"
+            role="menuitem"
+            className="context-menu-item"
+            onClick={() => openRenameFolderDialog(folderMenu.folder)}
+          >
+            {t("重命名")}</button>
+        )}
+        {folderMenu.folder.changeable && (
+          <button
+            type="button"
+            role="menuitem"
+            className="context-menu-item danger"
+            onClick={() => openDeleteFolderDialog(folderMenu.folder)}
+          >
+            {t("删除文件夹")}</button>
+        )}
+        {!folderMenu.folder.changeable && !folderMenu.folder.allowsChildren && (
+          <button type="button" role="menuitem" className="context-menu-item" disabled>
+            {t("系统文件夹不支持改名或删除")}</button>
+        )}
       </div>
     )}
 
@@ -1626,6 +1824,13 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
           disabled={classifyBusy}
         >
           {t("立即分类")}</button>
+        <button
+          type="button"
+          role="menuitem"
+          className="context-menu-item danger"
+          onClick={() => void startDeleteMessage(messageMenu.message)}
+        >
+          {t("删除")}</button>
       </div>
     )}
 
@@ -1682,6 +1887,106 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
               type="button"
               onClick={() => setClassifyConfirm(undefined)}
               disabled={classifyBusy}
+            >
+              {t("取消")}</button>
+          </div>
+        </section>
+      </div>
+    )}
+
+    {folderDialog && (
+      <div className="ai-modal-backdrop" role="presentation">
+        <section
+          className="ai-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={folderDialog.mode === "delete" ? t("确认删除文件夹") : t("文件夹")}
+        >
+          <h3>
+            {folderDialog.mode === "create"
+              ? t("新建文件夹")
+              : folderDialog.mode === "create-child"
+                ? t("新建子文件夹")
+                : folderDialog.mode === "rename"
+                  ? t("重命名文件夹")
+                  : t("确认删除文件夹")}
+          </h3>
+          {folderDialog.mode === "delete" ? (
+            <p>
+              {t("确定要删除「{0}」吗？文件夹里还有邮件或子文件夹时服务器会拒绝。", [
+                folderDialog.folder ? folderLabel(folderDialog.folder) : folderDialog.name,
+              ])}
+            </p>
+          ) : (
+            <>
+              {folderDialog.mode === "create-child" && folderDialog.folder && (
+                <p>{t("建在「{0}」下面。", [folderLabel(folderDialog.folder)])}</p>
+              )}
+              <label className="field">
+                <span>{t("文件夹名字")}</span>
+                <input
+                  autoFocus
+                  value={folderDialog.name}
+                  onChange={(event) =>
+                    setFolderDialog((current) =>
+                      current ? { ...current, name: event.target.value } : current,
+                    )
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !folderBusy) void submitFolderDialog();
+                  }}
+                  disabled={folderBusy}
+                />
+              </label>
+            </>
+          )}
+          {folderError && (
+            <p className="error" role="alert">
+              {t("操作失败：")}{folderError}
+            </p>
+          )}
+          <div className="form-actions">
+            <button
+              type="button"
+              className="primary"
+              onClick={() => void submitFolderDialog()}
+              disabled={folderBusy}
+            >
+              {folderDialog.mode === "delete" ? t("确认删除") : t("保存")}</button>
+            <button
+              type="button"
+              onClick={() => setFolderDialog(undefined)}
+              disabled={folderBusy}
+            >
+              {t("取消")}</button>
+          </div>
+        </section>
+      </div>
+    )}
+
+    {deleteMessageConfirm && (
+      <div className="ai-modal-backdrop" role="presentation">
+        <section
+          className="ai-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("确认彻底删除邮件")}
+        >
+          <h3>{t("确认彻底删除邮件")}</h3>
+          <p>{t("服务器上会真的删除这封邮件，找不回来。")}</p>
+          <p className="muted">{deleteMessageConfirm.subject || t("（无主题）")}</p>
+          <div className="form-actions">
+            <button
+              type="button"
+              className="primary"
+              onClick={() => void confirmDeleteMessage()}
+              disabled={folderBusy}
+            >
+              {t("彻底删除")}</button>
+            <button
+              type="button"
+              onClick={() => setDeleteMessageConfirm(undefined)}
+              disabled={folderBusy}
             >
               {t("取消")}</button>
           </div>

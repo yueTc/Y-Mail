@@ -49,16 +49,46 @@ pub struct FolderInfo {
 }
 
 impl FolderInfo {
+    /// 服务器是否给了某个属性（大小写不敏感）。
+    pub fn has_attribute(&self, name: &str) -> bool {
+        self.attributes.iter().any(|attr| attr.eq_ignore_ascii_case(name))
+    }
+
     /// 这个文件夹能不能被 SELECT。
     ///
     /// 带 `\NoSelect` 的文件夹只是「装子文件夹的空壳」，里面永远不会有邮件。
     /// 部分服务器（如腾讯企业邮）对它发 SELECT 还会假装回 `OK` 却不真正选中，
     /// 紧接着的搜索就会报「先选文件夹」。所以这类文件夹一律不去打开。
     pub fn is_selectable(&self) -> bool {
-        !self
-            .attributes
-            .iter()
-            .any(|attr| attr.eq_ignore_ascii_case("\\Noselect"))
+        !self.has_attribute("\\Noselect")
+    }
+
+    /// 这个文件夹能不能被重命名或删除。
+    ///
+    /// 只看协议属性；「收件箱 / 已发送 / 草稿箱 / 已删除 / 垃圾邮件」这类
+    /// 业务判定由上层结合 FolderKind 完成。
+    pub fn is_changeable(&self) -> bool {
+        !self.has_attribute("\\Noselect") && !self.has_attribute("\\NonExistent")
+    }
+
+    /// 这个文件夹下能不能再建子文件夹。
+    pub fn allows_children(&self) -> bool {
+        !self.has_attribute("\\Noselect") && !self.has_attribute("\\NoInferiors")
+    }
+}
+
+/// 把用户输入的显示名拼成服务器要的路径。
+///
+/// 父路径必须是服务器原始名（可能已是 Modified UTF-7），只有新名字需要编码。
+/// `delimiter` 为空表示服务器不支持层级，此时 `parent` 必须为空。
+pub fn build_server_path(parent: Option<&str>, delimiter: &str, name: &str) -> String {
+    let encoded = utf7::encode(name);
+    match parent {
+        Some(path) if !path.is_empty() => {
+            let separator = if delimiter.is_empty() { "/" } else { delimiter };
+            format!("{path}{separator}{encoded}")
+        }
+        _ => encoded,
     }
 }
 
