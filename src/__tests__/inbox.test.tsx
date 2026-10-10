@@ -40,8 +40,11 @@ function message(id: number, overrides: Partial<InboxMessage> = {}): InboxMessag
     accountName: "测试账号",
     accountColor: "#3366ff",
     folderPath: "INBOX",
+    labelId: null,
+    labelName: null,
+    labelColor: null,
     ...overrides,
-  };
+  } as InboxMessage;
 }
 
 function thread(accountId: number, threadKey: string, latest: InboxMessage): InboxThread {
@@ -55,6 +58,13 @@ function thread(accountId: number, threadKey: string, latest: InboxMessage): Inb
 }
 
 describe("统一收件箱前端", () => {
+  it("收件箱消息类型带出本地标签三个字段", () => {
+    const item = message(1);
+    expect(item.labelId).toBeNull();
+    expect(item.labelName).toBeNull();
+    expect(item.labelColor).toBeNull();
+  });
+
   it("平铺模式下每封邮件一行，线程模式下折叠成一行", () => {
     const messages = [message(1), message(2, { threadKey: "t2" })];
     const threads = [

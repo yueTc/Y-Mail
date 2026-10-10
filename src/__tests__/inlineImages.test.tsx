@@ -37,6 +37,9 @@ const MESSAGE: InboxMessage = {
   accountName: "测试账号",
   accountColor: "#3366ff",
   folderPath: "INBOX",
+  labelId: null,
+  labelName: null,
+  labelColor: null,
 };
 
 /** 一段最小 PNG 的 data URL（后端只会给受控形状）。 */

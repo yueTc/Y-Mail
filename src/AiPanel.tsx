@@ -65,6 +65,7 @@ const FUNCTION_LABEL: Record<AiFunction, string> = {
   polish: "润色",
   draft: "起草",
   notification_verify: "通知智能识别",
+  classify: "邮件分类",
 };
 
 /** 逐次确认的功能；在功能级模型列表里平铺展示。 */
@@ -80,6 +81,7 @@ const KIND_LABEL: Record<AiProviderKind, string> = {
   openai_compatible: "OpenAI 兼容站点",
   deepl: "DeepL",
   ollama: "本机 Ollama",
+  typesafe: "TypeSafe jev",
 };
 
 const THINKING_LABEL: Record<AiThinkingLevel, string> = {

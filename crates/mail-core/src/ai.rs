@@ -607,6 +607,76 @@ impl MailEngine {
         })
     }
 
+    /// 取全部本地标签（按显示顺序）。
+    pub fn list_mail_labels(&self) -> Result<Vec<MailLabel>, EngineError> {
+        Ok(self.store().list_mail_labels()?)
+    }
+
+    /// 新增标签并返回新标签。
+    pub fn create_mail_label(&self, name: &str) -> Result<MailLabel, EngineError> {
+        let id = self.store().create_mail_label(name)?;
+        self.store()
+            .get_mail_label(id)?
+            .ok_or_else(|| EngineError::BadRequest("标签不存在".to_string()))
+    }
+
+    /// 给标签改名。
+    pub fn rename_mail_label(&self, label_id: i64, name: &str) -> Result<(), EngineError> {
+        Ok(self.store().rename_mail_label(label_id, name)?)
+    }
+
+    /// 修改标签颜色；只接受固定色板键。
+    pub fn set_mail_label_color(&self, label_id: i64, color: &str) -> Result<(), EngineError> {
+        Ok(self.store().set_mail_label_color(label_id, color)?)
+    }
+
+    /// 删除标签；兜底标签会被拒绝。
+    pub fn delete_mail_label(&self, label_id: i64) -> Result<(), EngineError> {
+        Ok(self.store().delete_mail_label(label_id)?)
+    }
+
+    /// 按给定顺序重排标签；必须传全部标签编号。
+    pub fn reorder_mail_labels(&self, label_ids: &[i64]) -> Result<(), EngineError> {
+        Ok(self.store().reorder_mail_labels(label_ids)?)
+    }
+
+    /// 手动设置或清除某封邮件的标签；来源记 `manual`。
+    pub fn set_message_label(&self, message_id: i64, label_id: Option<i64>) -> Result<(), EngineError> {
+        match label_id {
+            Some(label_id) => {
+                self.store()
+                    .set_message_label(message_id, label_id, MailLabelSource::Manual, None)?;
+            }
+            None => {
+                self.store().clear_message_label(message_id)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 读某封邮件的标签。
+    pub fn message_label(&self, message_id: i64) -> Result<Option<MailLabel>, EngineError> {
+        Ok(self
+            .store()
+            .get_message_label(message_id)?
+            .map(|(label, _, _)| label))
+    }
+
+    /// 消费一次性分类授权，对目标邮件逐封分类。
+    ///
+    /// 令牌校验失败整体拒绝；进入分类阶段后，某一封失败不影响其它封。
+    pub async fn classify_messages(
+        &self,
+        token: &str,
+        threshold: f64,
+    ) -> Result<Vec<MailLabel>, EngineError> {
+        let ids = self.consume_classify_authorization(token)?;
+        let mut labels = Vec::with_capacity(ids.len());
+        for id in ids {
+            labels.push(self.classify_message(id, threshold).await?);
+        }
+        Ok(labels)
+    }
     /// 自动分类：这封邮件已经有标签就跳过，没有才真正分类。返回是否处理了它。
     pub async fn classify_message_if_untagged(
         &self,

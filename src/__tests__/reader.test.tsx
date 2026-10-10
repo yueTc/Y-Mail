@@ -48,6 +48,9 @@ const MESSAGE: InboxMessage = {
   accountName: "测试账号",
   accountColor: "#3366ff",
   folderPath: "INBOX",
+  labelId: null,
+  labelName: null,
+  labelColor: null,
 };
 
 /** 网易 163 超大附件的正文片段：正文里只有下载链接，没有 MIME 附件。 */

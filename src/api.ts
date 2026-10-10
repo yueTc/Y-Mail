@@ -235,6 +235,12 @@ export interface InboxMessage {
   accountName: string;
   accountColor: string;
   folderPath: string;
+  /** 本地标签主键；没有标签为 null。 */
+  labelId: number | null;
+  /** 标签名；没有标签为 null。 */
+  labelName: string | null;
+  /** 标签颜色键；没有标签为 null。 */
+  labelColor: string | null;
 }
 
 /** 折叠后的一条会话线程。 */
@@ -598,6 +604,35 @@ export interface AiModelMap {
   model: string;
   thinkingLevel: AiThinkingLevel | null;
   updatedAt: string;
+}
+
+/** 一条本地分类标签。 */
+export interface MailLabel {
+  id: number;
+  name: string;
+  /** 固定色板键，例如 orange。 */
+  color: string;
+  sortOrder: number;
+  isFallback: boolean;
+}
+
+/** 分类预览里的一封目标邮件。 */
+export interface ClassifyTarget {
+  messageId: number;
+  /** 外发正文的内容哈希；只用于校验。 */
+  contentHash: string;
+}
+
+/** 分类前的外发确认预览；不含正文与密钥。 */
+export interface ClassifyPreview {
+  providerId: number;
+  providerLabel: string;
+  host: string;
+  model: string;
+  local: boolean;
+  authorizationToken: string;
+  expiresInSeconds: number;
+  targets: ClassifyTarget[];
 }
 
 /** 通知识别「检查延迟」的一次结果。 */
@@ -1095,6 +1130,33 @@ export const api = {
   disableAllAi: () => call<number>("disable_all_ai"),
 
   clearAiCache: () => call<number>("clear_ai_cache"),
+
+  // ===== 邮件自动分类标签 =====
+
+  listMailLabels: () => call<MailLabel[]>("list_mail_labels"),
+
+  createMailLabel: (name: string) => call<MailLabel>("create_mail_label", { name }),
+
+  renameMailLabel: (labelId: number, name: string) =>
+    call<void>("rename_mail_label", { labelId, name }),
+
+  setMailLabelColor: (labelId: number, color: string) =>
+    call<void>("set_mail_label_color", { labelId, color }),
+
+  deleteMailLabel: (labelId: number) => call<void>("delete_mail_label", { labelId }),
+
+  reorderMailLabels: (labelIds: number[]) =>
+    call<void>("reorder_mail_labels", { labelIds }),
+
+  setMessageLabel: (messageId: number, labelId: number | null) =>
+    call<void>("set_message_label", { messageId, labelId }),
+
+  /** 分类前的外发确认预览：只读本地正文，不发网络请求。 */
+  previewClassifyMessages: (messageIds: number[]) =>
+    call<ClassifyPreview>("preview_classify_messages", { messageIds }),
+
+  /** 拿预览回来的令牌执行分类；令牌一次性。 */
+  classifyMessages: (token: string) => call<MailLabel[]>("classify_messages", { token }),
   // ===== MCP 外部接入（Wave 8）=====
 
   mcpStatus: () => call<McpStatus>("mcp_status"),

@@ -11,10 +11,10 @@ use std::path::{Path, PathBuf};
 use mail_core::{
     decode_encoded_words, AccountInboxSummary, AiAuthorizationPreview, AiFunction, AiModelMapEntry,
     AiProviderInput, AiProviderKind, AiProviderView, AiTextOutcome, AiThinkingLevel, AiTranslation,
-    ConnectionReport, ContactDraft, ContactExportKind, ContactImportEntry, ContactImportMode, ContactScope,
-    EngineError, InboxFolder, InboxMessage, InboxQuery, InboxThread, MailEngine, NewOutbox, OutboxKind,
-    SearchHit, SearchQuery, SnippetSegment, StoredAiAudit, StoredAttachment, StoredContact, StoredOutbox,
-    StoredSignature,
+    ClassifyPreview, ConnectionReport, ContactDraft, ContactExportKind, ContactImportEntry,
+    ContactImportMode, ContactScope, EngineError, InboxFolder, InboxMessage, InboxQuery, InboxThread,
+    MailEngine, MailLabel, NewOutbox, OutboxKind, SearchHit, SearchQuery, SnippetSegment, StoredAiAudit,
+    StoredAttachment, StoredContact, StoredOutbox, StoredSignature,
 };
 use mail_domain::account::{
     Account, AccountDraft, AccountId, AccountProxyMode, AuthType, OAuthProvider, Security, ServerConfig,
@@ -1642,6 +1642,12 @@ pub struct InboxMessageDto {
     pub account_color: String,
     /// 文件夹路径。
     pub folder_path: String,
+    /// 本地标签主键；没有标签为 null。
+    pub label_id: Option<i64>,
+    /// 标签名；没有标签为 null。
+    pub label_name: Option<String>,
+    /// 标签颜色键；没有标签为 null。
+    pub label_color: Option<String>,
 }
 
 impl InboxMessageDto {
@@ -1667,6 +1673,10 @@ impl InboxMessageDto {
             account_name: message.account_display_name.clone(),
             account_color: message.account_color.clone(),
             folder_path: message.folder_path.clone(),
+            // 收件箱查询带出标签由下一步接上；这一版还没有数据源时一律输出 null。
+            label_id: None,
+            label_name: None,
+            label_color: None,
         }
     }
 }
@@ -3235,6 +3245,88 @@ impl AiModelMapDto {
     }
 }
 
+/// 界面看到的分类标签。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailLabelDto {
+    /// 主键。
+    pub id: i64,
+    /// 标签名。
+    pub name: String,
+    /// 固定色板键；界面按主题映射成色值。
+    pub color: String,
+    /// 显示顺序。
+    pub sort_order: i64,
+    /// 是否是兜底标签「其他」。
+    pub is_fallback: bool,
+}
+
+impl MailLabelDto {
+    fn from_label(label: &MailLabel) -> Self {
+        Self {
+            id: label.id,
+            name: label.name.clone(),
+            color: label.color.clone(),
+            sort_order: label.sort_order,
+            is_fallback: label.is_fallback,
+        }
+    }
+}
+
+/// 分类预览里的一封目标邮件。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassifyTargetDto {
+    /// 邮件主键。
+    pub message_id: i64,
+    /// 外发正文的内容哈希；只用于校验，不含正文。
+    pub content_hash: String,
+}
+
+/// 分类前的外发确认预览；不含正文与密钥。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassifyPreviewDto {
+    /// 站点主键。
+    pub provider_id: i64,
+    /// 站点显示名。
+    pub provider_label: String,
+    /// 外发域名。
+    pub host: String,
+    /// 模型。
+    pub model: String,
+    /// 是否本机服务。
+    pub local: bool,
+    /// 一次性授权令牌。
+    pub authorization_token: String,
+    /// 令牌有效期（秒）。
+    pub expires_in_seconds: u64,
+    /// 本次要分类的邮件与各自内容哈希。
+    pub targets: Vec<ClassifyTargetDto>,
+}
+
+impl ClassifyPreviewDto {
+    fn from_preview(preview: ClassifyPreview) -> Self {
+        Self {
+            provider_id: preview.provider_id,
+            provider_label: preview.provider_label,
+            host: preview.host,
+            model: preview.model,
+            local: preview.local,
+            authorization_token: preview.authorization_token,
+            expires_in_seconds: preview.expires_in_seconds,
+            targets: preview
+                .targets
+                .into_iter()
+                .map(|target| ClassifyTargetDto {
+                    message_id: target.message_id,
+                    content_hash: target.content_hash,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// 通知识别「检查延迟」的结果。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -3384,8 +3476,11 @@ impl AiAuditDto {
 }
 
 fn parse_ai_function(value: &str) -> Result<AiFunction, CommandError> {
-    AiFunction::parse(value)
-        .ok_or_else(|| CommandError::input("AI 功能只能是 translate、summary、polish 或 draft"))
+    AiFunction::parse(value).ok_or_else(|| {
+        CommandError::input(
+            "AI 功能只能是 translate、summary、polish、draft、notification_verify 或 classify",
+        )
+    })
 }
 
 /// 解析界面传来的思考程度；空串按「跟随站点默认」处理。
@@ -3650,9 +3745,157 @@ pub async fn clear_ai_cache(state: tauri::State<'_, AppState>) -> Result<usize, 
     Ok(engine.clear_ai_cache()?)
 }
 
+// ============================ 邮件分类标签 ============================
+
+/// 标签名规整：去首尾空白、非空、不超过 64 个字符。
+fn normalize_label_name(name: &str) -> Result<String, CommandError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(CommandError::input("标签名不能为空"));
+    }
+    if trimmed.chars().count() > 64 {
+        return Err(CommandError::input("标签名不能超过 64 个字符"));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// 取全部本地标签（按显示顺序）。
+#[tauri::command]
+pub async fn list_mail_labels(state: tauri::State<'_, AppState>) -> Result<Vec<MailLabelDto>, CommandError> {
+    let engine = state.engine().await;
+    Ok(engine
+        .list_mail_labels()?
+        .iter()
+        .map(MailLabelDto::from_label)
+        .collect())
+}
+
+/// 新增标签；颜色由后端按固定色板自动分配。
+#[tauri::command]
+pub async fn create_mail_label(
+    state: tauri::State<'_, AppState>,
+    name: String,
+) -> Result<MailLabelDto, CommandError> {
+    let name = normalize_label_name(&name)?;
+    let engine = state.engine().await;
+    let label = engine.create_mail_label(&name)?;
+    Ok(MailLabelDto::from_label(&label))
+}
+
+/// 给标签改名；兜底标签也能改名。
+#[tauri::command]
+pub async fn rename_mail_label(
+    state: tauri::State<'_, AppState>,
+    label_id: i64,
+    name: String,
+) -> Result<(), CommandError> {
+    if label_id <= 0 {
+        return Err(CommandError::input("标签编号不合法"));
+    }
+    let name = normalize_label_name(&name)?;
+    let engine = state.engine().await;
+    engine.rename_mail_label(label_id, &name)?;
+    Ok(())
+}
+
+/// 修改标签颜色；只接受固定色板键，兜底标签拒绝修改。
+#[tauri::command]
+pub async fn set_mail_label_color(
+    state: tauri::State<'_, AppState>,
+    label_id: i64,
+    color: String,
+) -> Result<(), CommandError> {
+    if label_id <= 0 {
+        return Err(CommandError::input("标签编号不合法"));
+    }
+    let engine = state.engine().await;
+    engine.set_mail_label_color(label_id, color.trim())?;
+    Ok(())
+}
+
+/// 删除标签；兜底标签拒绝删除，关联的邮件标签由外键级联清掉。
+#[tauri::command]
+pub async fn delete_mail_label(state: tauri::State<'_, AppState>, label_id: i64) -> Result<(), CommandError> {
+    if label_id <= 0 {
+        return Err(CommandError::input("标签编号不合法"));
+    }
+    let engine = state.engine().await;
+    engine.delete_mail_label(label_id)?;
+    Ok(())
+}
+
+/// 按给定顺序重排标签；必须传全部标签编号。
+#[tauri::command]
+pub async fn reorder_mail_labels(
+    state: tauri::State<'_, AppState>,
+    label_ids: Vec<i64>,
+) -> Result<(), CommandError> {
+    let engine = state.engine().await;
+    engine.reorder_mail_labels(&label_ids)?;
+    Ok(())
+}
+
+/// 手动设置或清除某封邮件的标签；来源记 `manual`。
+#[tauri::command]
+pub async fn set_message_label(
+    state: tauri::State<'_, AppState>,
+    message_id: i64,
+    label_id: Option<i64>,
+) -> Result<(), CommandError> {
+    if message_id <= 0 {
+        return Err(CommandError::input("邮件编号不合法"));
+    }
+    let engine = state.engine().await;
+    engine.set_message_label(message_id, label_id)?;
+    Ok(())
+}
+
+/// 分类前的外发确认预览；只读本地正文，不发网络请求。
+#[tauri::command]
+pub async fn preview_classify_messages(
+    state: tauri::State<'_, AppState>,
+    message_ids: Vec<i64>,
+) -> Result<ClassifyPreviewDto, CommandError> {
+    if message_ids.is_empty() {
+        return Err(CommandError::input("请先选择要分类的邮件"));
+    }
+    let engine = state.engine().await;
+    let preview = engine.preview_classify_messages(&message_ids)?;
+    Ok(ClassifyPreviewDto::from_preview(preview))
+}
+
+/// 拿预览回来的令牌执行分类；令牌一次性，只能消费一次。
+#[tauri::command]
+pub async fn classify_messages(
+    state: tauri::State<'_, AppState>,
+    token: String,
+) -> Result<Vec<MailLabelDto>, CommandError> {
+    if token.trim().is_empty() {
+        return Err(CommandError::input("缺少外发确认令牌"));
+    }
+    let threshold = f64::from(state.classify_confidence_percent()) / 100.0;
+    let engine = state.engine().await;
+    let labels = engine.classify_messages(&token, threshold).await?;
+    Ok(labels.iter().map(MailLabelDto::from_label).collect())
+}
 #[cfg(test)]
 mod tests {
-    use super::{clamp_ui_zoom, is_external_link, strip_verbatim_prefix};
+    use super::{clamp_ui_zoom, is_external_link, strip_verbatim_prefix, MailLabelDto};
+
+    #[test]
+    fn label_dto_never_contains_secret_fields() {
+        let dto = MailLabelDto {
+            id: 1,
+            name: "账单".to_string(),
+            color: "orange".to_string(),
+            sort_order: 10,
+            is_fallback: false,
+        };
+        let text = serde_json::to_string(&dto).expect("序列化");
+        assert!(!text.contains("api_key"));
+        assert!(!text.contains("secret"));
+        assert!(text.contains("orange"));
+    }
 
     #[test]
     fn only_absolute_http_https_mailto_links_are_opened() {

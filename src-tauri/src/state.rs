@@ -164,6 +164,16 @@ impl AppState {
         self.set_pending_cleanup_dir(None);
     }
 
+    /// 当前「邮件自动分类」开关状态。
+    pub fn classify_enabled(&self) -> bool {
+        self.classify_enabled.load(Ordering::Relaxed)
+    }
+
+    /// 当前分类把握程度门槛（百分数，50–99）。
+    pub fn classify_confidence_percent(&self) -> u8 {
+        self.classify_confidence_percent.load(Ordering::Relaxed)
+    }
+
     /// 当前引擎实际在用的邮件数据目录。
     pub fn active_data_dir(&self) -> &str {
         &self.init.root_dir

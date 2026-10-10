@@ -81,6 +81,9 @@ const MESSAGE: InboxMessage = {
   accountName: "测试账号",
   accountColor: "#3366ff",
   folderPath: "INBOX",
+  labelId: null,
+  labelName: null,
+  labelColor: null,
 };
 
 const BODY: MessageBody = {

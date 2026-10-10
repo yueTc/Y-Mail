@@ -154,6 +154,16 @@ pub fn run() {
             commands::list_ai_audit,
             commands::disable_all_ai,
             commands::clear_ai_cache,
+            // 邮件自动分类：本地标签管理、分类预览与一次性执行。
+            commands::list_mail_labels,
+            commands::create_mail_label,
+            commands::rename_mail_label,
+            commands::set_mail_label_color,
+            commands::delete_mail_label,
+            commands::reorder_mail_labels,
+            commands::set_message_label,
+            commands::preview_classify_messages,
+            commands::classify_messages,
             // Wave 8：MCP 外部接入（开关 / 工具清单 / 审计）。放在末尾，减少与其它工序的冲突。
             mcp_commands::mcp_status,
             mcp_commands::mcp_set_enabled,

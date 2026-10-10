@@ -56,10 +56,10 @@ pub use mail_mime::decode_encoded_words;
 pub use mail_store::{
     AccountInboxSummary, AiFunction, AiModelMapEntry, AiProviderKind, AiThinkingLevel, AttachmentState,
     BodyState, ContactDraft, ContactImportRow, ContactImportStats, ContactScope, ContactSource, InboxFolder,
-    InboxMessage, InboxQuery, InboxThread, McpAuditRecord, MessageLocation, NewAiAudit, NewAiProvider,
-    NewOutbox, OutboxKind, OutboxState, SearchHit, SearchPage, SearchQuery, SnippetSegment, Store,
-    StoredAiAudit, StoredAiCache, StoredAiProvider, StoredAttachment, StoredContact, StoredContactGroup,
-    StoredOutbox, StoredSignature,
+    InboxMessage, InboxQuery, InboxThread, MailLabel, MailLabelSource, McpAuditRecord, MessageLocation,
+    NewAiAudit, NewAiProvider, NewOutbox, OutboxKind, OutboxState, SearchHit, SearchPage, SearchQuery,
+    SnippetSegment, Store, StoredAiAudit, StoredAiCache, StoredAiProvider, StoredAttachment, StoredContact,
+    StoredContactGroup, StoredOutbox, StoredSignature,
 };
 pub use paths::SqlitePaths;
 pub use secrets::{ChunkedSecretStore, KeyringSecretStore, MemorySecretStore, SecretStore, SecretStoreError};
