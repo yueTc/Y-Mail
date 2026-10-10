@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import InboxPanel from "../InboxPanel";
-import type { Account, InboxFolder, InboxMessage } from "../api";
+import type { Account, AppSettings, InboxFolder, InboxMessage } from "../api";
 import { api } from "../api";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -42,6 +42,8 @@ vi.mock("../api", () => ({
     listAiProviders: vi.fn(),
     previewClassifyMessages: vi.fn(),
     classifyMessages: vi.fn(),
+    getAppSettings: vi.fn(),
+    setClassifySkipManualConfirm: vi.fn(),
     syncStatus: vi.fn(),
     startSync: vi.fn(),
     stopSync: vi.fn(),
@@ -56,6 +58,27 @@ vi.mock("../api", () => ({
     forgetRemoteSender: vi.fn(),
   },
 }));
+
+const SETTINGS: AppSettings = {
+  dataDir: "",
+  attachmentDir: "",
+  notifyNewMail: true,
+  notifyAiEnabled: false,
+  blockRemoteImagesByDefault: true,
+  minimizeToTrayOnClose: true,
+  startMinimizedToTray: false,
+  autoCheckUpdate: false,
+  updateCheckIntervalHours: 24,
+  syncPollIntervalSeconds: 60,
+  classifyEnabled: false,
+  classifyConfidencePercent: 75,
+  classifySkipManualConfirm: false,
+  defaultDataDir: "",
+  defaultAttachmentDir: "",
+  activeDataDir: "",
+  activeAttachmentDir: "",
+  firstRun: false,
+};
 
 const ACCOUNT: Account = {
   id: 1,
@@ -508,7 +531,8 @@ describe("收件箱右键立即分类", () => {
     };
   }
 
-  function prepare() {
+  function prepare(settings: Partial<AppSettings> = {}) {
+    vi.mocked(api.getAppSettings).mockResolvedValue({ ...SETTINGS, ...settings });
     vi.mocked(api.listInboxMessages).mockResolvedValue({
       items: [targetMessage()],
       total: 1,
@@ -556,5 +580,13 @@ describe("收件箱右键立即分类", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "确认立即分类" })).toBeNull());
     expect(vi.mocked(api.classifyMessages)).not.toHaveBeenCalled();
+  });
+
+  it("开了「下次不要提醒」后右键分类直接外发，不再弹确认框", async () => {
+    prepare({ classifySkipManualConfirm: true });
+    fireEvent.contextMenu(await screen.findByText("账单邮件"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "立即分类" }));
+    await waitFor(() => expect(vi.mocked(api.classifyMessages)).toHaveBeenCalledWith("tok-1"));
+    expect(screen.queryByRole("dialog", { name: "确认立即分类" })).toBeNull();
   });
 });

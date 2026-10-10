@@ -56,6 +56,7 @@ pub fn run() {
             commands::get_app_settings,
             commands::set_app_settings,
             commands::set_classify_settings,
+            commands::set_classify_skip_manual_confirm,
             commands::change_data_dir,
             commands::open_data_dir,
             commands::restart_app,

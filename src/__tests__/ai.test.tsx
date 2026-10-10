@@ -46,6 +46,7 @@ vi.mock("../api", () => {
     firstRun: false,
     classifyEnabled: false,
     classifyConfidencePercent: 75,
+    classifySkipManualConfirm: false,
   };
   return {
   describeError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
@@ -97,6 +98,10 @@ vi.mock("../api", () => {
         classifyConfidencePercent: confidencePercent,
       }),
     ),
+    setClassifySkipManualConfirm: vi.fn(async (skip: boolean) => ({
+      ...baseSettings,
+      classifySkipManualConfirm: skip,
+    })),
   },
   };
 });
@@ -845,6 +850,21 @@ describe("邮件自动分类设置", () => {
     expect((toggle as HTMLInputElement).checked).toBe(false);
     const threshold = screen.getByLabelText("把握程度门槛") as HTMLInputElement;
     expect(threshold.value).toBe("75");
+  });
+
+  it("「手动分类免确认」默认关闭，勾选后写本机设置并提示", async () => {
+    prepare();
+    const toggle = (await screen.findByLabelText("手动分类免确认")) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(vi.mocked(api.setClassifySkipManualConfirm)).toHaveBeenCalledWith(true),
+    );
+    expect(
+      await screen.findByText(
+        "已开启手动分类免确认：右键「立即分类」会直接外发，不再逐封确认。",
+      ),
+    ).toBeTruthy();
   });
 });
 describe("分类标签管理", () => {

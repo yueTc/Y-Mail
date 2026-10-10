@@ -61,6 +61,7 @@ const BASE_SETTINGS: AppSettings = {
   firstRun: false,
   classifyEnabled: false,
   classifyConfidencePercent: 75,
+  classifySkipManualConfirm: false,
 };
 
 const UPDATE_INFO = {

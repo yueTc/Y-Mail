@@ -595,6 +595,8 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   }>();
   const [classifyBusy, setClassifyBusy] = useState(false);
   const [classifyError, setClassifyError] = useState("");
+  // 确认框里勾了「下次不要提醒」就先记住：以后右键「立即分类」直接外发。
+  const [classifySkipNext, setClassifySkipNext] = useState(false);
   // 正在编辑的账号：邮箱栏只有摘要，右键「编辑」时先取回完整账号再开弹窗。
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   // 各账号同步状态快照；邮件列表工具栏用它显示当前账号状态徽标。
@@ -804,36 +806,55 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
     setMessageMenu({ message, x: event.clientX, y: event.clientY });
   }, []);
 
-  /** 点「立即分类」：先拿外发预览，再弹一次确认；取消就不读正文、不外发。 */
+  /**
+   * 点「立即分类」：先拿外发预览。没开「下次不要提醒」就弹一次确认；
+   * 开了就按用户偏好直接外发，不再逐封确认。取消时完全不读正文、不外发。
+   */
   const startClassify = useCallback(async (message: InboxMessage) => {
     setMessageMenu(undefined);
     setClassifyError("");
     setClassifyBusy(true);
     try {
-      const preview = await api.previewClassifyMessages([message.id]);
-      setClassifyConfirm({ preview, subject: message.subject || t("（无主题）") });
+      const [settings, preview] = await Promise.all([
+        api.getAppSettings(),
+        api.previewClassifyMessages([message.id]),
+      ]);
+      if (settings.classifySkipManualConfirm) {
+        await api.classifyMessages(preview.authorizationToken);
+        await load(true);
+      } else {
+        setClassifySkipNext(false);
+        setClassifyConfirm({ preview, subject: message.subject || t("（无主题）") });
+      }
     } catch (caught) {
       setError(describeError(caught));
     } finally {
       setClassifyBusy(false);
     }
-  }, []);
+  }, [load]);
 
-  /** 确认框里点「确认分类」：这时才真正外发；完成后刷新列表拿新标签。 */
+  /**
+   * 确认框里点「确认分类」：这时才真正外发；勾了「下次不要提醒」就先记住这个偏好。
+   * 完成后刷新列表拿新标签。
+   */
   const confirmClassify = useCallback(async () => {
     if (!classifyConfirm) return;
     setClassifyBusy(true);
     setClassifyError("");
     try {
+      if (classifySkipNext) {
+        await api.setClassifySkipManualConfirm(true);
+      }
       await api.classifyMessages(classifyConfirm.preview.authorizationToken);
       setClassifyConfirm(undefined);
+      setClassifySkipNext(false);
       await load(true);
     } catch (caught) {
       setClassifyError(describeError(caught));
     } finally {
       setClassifyBusy(false);
     }
-  }, [classifyConfirm, load]);
+  }, [classifyConfirm, classifySkipNext, load]);
 
   /**
    * 搜索：默认只查本地，绝不自动联网。
@@ -1634,6 +1655,16 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
                 : t("不是，内容会发送到远程站点")}
             </dd>
           </dl>
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              aria-label={t("下次不要提醒")}
+              checked={classifySkipNext}
+              onChange={(event) => setClassifySkipNext(event.target.checked)}
+              disabled={classifyBusy}
+            />
+            <span>{t("下次不要提醒")}</span>
+          </label>
           {classifyError && (
             <p className="error" role="alert">
               {t("操作失败：")}{classifyError}

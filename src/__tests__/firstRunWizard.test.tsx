@@ -36,6 +36,7 @@ const SETTINGS: AppSettings = {
   firstRun: true,
   classifyEnabled: false,
   classifyConfidencePercent: 75,
+  classifySkipManualConfirm: false,
 };
 
 function renderWizard() {

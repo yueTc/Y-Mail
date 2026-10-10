@@ -59,6 +59,7 @@ const SETTINGS: AppSettings = {
   firstRun: false,
   classifyEnabled: false,
   classifyConfidencePercent: 75,
+  classifySkipManualConfirm: false,
 };
 
 function renderSettings() {

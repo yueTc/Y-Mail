@@ -228,6 +228,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   // 「邮件自动分类」开关与把握程度门槛；只存本机，不参与账号同步。
   const [classifyEnabled, setClassifyEnabled] = useState(false);
   const [classifyPercent, setClassifyPercent] = useState(75);
+  const [classifySkipConfirm, setClassifySkipConfirm] = useState(false);
   // 打开自动分类开关前的风险确认：先把要展示的目标记下来，点确认才落盘。
   const [classifyRisk, setClassifyRisk] = useState<
     | { providerLabel: string; host: string; model: string; local: boolean }
@@ -273,6 +274,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       setLabels(nextLabels);
       setClassifyEnabled(nextSettings.classifyEnabled);
       setClassifyPercent(nextSettings.classifyConfidencePercent);
+      setClassifySkipConfirm(nextSettings.classifySkipManualConfirm);
       setFeatureDrafts((old) => {
         const next: Record<string, FeatureDraftState> = {};
         for (const fn of [...FUNCTION_ORDER, VERIFY_FUNCTION]) {
@@ -580,6 +582,26 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       setClassifyError(describeError(caught));
     }
   }, [classifyEnabled, classifyPercent]);
+
+  /**
+   * 点「手动分类免确认」：开 → 右键「立即分类」直接外发、不再弹每封确认；
+   * 关 → 恢复逐封确认。只写本机设置，改了立刻生效。
+   */
+  const toggleClassifySkipConfirm = useCallback(async (next: boolean) => {
+    setClassifyNotice("");
+    setClassifyError("");
+    try {
+      const saved = await api.setClassifySkipManualConfirm(next);
+      setClassifySkipConfirm(saved.classifySkipManualConfirm);
+      setClassifyNotice(
+        next
+          ? t("已开启手动分类免确认：右键「立即分类」会直接外发，不再逐封确认。")
+          : t("已关闭手动分类免确认：右键「立即分类」会重新逐封确认。"),
+      );
+    } catch (caught) {
+      setClassifyError(describeError(caught));
+    }
+  }, []);
 
   /** 重新拉一遍标签；所有标签操作成功后都走它，不靠本地猜顺序或颜色。 */
   const reloadLabels = useCallback(async () => {
@@ -1159,6 +1181,16 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
           />
         </label>
         <p className="hint">{t("允许 50–99，默认 75；低于门槛的邮件归到「其他」。")}</p>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            aria-label={t("手动分类免确认")}
+            checked={classifySkipConfirm}
+            onChange={(event) => void toggleClassifySkipConfirm(event.target.checked)}
+          />
+          <span>{t("手动分类免确认")}</span>
+        </label>
+        <p className="hint">{t("勾选后，右键「立即分类」会直接外发、不再逐封确认；随时可在这里关掉。默认关闭。")}</p>
         {classifyNotice && <p className="notice" role="status">{classifyNotice}</p>}
         {classifyError && (
           <p className="error" role="alert">

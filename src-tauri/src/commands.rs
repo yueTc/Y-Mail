@@ -583,6 +583,8 @@ pub struct AppSettingsDto {
     pub classify_enabled: bool,
     /// 分类把握程度门槛（百分数，50–99）；默认 75，只存本机，不同步。
     pub classify_confidence_percent: u8,
+    /// 手动右键「立即分类」是否跳过每封外发确认；默认 false，只存本机，不同步。
+    pub classify_skip_manual_confirm: bool,
     /// 是不是全新安装后的第一次启动；界面据此弹「数据放哪」向导。
     pub first_run: bool,
 }
@@ -658,6 +660,7 @@ pub async fn set_app_settings(
         // 分类开关与门槛由 AI 面板单独维护，这里从旧值原样带过。
         classify_enabled: previous.classify_enabled,
         classify_confidence_percent: previous.classify_confidence_percent,
+        classify_skip_manual_confirm: previous.classify_skip_manual_confirm,
     };
     state
         .save_settings(settings.clone())
@@ -681,6 +684,22 @@ pub async fn set_classify_settings(
     let mut settings = state.settings_snapshot();
     settings.classify_enabled = enabled;
     settings.classify_confidence_percent = confidence_percent;
+    state
+        .save_settings(settings)
+        .map_err(|error| CommandError::new(format!("保存设置失败：{error}")))?;
+    Ok(build_settings_dto(state.inner()))
+}
+
+/// 保存「手动右键分类是否跳过每封外发确认」；只写本机设置，不参与账号同步。
+///
+/// 打开后，右键「立即分类」会直接外发、不再弹每封确认；随时可在 AI 面板关掉。
+#[tauri::command]
+pub async fn set_classify_skip_manual_confirm(
+    state: tauri::State<'_, AppState>,
+    skip: bool,
+) -> Result<AppSettingsDto, CommandError> {
+    let mut settings = state.settings_snapshot();
+    settings.classify_skip_manual_confirm = skip;
     state
         .save_settings(settings)
         .map_err(|error| CommandError::new(format!("保存设置失败：{error}")))?;
@@ -1040,6 +1059,7 @@ fn build_settings_dto(state: &AppState) -> AppSettingsDto {
         sync_poll_interval_seconds: settings.sync_poll_interval_seconds,
         classify_enabled: settings.classify_enabled,
         classify_confidence_percent: settings.normalized_classify_confidence_percent(),
+        classify_skip_manual_confirm: settings.classify_skip_manual_confirm,
         default_data_dir: strip_verbatim_prefix(&default_dir.to_string_lossy()),
         default_attachment_dir: strip_verbatim_prefix(
             &settings.effective_attachment_dir(default_dir).to_string_lossy(),

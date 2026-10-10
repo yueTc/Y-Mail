@@ -190,6 +190,8 @@ export interface AppSettings {
   classifyEnabled: boolean;
   /** 分类把握程度门槛（百分数，50–99）；默认 75。 */
   classifyConfidencePercent: number;
+  /** 手动右键「立即分类」是否跳过每封外发确认；默认 false。 */
+  classifySkipManualConfirm: boolean;
   /** 默认邮件数据目录。 */
   defaultDataDir: string;
   /** 附件目录留空时会用的默认位置。 */
@@ -795,6 +797,10 @@ export const api = {
   /** 保存「邮件自动分类」开关与把握程度门槛；只写本机设置。 */
   setClassifySettings: (enabled: boolean, confidencePercent: number) =>
     call<AppSettings>("set_classify_settings", { enabled, confidencePercent }),
+
+  /** 保存「手动右键分类是否跳过每封外发确认」；只写本机设置。 */
+  setClassifySkipManualConfirm: (skip: boolean) =>
+    call<AppSettings>("set_classify_skip_manual_confirm", { skip }),
 
   changeDataDir: (newDir: string, confirmed: boolean) =>
     call<ChangeDataDirResult>("change_data_dir", { newDir, confirmed }),

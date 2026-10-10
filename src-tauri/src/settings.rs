@@ -64,6 +64,9 @@ pub struct AppSettings {
     /// 分类把握程度门槛（百分数）；默认 75，允许 50–99，越界读回时按默认处理。
     /// 只存本机，不参与账号设置同步。
     pub classify_confidence_percent: u8,
+    /// 手动右键「立即分类」是否跳过每封的外发确认；默认关（false）。
+    /// 打开后右键分类会直接外发、不再逐封确认；只存本机，不参与账号同步。
+    pub classify_skip_manual_confirm: bool,
 }
 
 impl Default for AppSettings {
@@ -82,6 +85,7 @@ impl Default for AppSettings {
             pending_cleanup_dir: None,
             classify_enabled: false,
             classify_confidence_percent: CLASSIFY_CONFIDENCE_DEFAULT_PERCENT,
+            classify_skip_manual_confirm: false,
         }
     }
 }
@@ -203,6 +207,7 @@ mod tests {
             pending_cleanup_dir: None,
             classify_enabled: false,
             classify_confidence_percent: 75,
+            classify_skip_manual_confirm: false,
         };
         assert_eq!(
             settings.effective_data_dir(std::path::Path::new("C:/app")),
@@ -255,6 +260,7 @@ mod tests {
             pending_cleanup_dir: Some(std::path::PathBuf::from("C:/Old/Mail")),
             classify_enabled: true,
             classify_confidence_percent: 80,
+            classify_skip_manual_confirm: true,
         };
         settings.save(&dir).expect("保存设置");
         let raw = std::fs::read_to_string(dir.join(super::SETTINGS_FILE)).expect("读设置原文");
@@ -273,6 +279,10 @@ mod tests {
             "老配置里缺这个字段时要按默认拦截处理"
         );
         assert!(!partial.notify_ai_enabled, "老配置里缺通知识别开关时要按关闭处理");
+        assert!(
+            !partial.classify_skip_manual_confirm,
+            "老配置里缺手动分类免确认开关时按「仍要确认」处理"
+        );
         assert!(
             partial.minimize_to_tray_on_close,
             "老配置里缺这个字段时按「关闭收托盘」处理"
