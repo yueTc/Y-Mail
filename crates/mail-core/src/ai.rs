@@ -11,15 +11,16 @@
 use std::time::{Duration, Instant};
 
 use mail_ai::{
-    anchor_targets, chat, classify_mail, is_local_host, list_models, normalize_base_url, parse_verification,
-    prompt, split_html, split_text, translate, AiError, ChatOutcome, Endpoint, ProviderFunction,
-    ProviderKind, ThinkingLevel, TranslationOutcome, VerificationFinding,
+    anchor_targets, chat, classify_mail, classify_mail_groups, is_local_host, list_models,
+    normalize_base_url, parse_verification, prompt, split_html, split_text, translate, AiError, ChatOutcome,
+    Endpoint, GroupAnswer, GroupQuestion, GroupQuestionKind, ProviderFunction, ProviderKind, ThinkingLevel,
+    TranslationOutcome, VerificationFinding,
 };
 use mail_domain::account::AccountProxyMode;
 use mail_domain::proxy::Secret;
 use mail_store::{
-    AiFunction, AiModelMapEntry, AiProviderKind, AiThinkingLevel, MailLabel, MailLabelSource, NewAiAudit,
-    NewAiProvider, StoredAiAudit, StoredAiProvider,
+    AiFunction, AiModelMapEntry, AiProviderKind, AiThinkingLevel, LabelGroup, LabelGroupKind, MailLabel,
+    MailLabelSource, MessageGroupResult, NewAiAudit, NewAiProvider, StoredAiAudit, StoredAiProvider,
 };
 
 use crate::engine::{EngineError, MailEngine};
@@ -214,6 +215,17 @@ pub struct ClassifyPreview {
     pub expires_in_seconds: u64,
     /// 本次要分类的邮件与各自内容哈希。
     pub targets: Vec<ClassifyPreviewTarget>,
+    /// 本次将开启的标签组。
+    pub enabled_groups: Vec<ClassifyPreviewGroup>,
+}
+
+/// 分类预览里的一个「本次将开启的标签组」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassifyPreviewGroup {
+    /// 组名。
+    pub name: String,
+    /// 题型标识：choice / boolean / score。
+    pub kind: String,
 }
 
 /// 分类预览里的一封目标邮件。
@@ -667,41 +679,65 @@ impl MailEngine {
             .map(|(label, _, _)| label))
     }
 
-    /// 消费一次性分类授权，对目标邮件逐封分类。
+    /// 消费一次性分类授权，对目标邮件逐封跑一次多组分类。
     ///
     /// 令牌校验失败整体拒绝；进入分类阶段后，某一封失败不影响其它封。
+    /// 返回本次写下的所有标签结果（打分题没有标签，不出现在返回值里）。
+    /// 过渡方案：命令层契约改造在后续任务，这里暂保留旧的 `threshold` 参数占位。
     pub async fn classify_messages(
         &self,
         token: &str,
-        threshold: f64,
+        _threshold: f64,
     ) -> Result<Vec<MailLabel>, EngineError> {
         let ids = self.consume_classify_authorization(token)?;
-        let mut labels = Vec::with_capacity(ids.len());
+        let mut labels = Vec::new();
         for id in ids {
-            labels.push(self.classify_message(id, threshold).await?);
+            for result in self.classify_message_groups(id).await? {
+                if let Some(label) = result.label {
+                    labels.push(label);
+                }
+            }
         }
         Ok(labels)
     }
-    /// 自动分类：这封邮件已经有标签就跳过，没有才真正分类。返回是否处理了它。
+
+    /// 取所有开启的标签组，按排序升序。
+    fn enabled_classify_groups(&self) -> Result<Vec<LabelGroup>, EngineError> {
+        Ok(self
+            .store()
+            .list_label_groups()?
+            .into_iter()
+            .filter(|group| group.enabled)
+            .collect())
+    }
+
+    /// 自动分类：对一封邮件跑一次多组分类，返回是否真的发了请求。
+    ///
+    /// 一个组都没开就跳过，不当错误；`threshold` 参数已废弃，保留只为兼容旧调用点。
     pub async fn classify_message_if_untagged(
         &self,
         message_id: i64,
-        threshold: f64,
+        _threshold: f64,
     ) -> Result<bool, EngineError> {
-        if self.store().get_message_label(message_id)?.is_some() {
+        if self.enabled_classify_groups()?.is_empty() {
             return Ok(false);
         }
-        self.classify_message(message_id, threshold).await?;
+        self.classify_message_groups(message_id).await?;
         Ok(true)
     }
-    /// 对一封邮件做分类：读正文 → 调 jev → 按门槛落本地标签 → 记审计。
+
+    /// 一次请求问完所有开启的标签组，逐组按门槛落结果，返回该邮件最新的组结果。
     ///
-    /// 模型返回不合法、超时、网络失败一律不写标签，只返回错误；正文不进审计。
-    pub async fn classify_message(&self, message_id: i64, threshold: f64) -> Result<MailLabel, EngineError> {
-        if !(0.0..=1.0).contains(&threshold) {
-            return Err(EngineError::BadRequest(
-                "把握程度门槛必须在 0 到 1 之间".to_string(),
-            ));
+    /// 没有开启任何组、正文缺失或空正文都按参数错误处理；整个请求失败（超时、
+    /// 网络、非 200）一组都不写，只记审计；单组结果不合法只跳过该组。
+    /// 落库前先看该组是不是用户手改（manual），是就跳过不覆盖。正文绝不进审计。
+    pub async fn classify_message_groups(
+        &self,
+        message_id: i64,
+    ) -> Result<Vec<MessageGroupResult>, EngineError> {
+        let groups = self.enabled_classify_groups()?;
+        if groups.is_empty() {
+            return Err(EngineError::BadRequest("没有开启任何标签组".to_string()));
         }
         let body = self
             .store()
@@ -711,12 +747,15 @@ impl MailEngine {
         if text.trim().is_empty() {
             return Err(EngineError::BadRequest("这封邮件没有可以分类的正文".to_string()));
         }
-        let labels = self.store().list_mail_labels()?;
-        let fallback = labels
-            .iter()
-            .find(|label| label.is_fallback)
-            .cloned()
-            .ok_or_else(|| EngineError::BadRequest("缺少兜底标签「其他」".to_string()))?;
+
+        // 逐组备好问题；任何一组当前出不了结果都按参数错误整体拒绝，一次都不发。
+        let mut plans: Vec<(LabelGroup, Vec<MailLabel>, GroupQuestion)> = Vec::with_capacity(groups.len());
+        for group in groups {
+            let labels = self.store().list_group_labels(group.id)?;
+            let question = group_question(&group, &labels)?;
+            plans.push((group, labels, question));
+        }
+        let questions: Vec<GroupQuestion> = plans.iter().map(|(_, _, question)| question.clone()).collect();
 
         let target = self.resolve_ai_target(AiFunction::Classify)?;
         let secret = self.provider_secret(&target)?;
@@ -726,30 +765,43 @@ impl MailEngine {
             base_url: &target.base_url,
             api_key: secret.as_ref(),
         };
-        let choices: Vec<String> = labels.iter().map(|label| label.name.clone()).collect();
-        let outcome = classify_mail(
+        let answers = classify_mail_groups(
             route.as_ref(),
             &endpoint,
             &target.model,
             &text,
-            &choices,
+            &questions,
             NOTIFICATION_VERIFY_TIMEOUT,
         )
         .await
         .map_err(|err| self.audit_ai_error(AiFunction::Classify, &target, err))?;
 
-        let label = if outcome.confidence >= threshold {
-            labels
-                .iter()
-                .find(|label| label.name == outcome.choice)
-                .cloned()
-                .unwrap_or_else(|| fallback.clone())
-        } else {
-            fallback
-        };
-        let confidence = Some(outcome.confidence);
-        self.store()
-            .set_message_label(message_id, label.id, MailLabelSource::Auto, confidence)?;
+        let mut summary = Vec::new();
+        for (group, labels, _) in &plans {
+            let existing = self.store().message_group_result(message_id, group.id)?;
+            if existing
+                .map(|result| result.source == MailLabelSource::Manual)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let Some((_, answer)) = answers.iter().find(|(id, _)| *id == group.id) else {
+                continue;
+            };
+            let Some(write) = resolve_group_write(group, labels, answer) else {
+                continue;
+            };
+            self.store().set_message_group_value(
+                message_id,
+                group.id,
+                write.label_id,
+                write.score_value,
+                MailLabelSource::Auto,
+                write.confidence,
+            )?;
+            summary.push(format!("{}={}", group.name, write.summary));
+        }
+
         self.store().insert_ai_audit(&NewAiAudit {
             function: AiFunction::Classify.as_str().to_string(),
             provider_id: Some(target.provider_id),
@@ -759,9 +811,10 @@ impl MailEngine {
             local: target.local,
             outbound: !target.local,
             outcome: "ok".to_string(),
-            detail: format!("标签：{}", label.name),
+            detail: format!("各组结果：{}", summary.join("；")),
         })?;
-        Ok(label)
+
+        Ok(self.store().list_message_group_results(message_id)?)
     }
     /// 分类前的外发确认预览：读本地正文算哈希并回一次性令牌；不发网络请求。
     ///
@@ -775,6 +828,10 @@ impl MailEngine {
             if !unique.contains(id) {
                 unique.push(*id);
             }
+        }
+        let enabled_groups = self.enabled_classify_groups()?;
+        if enabled_groups.is_empty() {
+            return Err(EngineError::BadRequest("没有开启任何标签组".to_string()));
         }
         let target = self.resolve_ai_target(AiFunction::Classify)?;
         let mut targets = Vec::with_capacity(unique.len());
@@ -811,6 +868,13 @@ impl MailEngine {
             authorization_token: token,
             expires_in_seconds: AI_AUTHORIZATION_TTL.as_secs(),
             targets,
+            enabled_groups: enabled_groups
+                .into_iter()
+                .map(|group| ClassifyPreviewGroup {
+                    name: group.name,
+                    kind: group.kind.as_str().to_string(),
+                })
+                .collect(),
         })
     }
 
@@ -1616,6 +1680,125 @@ fn cache_key(function: AiFunction, target: &AiTarget, target_lang: &str, source_
     ))
 }
 
+/// 一组结果换算出来的落库值。
+struct GroupWrite {
+    /// 选择题或是否题要落的标签；打分题为空。
+    label_id: Option<i64>,
+    /// 打分题要落的数字；其它题型为空。
+    score_value: Option<i64>,
+    /// 模型给的把握程度。
+    confidence: Option<f64>,
+    /// 审计里用的结果摘要（标签名或数字）。
+    summary: String,
+}
+
+/// 把一个标签组转成 jev 的一次请求问题；组配置出不了结果就返回参数错误。
+fn group_question(group: &LabelGroup, labels: &[MailLabel]) -> Result<GroupQuestion, EngineError> {
+    let kind = match group.kind {
+        LabelGroupKind::Choice => {
+            if labels.is_empty() {
+                return Err(EngineError::BadRequest(format!(
+                    "标签组「{}」还没有标签，先加一个",
+                    group.name
+                )));
+            }
+            GroupQuestionKind::Choice
+        }
+        LabelGroupKind::Boolean => {
+            if labels.len() != 2 {
+                return Err(EngineError::BadRequest(format!(
+                    "是否题组「{}」必须正好两条标签",
+                    group.name
+                )));
+            }
+            GroupQuestionKind::Boolean
+        }
+        LabelGroupKind::Score => {
+            if score_range(group).is_none() {
+                return Err(EngineError::BadRequest(format!(
+                    "打分题组「{}」的档位不合法",
+                    group.name
+                )));
+            }
+            GroupQuestionKind::Score
+        }
+    };
+    let instructions = match kind {
+        GroupQuestionKind::Choice => format!("请判断这封邮件属于「{}」的哪一类。", group.name),
+        GroupQuestionKind::Boolean => format!("请判断这封邮件是否{}。", group.name),
+        GroupQuestionKind::Score => format!("请判断这封邮件的「{}」属于哪一档。", group.name),
+    };
+    let criteria = match kind {
+        GroupQuestionKind::Choice => labels.iter().map(|label| label.name.clone()).collect(),
+        GroupQuestionKind::Score => {
+            let (min, max) = score_range(group).unwrap_or((0, 0));
+            prompt::score_levels(min, max)
+        }
+        GroupQuestionKind::Boolean => Vec::new(),
+    };
+    Ok(GroupQuestion {
+        group_id: group.id,
+        kind,
+        instructions,
+        criteria,
+        score_min: group.score_min,
+        score_max: group.score_max,
+    })
+}
+
+/// 取打分题的上下限；档位数不在 2 到 10 之间就返回 `None`。
+fn score_range(group: &LabelGroup) -> Option<(i64, i64)> {
+    let min = group.score_min?;
+    let max = group.score_max?;
+    let count = max.checked_sub(min)?.checked_add(1)?;
+    ((2..=10).contains(&count) && min < max).then_some((min, max))
+}
+
+/// 按组类型和门槛把模型答案换算成落库值；该组不需要写就返回 `None`。
+fn resolve_group_write(group: &LabelGroup, labels: &[MailLabel], answer: &GroupAnswer) -> Option<GroupWrite> {
+    match (group.kind, answer) {
+        (LabelGroupKind::Choice, GroupAnswer::Choice { label, confidence }) => {
+            let chosen = if *confidence >= group.confidence_threshold {
+                labels.iter().find(|item| &item.name == label)
+            } else {
+                labels.iter().find(|item| item.is_fallback)
+            }?;
+            Some(GroupWrite {
+                label_id: Some(chosen.id),
+                score_value: None,
+                confidence: Some(*confidence),
+                summary: chosen.name.clone(),
+            })
+        }
+        (LabelGroupKind::Boolean, GroupAnswer::Boolean { probability }) => {
+            let index = if *probability >= group.confidence_threshold {
+                0
+            } else {
+                1
+            };
+            let chosen = labels.get(index)?;
+            Some(GroupWrite {
+                label_id: Some(chosen.id),
+                score_value: None,
+                confidence: Some(*probability),
+                summary: chosen.name.clone(),
+            })
+        }
+        (LabelGroupKind::Score, GroupAnswer::Score { level, confidence }) => {
+            if *confidence < group.confidence_threshold {
+                return None;
+            }
+            Some(GroupWrite {
+                label_id: None,
+                score_value: Some(*level),
+                confidence: Some(*confidence),
+                summary: level.to_string(),
+            })
+        }
+        _ => None,
+    }
+}
+
 /// 分类要外发的正文纯文本：优先纯文本，没有就按现有切段逻辑取 HTML 文字。
 fn classify_body_text(body: &mail_store::StoredMessageBody) -> String {
     body.text_plain
@@ -1701,8 +1884,9 @@ mod tests {
     /// 假 HTTP 服务：收一次完整请求，把原始请求文本回传给测试；返回固定 JSON。
     ///
     /// 必须按 Content-Length 读完整包：并行跑测试时一次 read 可能只拿到半个请求体。
-    async fn fake_capture_server(payload: &'static str) -> (u16, std::sync::mpsc::Receiver<String>) {
+    async fn fake_capture_server(payload: &str) -> (u16, std::sync::mpsc::Receiver<String>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let payload = payload.to_string();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("绑定");
         let port = listener.local_addr().expect("地址").port();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1917,6 +2101,7 @@ mod tests {
         engine
             .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
             .expect("配置分类");
+        enable_group(&engine, "内容分类", 0.75);
         let first = seed_message_with_body(&engine, 1, "账单已出，请查收");
         let second = seed_message_with_body(&engine, 2, "明天上午开会");
 
@@ -1955,109 +2140,260 @@ mod tests {
         assert!(matches!(error, EngineError::AiAuthorizationInvalid));
     }
 
-    #[tokio::test]
-    async fn classify_message_above_threshold_uses_model_choice() {
-        let dir = tempfile::tempdir().expect("临时目录");
-        let engine = engine(dir.path());
-        let port = fake_chat_server(r#"{"answers":{"category":{"choice":"账单","confidence":0.90}}}"#).await;
-        let provider_id = add_typesafe_at(&engine, format!("http://127.0.0.1:{port}/v1"));
-        engine
-            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
-            .expect("配置分类");
-        let message = seed_message_with_body(&engine, 10, "本月账单已出，请查收");
-
-        let label = engine.classify_message(message, 0.75).await.expect("分类应成功");
-        assert_eq!(label.name, "账单");
-        assert_eq!(label.color, "orange");
-
-        let stored = engine
+    /// 把某个默认标签组打开并设置门槛，返回组编号。
+    fn enable_group(engine: &MailEngine, name: &str, threshold: f64) -> i64 {
+        let group = engine
             .store()
-            .get_message_label(message)
-            .expect("读标签")
-            .expect("应有标签");
-        assert_eq!(stored.0.name, "账单");
-        assert_eq!(stored.2, mail_store::MailLabelSource::Auto);
-        assert_eq!(stored.1, Some(0.90));
-
-        let audits = engine.list_ai_audit(10).expect("审计");
-        assert!(
-            audits.iter().any(|audit| audit.detail.contains("账单")),
-            "审计要记结果标签"
-        );
-        for audit in audits {
-            assert!(
-                !audit.detail.contains("本月账单"),
-                "审计不能记正文：{}",
-                audit.detail
-            );
-            assert!(!audit.detail.contains("请查收"), "审计不能记正文");
-        }
+            .list_label_groups()
+            .expect("列标签组")
+            .into_iter()
+            .find(|group| group.name == name)
+            .expect("应有这个默认组");
+        engine
+            .store()
+            .set_label_group_enabled(group.id, true)
+            .expect("开组");
+        engine
+            .store()
+            .set_label_group_threshold(group.id, threshold)
+            .expect("设门槛");
+        group.id
     }
 
     #[tokio::test]
-    async fn classify_message_below_threshold_uses_fallback() {
+    async fn one_request_carries_all_enabled_groups() {
         let dir = tempfile::tempdir().expect("临时目录");
         let engine = engine(dir.path());
-        let port = fake_chat_server(r#"{"answers":{"category":{"choice":"账单","confidence":0.40}}}"#).await;
+        let content_id = enable_group(&engine, "内容分类", 0.75);
+        let reply_id = enable_group(&engine, "需要我回复", 0.5);
+        let payload = format!(
+            r#"{{"answers":{{"g{content_id}":{{"type":"choice","choice":"账单","confidence":0.90}},"g{reply_id}":{{"type":"noul","noul":0.90}}}}}}"#
+        );
+        let (port, captured) = fake_capture_server(&payload).await;
         let provider_id = add_typesafe_at(&engine, format!("http://127.0.0.1:{port}/v1"));
         engine
             .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
             .expect("配置分类");
-        let message = seed_message_with_body(&engine, 20, "有点说不准的一封邮件");
+        let message = seed_message_with_body(&engine, 1, "本月账单已出，请尽快回复");
 
-        let label = engine.classify_message(message, 0.75).await.expect("分类应成功");
+        engine.classify_message_groups(message).await.expect("分类应成功");
+
+        let request = captured.recv().expect("拿到请求");
+        assert!(
+            request.contains(&format!("\"g{content_id}\"")),
+            "一次请求要带上内容分类组：{request}"
+        );
+        assert!(
+            request.contains(&format!("\"g{reply_id}\"")),
+            "一次请求要带上需要回复组：{request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn choice_group_below_threshold_falls_back() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let group_id = enable_group(&engine, "内容分类", 0.75);
+        let payload = format!(
+            r#"{{"answers":{{"g{group_id}":{{"type":"choice","choice":"账单","confidence":0.60}}}}}}"#
+        );
+        let port = fake_chat_server(&payload).await;
+        let provider_id = add_typesafe_at(&engine, format!("http://127.0.0.1:{port}/v1"));
+        engine
+            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
+            .expect("配置分类");
+        let message = seed_message_with_body(&engine, 2, "有点说不准的一封邮件");
+
+        let results = engine.classify_message_groups(message).await.expect("分类应成功");
+        assert_eq!(results.len(), 1);
+        let result = &results[0];
+        assert_eq!(result.group.id, group_id);
+        let label = result.label.as_ref().expect("应落兜底标签");
         assert_eq!(label.name, "其他");
         assert!(label.is_fallback);
-        assert_eq!(label.color, "gray");
+        assert_eq!(result.source, MailLabelSource::Auto);
     }
 
     #[tokio::test]
-    async fn classify_message_failures_leave_no_label() {
-        // 1）模型给了候选外的类别：协议错误，不贴标签。
+    async fn choice_group_below_threshold_without_fallback_writes_nothing() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let group_id = engine
+            .store()
+            .create_label_group("主题分类", LabelGroupKind::Choice, None, None)
+            .expect("建组");
+        engine
+            .store()
+            .create_group_label(group_id, "账单")
+            .expect("加标签");
+        engine
+            .store()
+            .create_group_label(group_id, "通知")
+            .expect("加标签");
+        engine
+            .store()
+            .set_label_group_enabled(group_id, true)
+            .expect("开组");
+        let payload = format!(
+            r#"{{"answers":{{"g{group_id}":{{"type":"choice","choice":"账单","confidence":0.60}}}}}}"#
+        );
+        let port = fake_chat_server(&payload).await;
+        let provider_id = add_typesafe_at(&engine, format!("http://127.0.0.1:{port}/v1"));
+        engine
+            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
+            .expect("配置分类");
+        let message = seed_message_with_body(&engine, 3, "有点说不准的一封邮件");
+
+        let results = engine.classify_message_groups(message).await.expect("分类应成功");
+        assert!(results.is_empty(), "没有兜底就不写：{results:?}");
+        assert!(engine
+            .store()
+            .message_group_result(message, group_id)
+            .expect("读组结果")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn boolean_group_always_writes_one_of_two() {
+        // 概率够门槛 → 第一条「需要回复」。
         let dir = tempfile::tempdir().expect("临时目录");
         let first_engine = engine(dir.path());
-        let port =
-            fake_chat_server(r#"{"answers":{"category":{"choice":"不存在的类别","confidence":0.9}}}"#).await;
+        let group_id = enable_group(&first_engine, "需要我回复", 0.5);
+        let payload = format!(r#"{{"answers":{{"g{group_id}":{{"type":"noul","noul":0.90}}}}}}"#);
+        let port = fake_chat_server(&payload).await;
         let provider_id = add_typesafe_at(&first_engine, format!("http://127.0.0.1:{port}/v1"));
         first_engine
             .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
             .expect("配置分类");
-        let message = seed_message_with_body(&first_engine, 30, "随便一封邮件");
-
-        let error = first_engine
-            .classify_message(message, 0.75)
+        let message = seed_message_with_body(&first_engine, 4, "请尽快给我答复");
+        let results = first_engine
+            .classify_message_groups(message)
             .await
-            .expect_err("非法结果应报错");
-        assert!(matches!(error, EngineError::Ai(_)), "{error:?}");
-        assert!(
-            first_engine
-                .store()
-                .get_message_label(message)
-                .expect("读标签")
-                .is_none(),
-            "失败不能贴标签"
-        );
-        for audit in first_engine.list_ai_audit(10).expect("审计") {
-            assert!(!audit.detail.contains("随便一封邮件"), "审计不能记正文");
-        }
+            .expect("分类应成功");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].label.as_ref().expect("应落标签").name, "需要回复");
+        assert_eq!(results[0].confidence, Some(0.90));
 
-        // 2）网络连接不上：同样不贴标签，且不影响下一封独立邮件。
+        // 概率不够门槛 → 第二条「无需回复」。
         let dir2 = tempfile::tempdir().expect("临时目录");
-        let second_engine = engine(dir2.path());
-        let provider_id = add_typesafe_at(&second_engine, "http://127.0.0.1:1/v1".to_string());
-        second_engine
+        let engine2 = engine(dir2.path());
+        let group_id2 = enable_group(&engine2, "需要我回复", 0.5);
+        let payload2 = format!(r#"{{"answers":{{"g{group_id2}":{{"type":"noul","noul":0.20}}}}}}"#);
+        let port2 = fake_chat_server(&payload2).await;
+        let provider_id2 = add_typesafe_at(&engine2, format!("http://127.0.0.1:{port2}/v1"));
+        engine2
+            .set_ai_feature(AiFunction::Classify, provider_id2, "jev-latest", None)
+            .expect("配置分类");
+        let message2 = seed_message_with_body(&engine2, 5, "一封信");
+        let results2 = engine2
+            .classify_message_groups(message2)
+            .await
+            .expect("分类应成功");
+        assert_eq!(results2.len(), 1);
+        assert_eq!(results2[0].label.as_ref().expect("应落标签").name, "无需回复");
+    }
+
+    #[tokio::test]
+    async fn score_group_takes_highest_probability_level() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let group_id = enable_group(&engine, "紧急程度", 0.75);
+        // 5 档里最高概率是第 3 档（下标 2），换算成数字 1 + 2 = 3。
+        let payload = format!(
+            r#"{{"answers":{{"g{group_id}":{{"type":"score","probabilities":{{"0":0.05,"1":0.10,"2":0.60,"3":0.15,"4":0.10}},"confidence":0.90}}}}}}"#
+        );
+        let port = fake_chat_server(&payload).await;
+        let provider_id = add_typesafe_at(&engine, format!("http://127.0.0.1:{port}/v1"));
+        engine
             .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
             .expect("配置分类");
-        let message = seed_message_with_body(&second_engine, 31, "另一封邮件");
-        let _ = second_engine
-            .classify_message(message, 0.75)
+        let message = seed_message_with_body(&engine, 6, "这事很急，今天就要");
+        let results = engine.classify_message_groups(message).await.expect("分类应成功");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].score_value, Some(3));
+        assert!(results[0].label.is_none());
+        assert_eq!(results[0].source, MailLabelSource::Auto);
+    }
+
+    #[tokio::test]
+    async fn manual_group_is_not_overwritten() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let content_id = enable_group(&engine, "内容分类", 0.75);
+        let reply_id = enable_group(&engine, "需要我回复", 0.5);
+        let message = seed_message_with_body(&engine, 7, "本月账单已出，请查收");
+        let notice = engine
+            .store()
+            .list_group_labels(content_id)
+            .expect("列组内标签")
+            .into_iter()
+            .find(|label| label.name == "通知")
+            .expect("应有通知标签");
+        engine
+            .store()
+            .set_message_group_value(
+                message,
+                content_id,
+                Some(notice.id),
+                None,
+                MailLabelSource::Manual,
+                None,
+            )
+            .expect("手改内容分类");
+
+        let payload = format!(
+            r#"{{"answers":{{"g{content_id}":{{"type":"choice","choice":"账单","confidence":0.95}},"g{reply_id}":{{"type":"noul","noul":0.90}}}}}}"#
+        );
+        let port = fake_chat_server(&payload).await;
+        let provider_id = add_typesafe_at(&engine, format!("http://127.0.0.1:{port}/v1"));
+        engine
+            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
+            .expect("配置分类");
+
+        let results = engine.classify_message_groups(message).await.expect("分类应成功");
+        let content = results
+            .iter()
+            .find(|result| result.group.id == content_id)
+            .expect("内容分类组应有结果");
+        assert_eq!(content.label.as_ref().expect("应保留手改标签").name, "通知");
+        assert_eq!(content.source, MailLabelSource::Manual);
+        let reply = results
+            .iter()
+            .find(|result| result.group.id == reply_id)
+            .expect("需要回复组应照写");
+        assert_eq!(reply.label.as_ref().expect("应落标签").name, "需要回复");
+        assert_eq!(reply.source, MailLabelSource::Auto);
+    }
+
+    #[tokio::test]
+    async fn request_failure_writes_nothing() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let group_id = enable_group(&engine, "内容分类", 0.75);
+        let provider_id = add_typesafe_at(&engine, "http://127.0.0.1:1/v1".to_string());
+        engine
+            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
+            .expect("配置分类");
+        let message = seed_message_with_body(&engine, 8, "一封发不出去的邮件");
+
+        let error = engine
+            .classify_message_groups(message)
             .await
             .expect_err("网络失败应报错");
-        assert!(second_engine
+        assert!(matches!(error, EngineError::Ai(_)), "{error:?}");
+        assert!(engine
             .store()
-            .get_message_label(message)
-            .expect("读标签")
+            .message_group_result(message, group_id)
+            .expect("读组结果")
             .is_none());
+        let audits = engine.list_ai_audit(10).expect("审计");
+        assert!(
+            audits.iter().any(|audit| audit.outcome == "failed"),
+            "失败要记审计"
+        );
+        for audit in audits {
+            assert!(!audit.detail.contains("一封发不出去的邮件"), "审计不能记正文");
+        }
     }
 
     /// 假 HTTP 服务：收一次请求，返回指定状态与正文；用来测错误脱敏。
@@ -2107,10 +2443,11 @@ mod tests {
         engine
             .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
             .expect("配置分类");
+        enable_group(&engine, "内容分类", 0.75);
         let message = seed_message_with_body(&engine, 91, "正文里有敏感内容，不该进审计");
 
         let error = engine
-            .classify_message(message, 0.75)
+            .classify_message_groups(message)
             .await
             .expect_err("站点报错时应返回错误");
         let text = error.to_string();
@@ -2118,10 +2455,10 @@ mod tests {
         assert!(
             engine
                 .store()
-                .get_message_label(message)
-                .expect("读标签")
-                .is_none(),
-            "报错时不能贴标签"
+                .list_message_group_results(message)
+                .expect("读组结果")
+                .is_empty(),
+            "报错时不能写结果"
         );
 
         let audits = engine.list_ai_audit(10).expect("审计");
@@ -2163,8 +2500,9 @@ mod tests {
     ///
     /// 会先把请求头和按 Content-Length 声明的正文读完再回包，避免请求被拆成
     /// 多个 TCP 包时服务端提前关连接、让客户端偶发报协议错。
-    async fn fake_chat_server(payload: &'static str) -> u16 {
+    async fn fake_chat_server(payload: &str) -> u16 {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let payload = payload.to_string();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("绑定");
         let port = listener.local_addr().expect("地址").port();
         tokio::spawn(async move {

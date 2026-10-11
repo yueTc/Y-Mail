@@ -3426,6 +3426,16 @@ impl MailLabelDto {
     }
 }
 
+/// 分类预览里的一个「本次将开启的标签组」。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassifyGroupDto {
+    /// 组名。
+    pub name: String,
+    /// 题型标识：choice / boolean / score。
+    pub kind: String,
+}
+
 /// 分类预览里的一封目标邮件。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -3456,6 +3466,8 @@ pub struct ClassifyPreviewDto {
     pub expires_in_seconds: u64,
     /// 本次要分类的邮件与各自内容哈希。
     pub targets: Vec<ClassifyTargetDto>,
+    /// 本次将开启的标签组。
+    pub enabled_groups: Vec<ClassifyGroupDto>,
 }
 
 impl ClassifyPreviewDto {
@@ -3474,6 +3486,14 @@ impl ClassifyPreviewDto {
                 .map(|target| ClassifyTargetDto {
                     message_id: target.message_id,
                     content_hash: target.content_hash,
+                })
+                .collect(),
+            enabled_groups: preview
+                .enabled_groups
+                .into_iter()
+                .map(|group| ClassifyGroupDto {
+                    name: group.name,
+                    kind: group.kind,
                 })
                 .collect(),
         }

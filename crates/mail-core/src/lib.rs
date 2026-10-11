@@ -27,8 +27,8 @@ pub mod sync_settings;
 
 pub use ai::{
     ai_provider_supports, AiAuthorizationPreview, AiProviderInput, AiProviderView, AiTarget, AiTextOutcome,
-    AiTranslation, ClassifyPreview, ClassifyPreviewTarget, NotificationLatency, CLASSIFY_BODY_MAX_CHARS,
-    TYPESAFE_PROBE_MODEL,
+    AiTranslation, ClassifyPreview, ClassifyPreviewGroup, ClassifyPreviewTarget, NotificationLatency,
+    CLASSIFY_BODY_MAX_CHARS, TYPESAFE_PROBE_MODEL,
 };
 pub use checks::ConnectionReport;
 pub use compose::{ComposeAttachment, ComposeParticipant, DraftSeed, OutboxItem, SendOutcome};
