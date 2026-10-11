@@ -12,7 +12,8 @@ mod segment;
 pub mod verify;
 
 pub use client::{
-    chat, classify_mail, list_models, translate, ChatOutcome, ClassifyOutcome, Endpoint, TranslationOutcome,
+    chat, classify_mail, classify_mail_groups, list_models, translate, ChatOutcome, ClassifyOutcome,
+    Endpoint, GroupAnswer, GroupQuestion, GroupQuestionKind, TranslationOutcome,
 };
 pub use error::AiError;
 pub use provider::{

@@ -180,6 +180,239 @@ pub async fn classify_mail(
     Ok(ClassifyOutcome { choice, confidence })
 }
 
+/// 标签组的题型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupQuestionKind {
+    /// 选择题：从标签里选一个。
+    Choice,
+    /// 是否题：返回 0 到 1 的概率。
+    Boolean,
+    /// 打分题：在有序档位里选一个。
+    Score,
+}
+
+/// 一次多问题分类请求里的一个标签组问题。
+///
+/// mail-ai 不反向依赖 mail-store，所以这里用本地形状；编排层负责把组数据搬进来。
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupQuestion {
+    /// 组编号；请求键和应答键都用 `g<编号>`。
+    pub group_id: i64,
+    /// 题型。
+    pub kind: GroupQuestionKind,
+    /// 给模型的完整指令。
+    pub instructions: String,
+    /// 选择题的候选标签名；打分题的有序档位描述；是否题留空。
+    pub criteria: Vec<String>,
+    /// 打分题下限；其它题型为空。
+    pub score_min: Option<i64>,
+    /// 打分题上限；其它题型为空。
+    pub score_max: Option<i64>,
+}
+
+/// 一个标签组的答案。
+#[derive(Debug, Clone, PartialEq)]
+pub enum GroupAnswer {
+    /// 选择题：选中的标签与把握程度。
+    Choice {
+        /// 选中的标签名。
+        label: String,
+        /// 把握程度，0 到 1。
+        confidence: f64,
+    },
+    /// 是否题：回答「是」的概率，0 到 1。
+    Boolean {
+        /// 「是」的概率。
+        probability: f64,
+    },
+    /// 打分题：落在哪一档与把握程度。
+    Score {
+        /// 档位数字，落在组的上下限之间。
+        level: i64,
+        /// 把握程度，0 到 1。
+        confidence: f64,
+    },
+}
+
+/// 一次请求问完所有已开启的标签组。
+///
+/// 请求形状按规格 3.2；应答按 `answers.g<编号>` 逐个解析，某一组不合法只跳过该组，
+/// 不影响其它组。整批请求失败（网络、超时、非 200、应答不是 JSON）才返回错误。
+///
+/// 注意：`noul` 与 `score` 的应答字段名**还没和真机对过**。这里按官方文档
+/// （docs.typesafe.ai/primitives）选形状：是否题读 `noul`，打分题读 `probabilities`
+/// 并取概率最高的一档；同时兼容未验证的备用字段 `probability` / `level`，
+/// 真机接入后再按实测结果收窄。
+pub async fn classify_mail_groups(
+    route: Option<&ProxyRoute>,
+    endpoint: &Endpoint<'_>,
+    model: &str,
+    state: &str,
+    questions: &[GroupQuestion],
+    timeout: Duration,
+) -> Result<Vec<(i64, GroupAnswer)>, AiError> {
+    if endpoint.kind != ProviderKind::TypeSafe {
+        return Err(AiError::Unsupported("邮件分类"));
+    }
+    if model.trim().is_empty() {
+        return Err(AiError::MissingModel);
+    }
+    if state.trim().is_empty() || questions.is_empty() {
+        return Err(AiError::Protocol);
+    }
+    let url = systemone_url(endpoint.base_url);
+    let headers = auth_headers(endpoint)?;
+    let mut question_map = serde_json::Map::new();
+    for question in questions {
+        let key = format!("g{}", question.group_id);
+        let value = match question.kind {
+            GroupQuestionKind::Choice => {
+                // 官方形状：criteria 是「选项名 → 说明」，不需要说明时给 null。
+                let mut criteria = serde_json::Map::new();
+                for label in &question.criteria {
+                    criteria.insert(label.clone(), Value::Null);
+                }
+                json!({
+                    "type": "choice",
+                    "instructions": question.instructions,
+                    "criteria": criteria
+                })
+            }
+            GroupQuestionKind::Boolean => json!({
+                "type": "noul",
+                "instructions": question.instructions
+            }),
+            GroupQuestionKind::Score => json!({
+                "type": "score",
+                "instructions": question.instructions,
+                "criteria": question.criteria
+            }),
+        };
+        question_map.insert(key, value);
+    }
+    let body = json!({
+        "state": state,
+        "model": model,
+        "questions": question_map
+    });
+    let payload = body.to_string();
+    let response = request(route, "POST", &url, &headers, Some(&payload), timeout).await?;
+    if response.status != 200 {
+        return Err(status_error(response.status, endpoint, &response.body));
+    }
+    let value: Value = serde_json::from_str(&response.body).map_err(|_| AiError::Protocol)?;
+    let answers = value
+        .get("answers")
+        .and_then(Value::as_object)
+        .ok_or(AiError::Protocol)?;
+    let mut parsed = Vec::new();
+    for question in questions {
+        let key = format!("g{}", question.group_id);
+        let Some(answer) = answers.get(&key) else {
+            continue;
+        };
+        let Some(answer_type) = answer.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        let one = match question.kind {
+            GroupQuestionKind::Choice => parse_choice_answer(answer, answer_type, question),
+            GroupQuestionKind::Boolean => parse_boolean_answer(answer, answer_type),
+            GroupQuestionKind::Score => parse_score_answer(answer, answer_type, question),
+        };
+        if let Some(answer) = one {
+            parsed.push((question.group_id, answer));
+        }
+    }
+    Ok(parsed)
+}
+
+/// 解析选择题答案；类型不符、选项不在候选里或把握程度越界都返回 `None`。
+fn parse_choice_answer(answer: &Value, answer_type: &str, question: &GroupQuestion) -> Option<GroupAnswer> {
+    if answer_type != "choice" {
+        return None;
+    }
+    let label = answer
+        .get("choice")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|label| !label.is_empty())?
+        .to_string();
+    if !question.criteria.iter().any(|candidate| candidate == &label) {
+        return None;
+    }
+    let confidence = answer.get("confidence").and_then(Value::as_f64)?;
+    if !valid_confidence(confidence) {
+        return None;
+    }
+    Some(GroupAnswer::Choice { label, confidence })
+}
+
+/// 解析是否题答案；类型不符或概率越界都返回 `None`。
+fn parse_boolean_answer(answer: &Value, answer_type: &str) -> Option<GroupAnswer> {
+    if answer_type != "noul" {
+        return None;
+    }
+    // 官方文档字段是 `noul`；`probability` 是未真机验证的备用形状。
+    let probability = answer
+        .get("noul")
+        .or_else(|| answer.get("probability"))
+        .and_then(Value::as_f64)?;
+    if !valid_confidence(probability) {
+        return None;
+    }
+    Some(GroupAnswer::Boolean { probability })
+}
+
+/// 解析打分题答案；类型不符、档位越界或把握程度越界都返回 `None`。
+fn parse_score_answer(answer: &Value, answer_type: &str, question: &GroupQuestion) -> Option<GroupAnswer> {
+    if answer_type != "score" {
+        return None;
+    }
+    let (min, max) = (question.score_min?, question.score_max?);
+    let level = score_level_from_answer(answer, min, max)?;
+    if !(min..=max).contains(&level) {
+        return None;
+    }
+    let confidence = answer.get("confidence").and_then(Value::as_f64)?;
+    if !valid_confidence(confidence) {
+        return None;
+    }
+    Some(GroupAnswer::Score { level, confidence })
+}
+
+/// 从打分题答案里取整数档位。
+///
+/// 官方形状（未真机验证）是 `probabilities: {"0": 0.0, "1": 0.57, "2": 0.43}`，
+/// 按规格 3.4 取概率最高的一档，换算成数字：`min + 下标`。
+/// 找不到 `probabilities` 时回退读未验证的 `level` 字段。
+fn score_level_from_answer(answer: &Value, min: i64, max: i64) -> Option<i64> {
+    let count = max.checked_sub(min).and_then(|diff| diff.checked_add(1))?;
+    if !(2..=10).contains(&count) {
+        return None;
+    }
+    if let Some(probabilities) = answer.get("probabilities") {
+        let probabilities = probabilities.as_object()?;
+        let mut best: Option<(i64, f64)> = None;
+        for (level, probability) in probabilities {
+            let index: i64 = level.parse().ok()?;
+            let value = probability.as_f64()?;
+            if !valid_confidence(value) || !(0..count).contains(&index) {
+                return None;
+            }
+            if best.is_none_or(|(_, top)| value > top) {
+                best = Some((index, value));
+            }
+        }
+        let (index, _) = best?;
+        return min.checked_add(index);
+    }
+    answer.get("level").and_then(Value::as_i64)
+}
+
+/// 把握程度 / 概率必须在 0 到 1 之间。
+fn valid_confidence(value: f64) -> bool {
+    (0.0..=1.0).contains(&value)
+}
 /// 发一次对话，返回模型输出的纯文本。
 #[allow(clippy::too_many_arguments)]
 pub async fn chat(
@@ -787,5 +1020,296 @@ mod tests {
         assert_eq!(deepl_target_lang("zh"), "ZH");
         assert_eq!(deepl_target_lang("en"), "EN-US");
         assert_eq!(deepl_target_lang("看不懂"), "ZH");
+    }
+    #[test]
+    fn score_levels_are_generated_by_range() {
+        assert_eq!(prompt::score_levels(1, 5).len(), 5);
+        assert_eq!(prompt::score_levels(1, 10).len(), 10);
+        assert!(prompt::score_levels(1, 11).is_empty());
+        assert!(prompt::score_levels(1, 1).is_empty());
+        assert!(prompt::score_levels(5, 4).is_empty());
+        for count in 2..=10 {
+            assert_eq!(prompt::score_levels(0, count - 1).len(), count as usize);
+        }
+        // 同一组的档位描述必须稳定，不能每次调用都漂移。
+        assert_eq!(prompt::score_levels(1, 5), prompt::score_levels(1, 5));
+        assert_eq!(
+            prompt::score_levels(1, 5),
+            vec![
+                "完全不急".to_string(),
+                "不太急".to_string(),
+                "一般".to_string(),
+                "比较急".to_string(),
+                "非常急".to_string()
+            ]
+        );
+    }
+
+    fn group_question(
+        group_id: i64,
+        kind: GroupQuestionKind,
+        instructions: &str,
+        criteria: Vec<String>,
+        score_min: Option<i64>,
+        score_max: Option<i64>,
+    ) -> GroupQuestion {
+        GroupQuestion {
+            group_id,
+            kind,
+            instructions: instructions.to_string(),
+            criteria,
+            score_min,
+            score_max,
+        }
+    }
+
+    /// 从假服务端抓到的原始请求里取出 JSON 请求正文。
+    fn request_body(raw: &str) -> Value {
+        let (_, body) = raw.split_once("\r\n\r\n").expect("请求应带正文");
+        serde_json::from_str(body).expect("请求正文应是 JSON")
+    }
+
+    #[tokio::test]
+    async fn multi_question_request_sends_all_groups_and_parses_three_types() {
+        let (port, captured) = fake_capture_server(
+            r#"{"answers":{
+                "g1":{"type":"choice","choice":"账单","confidence":0.91},
+                "g2":{"type":"noul","noul":0.82},
+                "g3":{"type":"score","score":3.4,"confidence":0.7,"probabilities":{"0":0.05,"1":0.1,"2":0.6,"3":0.2,"4":0.05}}
+            }}"#,
+        )
+        .await;
+        let base = format!("http://127.0.0.1:{port}/v1");
+        let endpoint = endpoint(ProviderKind::TypeSafe, &base);
+        let questions = vec![
+            group_question(
+                1,
+                GroupQuestionKind::Choice,
+                "选一个类别",
+                vec!["账单".to_string(), "其他".to_string()],
+                None,
+                None,
+            ),
+            group_question(
+                2,
+                GroupQuestionKind::Boolean,
+                "需要收件人亲自回复吗？",
+                Vec::new(),
+                None,
+                None,
+            ),
+            group_question(
+                3,
+                GroupQuestionKind::Score,
+                "紧急程度是多少？",
+                prompt::score_levels(1, 5),
+                Some(1),
+                Some(5),
+            ),
+        ];
+        let answers = classify_mail_groups(
+            None,
+            &endpoint,
+            "jev-latest",
+            "本月账单已出",
+            &questions,
+            Duration::from_secs(15),
+        )
+        .await
+        .expect("多问题应能解析");
+
+        assert_eq!(answers.len(), 3);
+        match &answers[0] {
+            (1, GroupAnswer::Choice { label, confidence }) => {
+                assert_eq!(label, "账单");
+                assert!((confidence - 0.91).abs() < 0.0001);
+            }
+            other => panic!("g1 应是选择题答案：{other:?}"),
+        }
+        match &answers[1] {
+            (2, GroupAnswer::Boolean { probability }) => {
+                assert!((probability - 0.82).abs() < 0.0001);
+            }
+            other => panic!("g2 应是是否题答案：{other:?}"),
+        }
+        match &answers[2] {
+            (3, GroupAnswer::Score { level, confidence }) => {
+                assert_eq!(*level, 3);
+                assert!((confidence - 0.7).abs() < 0.0001);
+            }
+            other => panic!("g3 应是打分题答案：{other:?}"),
+        }
+
+        let request = captured.recv().expect("拿到请求");
+        assert!(request.contains("POST /v1/systemone"), "{request}");
+        let body = request_body(&request);
+        assert_eq!(body["state"], "本月账单已出");
+        assert_eq!(body["model"], "jev-latest");
+        assert_eq!(body["questions"]["g1"]["type"], "choice");
+        assert_eq!(body["questions"]["g1"]["criteria"]["账单"], Value::Null);
+        assert_eq!(body["questions"]["g2"]["type"], "noul");
+        assert!(body["questions"]["g2"].get("criteria").is_none());
+        assert_eq!(body["questions"]["g3"]["type"], "score");
+        assert_eq!(body["questions"]["g3"]["criteria"][0], "完全不急");
+        assert_eq!(body["questions"]["g3"]["criteria"][4], "非常急");
+    }
+
+    #[tokio::test]
+    async fn multi_question_skips_group_with_wrong_type() {
+        let port = fake_server(
+            "200 OK",
+            r#"{"answers":{
+                "g1":{"type":"choice","choice":"账单","confidence":0.91},
+                "g2":{"type":"choice","choice":"需要回复","confidence":0.9},
+                "g3":{"type":"score","score":2.0,"confidence":0.8,"probabilities":{"0":0.1,"1":0.2,"2":0.6,"3":0.1}}
+            }}"#,
+        )
+        .await;
+        let base = format!("http://127.0.0.1:{port}/v1");
+        let endpoint = endpoint(ProviderKind::TypeSafe, &base);
+        let questions = vec![
+            group_question(
+                1,
+                GroupQuestionKind::Choice,
+                "选一个类别",
+                vec!["账单".to_string(), "其他".to_string()],
+                None,
+                None,
+            ),
+            group_question(
+                2,
+                GroupQuestionKind::Boolean,
+                "需要亲自回复吗？",
+                Vec::new(),
+                None,
+                None,
+            ),
+            group_question(
+                3,
+                GroupQuestionKind::Score,
+                "紧急程度？",
+                prompt::score_levels(1, 5),
+                Some(1),
+                Some(5),
+            ),
+        ];
+        let answers = classify_mail_groups(
+            None,
+            &endpoint,
+            "jev-latest",
+            "正文",
+            &questions,
+            Duration::from_secs(15),
+        )
+        .await
+        .expect("整批应成功，只是跳过坏组");
+        assert_eq!(answers.len(), 2);
+        assert_eq!(answers[0].0, 1);
+        assert_eq!(answers[1].0, 3);
+    }
+
+    #[tokio::test]
+    async fn multi_question_skips_invalid_answers() {
+        let port = fake_server(
+            "200 OK",
+            r#"{"answers":{
+                "g1":{"type":"choice","choice":"不在候选里","confidence":0.91},
+                "g2":{"type":"noul","noul":1.2},
+                "g3":{"type":"score","level":9,"confidence":0.8}
+            }}"#,
+        )
+        .await;
+        let base = format!("http://127.0.0.1:{port}/v1");
+        let endpoint = endpoint(ProviderKind::TypeSafe, &base);
+        let questions = vec![
+            group_question(
+                1,
+                GroupQuestionKind::Choice,
+                "选一个类别",
+                vec!["账单".to_string(), "其他".to_string()],
+                None,
+                None,
+            ),
+            group_question(
+                2,
+                GroupQuestionKind::Boolean,
+                "需要亲自回复吗？",
+                Vec::new(),
+                None,
+                None,
+            ),
+            group_question(
+                3,
+                GroupQuestionKind::Score,
+                "紧急程度？",
+                prompt::score_levels(1, 5),
+                Some(1),
+                Some(5),
+            ),
+        ];
+        let answers = classify_mail_groups(
+            None,
+            &endpoint,
+            "jev-latest",
+            "正文",
+            &questions,
+            Duration::from_secs(15),
+        )
+        .await
+        .expect("整批应成功，非法组被跳过");
+        assert!(answers.is_empty(), "三组都应跳过：{answers:?}");
+    }
+    #[tokio::test]
+    async fn multi_question_rejects_bad_parameters_without_request() {
+        let questions = vec![group_question(
+            1,
+            GroupQuestionKind::Choice,
+            "选一个类别",
+            vec!["账单".to_string(), "其他".to_string()],
+            None,
+            None,
+        )];
+        let bad_endpoint = endpoint(ProviderKind::OpenAiCompatible, "http://127.0.0.1:1/v1");
+        let error = classify_mail_groups(
+            None,
+            &bad_endpoint,
+            "jev-latest",
+            "正文",
+            &questions,
+            Duration::from_secs(1),
+        )
+        .await
+        .expect_err("非 TypeSafe 站点应被拦住");
+        assert!(matches!(error, AiError::Unsupported(_)));
+
+        let unreachable = endpoint(ProviderKind::TypeSafe, "http://127.0.0.1:1/v1");
+        let error = classify_mail_groups(None, &unreachable, "", "正文", &questions, Duration::from_secs(1))
+            .await
+            .expect_err("空模型应被拦住");
+        assert!(matches!(error, AiError::MissingModel));
+
+        let error = classify_mail_groups(
+            None,
+            &unreachable,
+            "jev-latest",
+            "   ",
+            &questions,
+            Duration::from_secs(1),
+        )
+        .await
+        .expect_err("空正文应被拦住");
+        assert!(matches!(error, AiError::Protocol));
+
+        let error = classify_mail_groups(
+            None,
+            &unreachable,
+            "jev-latest",
+            "正文",
+            &[],
+            Duration::from_secs(1),
+        )
+        .await
+        .expect_err("没有任何组应被拦住");
+        assert!(matches!(error, AiError::Protocol));
     }
 }
