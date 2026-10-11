@@ -67,6 +67,9 @@ pub struct AppSettings {
     /// 手动右键「立即分类」是否跳过每封的外发确认；默认关（false）。
     /// 打开后右键分类会直接外发、不再逐封确认；只存本机，不参与账号同步。
     pub classify_skip_manual_confirm: bool,
+    /// 老全局门槛是不是已经搬进「内容分类」组；默认 false。
+    /// 只在第一次启动时搬一次，搬过就置位，之后不再覆盖用户改过的组门槛。
+    pub classify_confidence_migrated: bool,
 }
 
 impl Default for AppSettings {
@@ -86,6 +89,7 @@ impl Default for AppSettings {
             classify_enabled: false,
             classify_confidence_percent: CLASSIFY_CONFIDENCE_DEFAULT_PERCENT,
             classify_skip_manual_confirm: false,
+            classify_confidence_migrated: false,
         }
     }
 }
@@ -137,6 +141,23 @@ impl AppSettings {
         } else {
             CLASSIFY_CONFIDENCE_DEFAULT_PERCENT
         }
+    }
+
+    /// 老全局门槛的一次性搬家值（0–1 小数）；已经搬过就返回 `None`。
+    ///
+    /// 老配置里的百分数（如 80）换算成组门槛小数（0.80）；标记置位后不再返回，
+    /// 于是重启不会覆盖用户后来在界面上改过的组门槛。
+    pub fn pending_classify_confidence_migration(&self) -> Option<f64> {
+        if self.classify_confidence_migrated {
+            None
+        } else {
+            Some(f64::from(self.normalized_classify_confidence_percent()) / 100.0)
+        }
+    }
+
+    /// 标记老全局门槛已经搬完；调用方写完「内容分类」组门槛后再调它。
+    pub fn mark_classify_confidence_migrated(&mut self) {
+        self.classify_confidence_migrated = true;
     }
 
     /// 邮件数据目录的生效值：没单独配置就用传入的默认目录。
@@ -208,6 +229,7 @@ mod tests {
             classify_enabled: false,
             classify_confidence_percent: 75,
             classify_skip_manual_confirm: false,
+            classify_confidence_migrated: false,
         };
         assert_eq!(
             settings.effective_data_dir(std::path::Path::new("C:/app")),
@@ -237,6 +259,23 @@ mod tests {
     }
 
     #[test]
+    fn classify_migration_value_is_taken_once() {
+        let mut settings = AppSettings {
+            classify_confidence_percent: 80,
+            ..Default::default()
+        };
+        assert!(!settings.classify_confidence_migrated, "默认还没搬过");
+        assert_eq!(settings.pending_classify_confidence_migration(), Some(0.8));
+        settings.mark_classify_confidence_migrated();
+        assert!(settings.classify_confidence_migrated);
+        assert_eq!(
+            settings.pending_classify_confidence_migration(),
+            None,
+            "搬过就不再给值"
+        );
+    }
+
+    #[test]
     fn save_then_load_round_trips() {
         let dir = std::env::temp_dir().join(format!(
             "ymail-settings-test-{}-{}",
@@ -261,6 +300,7 @@ mod tests {
             classify_enabled: true,
             classify_confidence_percent: 80,
             classify_skip_manual_confirm: true,
+            classify_confidence_migrated: true,
         };
         settings.save(&dir).expect("保存设置");
         let raw = std::fs::read_to_string(dir.join(super::SETTINGS_FILE)).expect("读设置原文");

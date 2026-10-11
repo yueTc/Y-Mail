@@ -662,6 +662,7 @@ pub async fn set_app_settings(
         classify_enabled: previous.classify_enabled,
         classify_confidence_percent: previous.classify_confidence_percent,
         classify_skip_manual_confirm: previous.classify_skip_manual_confirm,
+        classify_confidence_migrated: previous.classify_confidence_migrated,
     };
     state
         .save_settings(settings.clone())
@@ -705,6 +706,31 @@ pub async fn set_classify_skip_manual_confirm(
         .save_settings(settings)
         .map_err(|error| CommandError::new(format!("保存设置失败：{error}")))?;
     Ok(build_settings_dto(state.inner()))
+}
+
+/// 老全局门槛一次性搬进「内容分类」组；返回 `true` 表示设置需要写回磁盘。
+///
+/// 只在标记没置位时动手：把老百分比（如 80）换算成组门槛（0.80）写进
+/// 「内容分类」组，再把标记翻成已搬。搬过之后再也不碰，避免覆盖用户
+/// 后来在界面上改过的组门槛。找不到组或写库失败就保持原样，下次启动再试。
+pub(crate) fn migrate_classify_confidence(engine: &MailEngine, settings: &mut AppSettings) -> bool {
+    let Some(threshold) = settings.pending_classify_confidence_migration() else {
+        return false;
+    };
+    let group = engine
+        .list_label_groups()
+        .ok()
+        .and_then(|groups| groups.into_iter().find(|group| group.name == "内容分类"));
+    let Some(group) = group else {
+        tracing::warn!("找不到内容分类组，老门槛暂不搬家");
+        return false;
+    };
+    if let Err(error) = engine.set_label_group_threshold(group.id, threshold) {
+        tracing::warn!(error = %error, "老门槛搬进内容分类组失败，下次启动再试");
+        return false;
+    }
+    settings.mark_classify_confidence_migrated();
+    true
 }
 
 /// 更改数据目录：复制旧数据、校验通过后才写设置。
@@ -4359,8 +4385,9 @@ pub async fn classify_messages(
 mod tests {
     use super::{
         clamp_ui_zoom, create_label_group_snapshot, is_external_link, label_groups_snapshot,
-        set_message_group_value_snapshot, strip_verbatim_prefix, MailLabelDto,
+        migrate_classify_confidence, set_message_group_value_snapshot, strip_verbatim_prefix, MailLabelDto,
     };
+    use crate::settings::AppSettings;
     use mail_core::MailEngine;
 
     /// 建一个临时引擎，跑命令层抽出来的组逻辑。
@@ -4407,6 +4434,39 @@ mod tests {
         engine.delete_label_group(created.id).expect("删组");
         let listed = label_groups_snapshot(&engine).expect("列表");
         assert!(listed.iter().all(|group| group.id != created.id));
+    }
+
+    #[test]
+    fn old_threshold_migrates_into_content_group_once() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = test_engine(dir.path());
+        let mut settings = AppSettings {
+            classify_confidence_percent: 80,
+            ..AppSettings::default()
+        };
+        assert!(!settings.classify_confidence_migrated, "默认还没搬过");
+
+        // 第一次跑：老门槛 80 → 内容分类组 0.80，标记置位。
+        assert!(migrate_classify_confidence(&engine, &mut settings));
+        assert!(settings.classify_confidence_migrated);
+        let content = engine
+            .list_label_groups()
+            .expect("列表")
+            .into_iter()
+            .find(|group| group.name == "内容分类")
+            .expect("应有内容分类组");
+        assert!((content.confidence_threshold - 0.8).abs() < 1e-9);
+
+        // 用户后来把门槛改成 0.6，再跑一次不能覆盖。
+        engine.set_label_group_threshold(content.id, 0.6).expect("改门槛");
+        assert!(!migrate_classify_confidence(&engine, &mut settings));
+        let content = engine
+            .list_label_groups()
+            .expect("再列表")
+            .into_iter()
+            .find(|group| group.name == "内容分类")
+            .expect("应有内容分类组");
+        assert!((content.confidence_threshold - 0.6).abs() < 1e-9);
     }
 
     #[test]

@@ -251,6 +251,14 @@ pub fn run() {
                 tracing::warn!(error = %error, "初始化界面开关同步表失败");
             }
 
+            // 4.6) 老全局门槛一次性搬进「内容分类」组；搬过就不再动，
+            //      免得覆盖用户后来在界面上改过的组门槛。
+            if commands::migrate_classify_confidence(&engine, &mut settings) {
+                if let Err(error) = settings.save(&default_dir) {
+                    tracing::error!(error = %error, "保存老门槛搬家标记失败");
+                }
+            }
+
             // 5) 上次迁移后用户选了清理：等新目录的引擎完全就绪，再清旧目录。
             //    清理成功或失败都先抹掉记录，避免以后每次启动都重复处理。
             if let Some(old_dir) = settings.pending_cleanup_dir.clone() {
