@@ -100,6 +100,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "0015_folder_child_create_blocked",
         sql: include_str!("sql/0015_folder_child_create_blocked.sql"),
     },
+    Migration {
+        version: 16,
+        name: "0016_mail_label_groups",
+        sql: include_str!("sql/0016_mail_label_groups.sql"),
+    },
 ];
 
 /// 单条迁移的执行结果。
@@ -310,8 +315,8 @@ mod tests {
         let mut store = Store::open_in_memory().expect("打开内存库");
 
         let first = store.run_migrations().expect("首次迁移");
-        assert_eq!(first.applied_count(), 15, "首次应应用 15 条迁移");
-        assert_eq!(first.current_version, 15);
+        assert_eq!(first.applied_count(), 16, "首次应应用 16 条迁移");
+        assert_eq!(first.current_version, 16);
         assert_eq!(first.applied[0].name, "0001_core_bootstrap");
         assert!(!first.applied[0].applied_at.is_empty(), "登记时间不应为空");
 
@@ -320,7 +325,7 @@ mod tests {
 
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
         );
     }
 
@@ -387,7 +392,7 @@ mod tests {
         store.run_migrations().expect("升级到三号库");
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
         );
 
         // 升级到七号库后，旧账号的授权字段应为空（NULL / 空串），不影响既有数据。
@@ -441,7 +446,7 @@ mod tests {
         store.run_migrations().expect("升级到十二号库");
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
         );
 
         // 旧 translate 映射要保留；新增 notification_verify 要能写；非法值仍被拒。
@@ -475,7 +480,7 @@ mod tests {
         store.run_migrations().expect("跑迁移");
         let count: i64 = store
             .conn()
-            .query_row("SELECT COUNT(*) FROM mail_label", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM mail_label WHERE group_id = (SELECT id FROM mail_label_group WHERE name = '内容分类')", [], |row| row.get(0))
             .expect("数标签");
         assert_eq!(count, 8);
         let fallback_color: String = store
@@ -487,7 +492,7 @@ mod tests {
         assert_eq!(fallback_color, "gray");
         let distinct_colors: i64 = store
             .conn()
-            .query_row("SELECT COUNT(DISTINCT color) FROM mail_label", [], |row| {
+            .query_row("SELECT COUNT(DISTINCT color) FROM mail_label WHERE group_id = (SELECT id FROM mail_label_group WHERE name = '内容分类')", [], |row| {
                 row.get(0)
             })
             .expect("数标签颜色");
@@ -545,7 +550,7 @@ mod tests {
         store.run_migrations().expect("升级到十三号库");
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
         );
 
         let conn = store.raw_connection_for_test();
@@ -595,22 +600,157 @@ mod tests {
         );
         assert!(bad_function.is_err(), "非法功能值仍应被 CHECK 拒绝");
 
-        // 标签表升级后应有八条预置标签，且兜底唯一。
+        // 标签表升级后应有十条标签（八条老标签 + 两条是否题标签），且兜底组内唯一。
         let labels: i64 = conn
             .query_row("SELECT COUNT(*) FROM mail_label", [], |row| row.get(0))
             .expect("数标签");
-        assert_eq!(labels, 8);
+        assert_eq!(labels, 10, "0016 后应有十条标签");
+        let content_group_id: i64 = conn
+            .query_row(
+                "SELECT id FROM mail_label_group WHERE name = '内容分类'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("读内容分类组");
         let second_fallback = conn.execute(
-            "INSERT INTO mail_label (name, color, sort_order, is_fallback) VALUES ('假兜底', 'gray', 2000, 1)",
-            [],
+            "INSERT INTO mail_label (group_id, name, color, sort_order, is_fallback) \
+             VALUES (?1, '假兜底', 'gray', 2000, 1)",
+            rusqlite::params![content_group_id],
         );
-        assert!(second_fallback.is_err(), "兜底标签只能有一条");
+        assert!(second_fallback.is_err(), "同一组内兜底标签只能有一条");
     }
 
     #[test]
+    fn migration_0016_creates_label_groups() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let mut store = Store::open(dir.path().join("mail.db")).expect("打开数据库");
+        store.run_migrations().expect("跑迁移");
+
+        let conn = store.conn();
+        let mut stmt = conn
+            .prepare(
+                "SELECT name, kind, enabled, confidence_threshold, score_min, score_max, sort_order \
+                 FROM mail_label_group ORDER BY sort_order ASC",
+            )
+            .expect("准备查询组");
+        let groups: Vec<(String, String, i64, f64, Option<i64>, Option<i64>, i64)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            })
+            .expect("查询组")
+            .collect::<Result<_, _>>()
+            .expect("收集组");
+
+        assert_eq!(groups.len(), 3, "应预置三个默认组");
+        assert_eq!(
+            groups
+                .iter()
+                .map(|g| (g.0.as_str(), g.1.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("内容分类", "choice"),
+                ("需要我回复", "boolean"),
+                ("紧急程度", "score"),
+            ]
+        );
+        assert!(groups.iter().all(|g| g.2 == 0), "三个默认组应默认关闭");
+        assert_eq!(groups[0].3, 0.75);
+        assert_eq!(groups[1].3, 0.5);
+        assert_eq!(groups[2].3, 0.75);
+        assert_eq!((groups[0].4, groups[0].5), (None, None));
+        assert_eq!((groups[2].4, groups[2].5), (Some(1), Some(5)));
+        assert_eq!(groups.iter().map(|g| g.6).collect::<Vec<_>>(), vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn migration_0016_keeps_old_labels_in_content_group() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let mut store = Store::open(dir.path().join("mail.db")).expect("打开数据库");
+        store.run_migrations().expect("跑迁移");
+
+        let conn = store.conn();
+        let content_id: i64 = conn
+            .query_row(
+                "SELECT id FROM mail_label_group WHERE name = '内容分类'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("读内容分类组");
+
+        for (name, expected_sort) in [
+            ("客户", 10_i64),
+            ("账单", 20),
+            ("通知", 30),
+            ("推广", 40),
+            ("招聘", 50),
+            ("同事", 60),
+            ("家人", 70),
+            ("其他", 1000),
+        ] {
+            let (group_id, sort_order): (i64, i64) = conn
+                .query_row(
+                    "SELECT group_id, sort_order FROM mail_label WHERE name = ?1",
+                    rusqlite::params![name],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("读老标签");
+            assert_eq!(group_id, content_id, "老标签 {name} 应在内容分类组");
+            assert_eq!(sort_order, expected_sort, "老标签 {name} 排序应不变");
+        }
+
+        let (fallback_name, fallback_color): (String, String) = conn
+            .query_row(
+                "SELECT name, color FROM mail_label WHERE group_id = ?1 AND is_fallback = 1",
+                rusqlite::params![content_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("读兜底标签");
+        assert_eq!(fallback_name, "其他");
+        assert_eq!(fallback_color, "gray");
+
+        let fallback_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM mail_label WHERE group_id = ?1 AND is_fallback = 1",
+                rusqlite::params![content_id],
+                |row| row.get(0),
+            )
+            .expect("数组内兜底");
+        assert_eq!(fallback_count, 1, "每组内最多一个兜底");
+
+        let boolean_labels: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM mail_label l JOIN mail_label_group g ON g.id = l.group_id \
+                 WHERE g.name = '需要我回复'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("数是否题标签");
+        assert_eq!(boolean_labels, 2, "是否题组应预置两条标签");
+
+        let message_label_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'message_label'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("读结果表 SQL");
+        assert!(
+            message_label_sql.contains("PRIMARY KEY (message_id, group_id)"),
+            "结果表主键应是（邮件, 组）：{message_label_sql}"
+        );
+    }
+    #[test]
     fn 迁移清单与校验和的基本性质() {
-        assert_eq!(MIGRATIONS.len(), 15);
-        assert_eq!(supported_version(), 15);
+        assert_eq!(MIGRATIONS.len(), 16);
+        assert_eq!(supported_version(), 16);
         assert_eq!(checksum("abc"), checksum("abc"));
         assert_ne!(checksum("abc"), checksum("abd"));
     }
