@@ -1,7 +1,7 @@
 //! 本地邮件分类标签。
 //!
 //! 标签是纯本地数据：只写这个库，不回写邮件服务器，也不参与账号同步。
-//! 每封邮件最多一个标签（`message_label.message_id` 是主键，见设计规格 D3）。
+//! 每封邮件在每个标签组里最多一条结果（`message_label` 的主键是邮件和组）。
 //! 颜色只存固定色板键，不存十六进制色值；模型不接触颜色。
 
 use rusqlite::OptionalExtension;
@@ -22,13 +22,15 @@ pub const MAX_LABEL_NAME_CHARS: usize = 64;
 pub struct MailLabel {
     /// 主键。
     pub id: i64,
-    /// 标签名（唯一）。
+    /// 所属标签组。
+    pub group_id: i64,
+    /// 标签名（同一组内唯一）。
     pub name: String,
     /// 固定色板键，例如 `orange`。
     pub color: String,
     /// 显示顺序，小的在前。
     pub sort_order: i64,
-    /// 是否是兜底标签「其他」。有且只有一条。
+    /// 是否是所在组的兜底标签。每组最多一条。
     pub is_fallback: bool,
 }
 
@@ -122,6 +124,21 @@ pub struct LabelGroup {
     pub sort_order: i64,
 }
 
+/// 一封邮件在某个标签组里的结果。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageGroupResult {
+    /// 所属标签组。
+    pub group: LabelGroup,
+    /// 选择题或是否题命中的标签；打分题为空。
+    pub label: Option<MailLabel>,
+    /// 打分题的数字；选择题或是否题为空。
+    pub score_value: Option<i64>,
+    /// 这条结果是自动写的还是用户手改的。
+    pub source: MailLabelSource,
+    /// 模型或人工给的把握程度。
+    pub confidence: Option<f64>,
+}
+
 const SELECT_GROUP: &str =
     "SELECT id, name, kind, enabled, confidence_threshold, score_min, score_max, sort_order FROM mail_label_group";
 
@@ -193,15 +210,16 @@ fn map_group_name_error(err: rusqlite::Error) -> StoreError {
     StoreError::from(err)
 }
 
-const SELECT_LABEL: &str = "SELECT id, name, color, sort_order, is_fallback FROM mail_label";
+const SELECT_LABEL: &str = "SELECT id, group_id, name, color, sort_order, is_fallback FROM mail_label";
 
 fn row_to_label(row: &rusqlite::Row<'_>) -> rusqlite::Result<MailLabel> {
     Ok(MailLabel {
         id: row.get(0)?,
-        name: row.get(1)?,
-        color: row.get(2)?,
-        sort_order: row.get(3)?,
-        is_fallback: row.get::<_, i64>(4)? != 0,
+        group_id: row.get(1)?,
+        name: row.get(2)?,
+        color: row.get(3)?,
+        sort_order: row.get(4)?,
+        is_fallback: row.get::<_, i64>(5)? != 0,
     })
 }
 
@@ -222,19 +240,83 @@ fn normalized_label_name(name: &str) -> Result<String, StoreError> {
 /// 把「标签名重复」的唯一索引报错翻译成可读错误，其它原样透传。
 fn map_label_name_error(err: rusqlite::Error) -> StoreError {
     if let rusqlite::Error::SqliteFailure(_, Some(message)) = &err {
-        if message.contains("idx_mail_label_name") || message.contains("mail_label.name") {
+        if message.contains("idx_mail_label_group_name")
+            || message.contains("idx_mail_label_name")
+            || message.contains("mail_label.name")
+        {
             return StoreError::InvalidData("已经有同名标签".to_string());
         }
     }
     StoreError::from(err)
 }
 
+const SELECT_GROUP_RESULT: &str = "
+SELECT g.id, g.name, g.kind, g.enabled, g.confidence_threshold, g.score_min, g.score_max, g.sort_order,
+       l.id, l.group_id, l.name, l.color, l.sort_order, l.is_fallback,
+       ml.score_value, ml.source, ml.confidence
+FROM message_label ml
+JOIN mail_label_group g ON g.id = ml.group_id
+LEFT JOIN mail_label l ON l.id = ml.label_id";
+
+fn row_to_group_result(row: &rusqlite::Row<'_>) -> rusqlite::Result<MessageGroupResult> {
+    let kind_raw: String = row.get(2)?;
+    let group = LabelGroup {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        kind: LabelGroupKind::parse(&kind_raw).unwrap_or(LabelGroupKind::Choice),
+        enabled: row.get::<_, i64>(3)? != 0,
+        confidence_threshold: row.get(4)?,
+        score_min: row.get(5)?,
+        score_max: row.get(6)?,
+        sort_order: row.get(7)?,
+    };
+    let label_id: Option<i64> = row.get(8)?;
+    let label = match label_id {
+        Some(id) => Some(MailLabel {
+            id,
+            group_id: row.get(9)?,
+            name: row.get(10)?,
+            color: row.get(11)?,
+            sort_order: row.get(12)?,
+            is_fallback: row.get::<_, i64>(13)? != 0,
+        }),
+        None => None,
+    };
+    let source_raw: String = row.get(15)?;
+    Ok(MessageGroupResult {
+        group,
+        label,
+        score_value: row.get(14)?,
+        source: MailLabelSource::parse(&source_raw).unwrap_or(MailLabelSource::Auto),
+        confidence: row.get(16)?,
+    })
+}
 impl Store {
-    /// 列出全部标签，按 `sort_order` 升序、主键升序。
+    /// 取默认的「内容分类」组编号；只给旧接口过渡用。
+    fn legacy_content_group_id(&self) -> Result<i64, StoreError> {
+        self.conn()
+            .query_row(
+                "SELECT id FROM mail_label_group WHERE name = '内容分类'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::InvalidData("找不到内容分类标签组".to_string()))
+    }
+
+    /// 过渡兼容：旧接口只处理内容分类组。
     pub fn list_mail_labels(&self) -> Result<Vec<MailLabel>, StoreError> {
-        let sql = format!("{SELECT_LABEL} ORDER BY sort_order ASC, id ASC");
+        self.list_group_labels(self.legacy_content_group_id()?)
+    }
+
+    /// 列出某个组里的标签，按 `sort_order` 升序、主键升序。
+    pub fn list_group_labels(&self, group_id: i64) -> Result<Vec<MailLabel>, StoreError> {
+        if self.get_label_group(group_id)?.is_none() {
+            return Err(StoreError::InvalidData("标签组不存在".to_string()));
+        }
+        let sql = format!("{SELECT_LABEL} WHERE group_id = ?1 ORDER BY sort_order ASC, id ASC");
         let mut stmt = self.conn().prepare(&sql)?;
-        let mut rows = stmt.query([])?;
+        let mut rows = stmt.query([group_id])?;
         let mut labels = Vec::new();
         while let Some(row) = rows.next()? {
             labels.push(row_to_label(row)?);
@@ -251,27 +333,46 @@ impl Store {
             .map_err(StoreError::from)
     }
 
-    /// 取兜底标签（有且只有一条）。
+    /// 过渡兼容：取内容分类组的兜底标签。
     pub fn fallback_mail_label(&self) -> Result<Option<MailLabel>, StoreError> {
-        let sql = format!("{SELECT_LABEL} WHERE is_fallback = 1");
+        self.fallback_group_label(self.legacy_content_group_id()?)
+    }
+
+    /// 取某个组的兜底标签。
+    pub fn fallback_group_label(&self, group_id: i64) -> Result<Option<MailLabel>, StoreError> {
+        let sql = format!("{SELECT_LABEL} WHERE group_id = ?1 AND is_fallback = 1");
         self.conn()
-            .query_row(&sql, [], row_to_label)
+            .query_row(&sql, [group_id], row_to_label)
             .optional()
             .map_err(StoreError::from)
     }
 
-    /// 新增标签，返回新主键。
-    ///
-    /// 颜色按固定色板顺序挑第一个尚未使用的；全部用过时按当前标签数量取模循环。
-    /// 排序值放在所有非兜底标签之后、兜底标签之前。
+    /// 过渡兼容：在内容分类组新增标签。
     pub fn create_mail_label(&self, name: &str) -> Result<i64, StoreError> {
+        self.create_group_label(self.legacy_content_group_id()?, name)
+    }
+
+    /// 在某个组新增标签，返回新主键。
+    ///
+    /// 颜色按固定色板顺序挑组内第一个尚未使用的；全部用过时按组内标签数量取模循环。
+    /// 排序值放在组内所有非兜底标签之后、兜底标签之前。
+    pub fn create_group_label(&self, group_id: i64, name: &str) -> Result<i64, StoreError> {
         let name = normalized_label_name(name)?;
         let tx = self.conn().unchecked_transaction()?;
+        let group_exists = tx
+            .query_row("SELECT 1 FROM mail_label_group WHERE id = ?1", [group_id], |_| {
+                Ok(true)
+            })
+            .optional()?
+            .unwrap_or(false);
+        if !group_exists {
+            return Err(StoreError::InvalidData("标签组不存在".to_string()));
+        }
 
         let mut used = Vec::new();
         {
-            let mut stmt = tx.prepare("SELECT color FROM mail_label")?;
-            let mut rows = stmt.query([])?;
+            let mut stmt = tx.prepare("SELECT color FROM mail_label WHERE group_id = ?1")?;
+            let mut rows = stmt.query([group_id])?;
             while let Some(row) = rows.next()? {
                 used.push(row.get::<_, String>(0)?);
             }
@@ -284,14 +385,17 @@ impl Store {
             .unwrap_or_else(|| MAIL_LABEL_COLORS[(total as usize) % MAIL_LABEL_COLORS.len()]);
 
         let max_order: i64 = tx.query_row(
-            "SELECT COALESCE(MAX(sort_order), 0) FROM mail_label WHERE is_fallback = 0",
-            [],
+            "SELECT COALESCE(MAX(sort_order), 0)
+             FROM mail_label
+             WHERE group_id = ?1 AND is_fallback = 0",
+            [group_id],
             |row| row.get(0),
         )?;
 
         tx.execute(
-            "INSERT INTO mail_label (name, color, sort_order, is_fallback) VALUES (?1, ?2, ?3, 0)",
-            rusqlite::params![name, color, max_order + 10],
+            "INSERT INTO mail_label (group_id, name, color, sort_order, is_fallback)
+             VALUES (?1, ?2, ?3, ?4, 0)",
+            rusqlite::params![group_id, name, color, max_order + 10],
         )
         .map_err(map_label_name_error)?;
         let id = tx.last_insert_rowid();
@@ -299,63 +403,101 @@ impl Store {
         Ok(id)
     }
 
-    /// 给标签改名。兜底标签也可以改名。
+    /// 过渡兼容：按标签主键改名。
     pub fn rename_mail_label(&self, id: i64, name: &str) -> Result<(), StoreError> {
+        let label = self
+            .get_mail_label(id)?
+            .ok_or_else(|| StoreError::InvalidData("标签不存在".to_string()))?;
+        self.rename_group_label(label.group_id, id, name)
+    }
+
+    /// 给某个组内的标签改名；兜底标签也可以改名。
+    pub fn rename_group_label(&self, group_id: i64, id: i64, name: &str) -> Result<(), StoreError> {
         let name = normalized_label_name(name)?;
         let changed = self
             .conn()
             .execute(
                 "UPDATE mail_label
-                 SET name = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                 WHERE id = ?1",
-                rusqlite::params![id, name],
+                 SET name = ?3, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE id = ?1 AND group_id = ?2",
+                rusqlite::params![id, group_id, name],
             )
             .map_err(map_label_name_error)?;
         if changed == 0 {
-            return Err(StoreError::InvalidData("标签不存在".to_string()));
+            return Err(StoreError::InvalidData("标签不存在或不属于该组".to_string()));
         }
         Ok(())
     }
 
-    /// 删除标签；兜底标签拒绝删除。邮件上的关联记录由外键级联清掉。
+    /// 过渡兼容：按标签主键删除。
     pub fn delete_mail_label(&self, id: i64) -> Result<(), StoreError> {
-        let fallback = self
+        let label = self
             .get_mail_label(id)?
-            .ok_or_else(|| StoreError::InvalidData("标签不存在".to_string()))?
-            .is_fallback;
-        if fallback {
+            .ok_or_else(|| StoreError::InvalidData("标签不存在".to_string()))?;
+        self.delete_group_label(label.group_id, id)
+    }
+
+    /// 删除某个组里的标签；兜底标签拒绝删除。邮件结果由外键级联清掉。
+    pub fn delete_group_label(&self, group_id: i64, id: i64) -> Result<(), StoreError> {
+        let label = self
+            .get_mail_label(id)?
+            .ok_or_else(|| StoreError::InvalidData("标签不存在".to_string()))?;
+        if label.group_id != group_id {
+            return Err(StoreError::InvalidData("标签不存在或不属于该组".to_string()));
+        }
+        if label.is_fallback {
             return Err(StoreError::InvalidData("兜底标签不能删除".to_string()));
         }
-        self.conn()
-            .execute("DELETE FROM mail_label WHERE id = ?1", [id])?;
+        self.conn().execute(
+            "DELETE FROM mail_label WHERE id = ?1 AND group_id = ?2",
+            rusqlite::params![id, group_id],
+        )?;
         Ok(())
     }
 
-    /// 修改标签颜色，只接受固定色板键；兜底标签颜色固定灰色，拒绝修改。
+    /// 过渡兼容：按标签主键改颜色。
     pub fn set_mail_label_color(&self, id: i64, color: &str) -> Result<(), StoreError> {
+        let label = self
+            .get_mail_label(id)?
+            .ok_or_else(|| StoreError::InvalidData("标签不存在".to_string()))?;
+        self.set_group_label_color(label.group_id, id, color)
+    }
+
+    /// 修改某个组内标签颜色，只接受固定色板键；兜底标签颜色固定灰色，拒绝修改。
+    pub fn set_group_label_color(&self, group_id: i64, id: i64, color: &str) -> Result<(), StoreError> {
         if !MAIL_LABEL_COLORS.contains(&color) {
             return Err(StoreError::InvalidData("颜色只能从固定色板里选".to_string()));
         }
         let label = self
             .get_mail_label(id)?
             .ok_or_else(|| StoreError::InvalidData("标签不存在".to_string()))?;
+        if label.group_id != group_id {
+            return Err(StoreError::InvalidData("标签不存在或不属于该组".to_string()));
+        }
         if label.is_fallback {
             return Err(StoreError::InvalidData("兜底标签颜色不能修改".to_string()));
         }
         self.conn().execute(
             "UPDATE mail_label
-             SET color = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-             WHERE id = ?1",
-            rusqlite::params![id, color],
+             SET color = ?3, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE id = ?1 AND group_id = ?2",
+            rusqlite::params![id, group_id, color],
         )?;
         Ok(())
     }
 
-    /// 重新排序；必须传入全部标签主键且不能重复，按传入顺序写 `sort_order`。
+    /// 过渡兼容：重排内容分类组里的全部标签。
     pub fn reorder_mail_labels(&self, ids: &[i64]) -> Result<(), StoreError> {
+        self.reorder_group_labels(self.legacy_content_group_id()?, ids)
+    }
+
+    /// 重新排序某个组内的标签；必须传入该组全部标签主键且不能重复。
+    pub fn reorder_group_labels(&self, group_id: i64, ids: &[i64]) -> Result<(), StoreError> {
         let mut existing: Vec<i64> = {
-            let mut stmt = self.conn().prepare("SELECT id FROM mail_label")?;
-            let mut rows = stmt.query([])?;
+            let mut stmt = self
+                .conn()
+                .prepare("SELECT id FROM mail_label WHERE group_id = ?1")?;
+            let mut rows = stmt.query([group_id])?;
             let mut collected = Vec::new();
             while let Some(row) = rows.next()? {
                 collected.push(row.get::<_, i64>(0)?);
@@ -371,16 +513,16 @@ impl Store {
         }
         existing.sort_unstable();
         if given != existing {
-            return Err(StoreError::InvalidData("排序必须包含全部标签".to_string()));
+            return Err(StoreError::InvalidData("排序必须包含该组全部标签".to_string()));
         }
 
         let tx = self.conn().unchecked_transaction()?;
         for (index, id) in ids.iter().enumerate() {
             tx.execute(
                 "UPDATE mail_label
-                 SET sort_order = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                 WHERE id = ?1",
-                rusqlite::params![id, (index as i64 + 1) * 10],
+                 SET sort_order = ?3, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE id = ?1 AND group_id = ?2",
+                rusqlite::params![id, group_id, (index as i64 + 1) * 10],
             )?;
         }
         tx.commit()?;
@@ -553,13 +695,36 @@ impl Store {
 }
 
 impl Store {
-    /// 给邮件写标签：一封邮件只有一个标签，已有就整行覆盖。
-    ///
-    /// 写入前校验邮件和标签都存在；把握程度不为空时必须在 0 到 1 之间。
+    /// 过渡兼容：把标签写进它所属的组。
     pub fn set_message_label(
         &self,
         message_id: i64,
         label_id: i64,
+        source: MailLabelSource,
+        confidence: Option<f64>,
+    ) -> Result<(), StoreError> {
+        let label = self
+            .get_mail_label(label_id)?
+            .ok_or_else(|| StoreError::InvalidData("标签不存在".to_string()))?;
+        self.set_message_group_value(
+            message_id,
+            label.group_id,
+            Some(label_id),
+            None,
+            source,
+            confidence,
+        )
+    }
+
+    /// 给一封邮件的某个组写结果；同一组已有结果就整行覆盖。
+    ///
+    /// 选择题和是否题只能写组内标签；打分题只能写组内上下限之间的整数。
+    pub fn set_message_group_value(
+        &self,
+        message_id: i64,
+        group_id: i64,
+        label_id: Option<i64>,
+        score_value: Option<i64>,
         source: MailLabelSource,
         confidence: Option<f64>,
     ) -> Result<(), StoreError> {
@@ -571,80 +736,145 @@ impl Store {
         if !message_exists {
             return Err(StoreError::InvalidData("邮件不存在".to_string()));
         }
-        if self.get_mail_label(label_id)?.is_none() {
-            return Err(StoreError::InvalidData("标签不存在".to_string()));
-        }
+
+        let group = self
+            .get_label_group(group_id)?
+            .ok_or_else(|| StoreError::InvalidData("标签组不存在".to_string()))?;
+
         if let Some(value) = confidence {
             if value.is_nan() || !(0.0..=1.0).contains(&value) {
                 return Err(StoreError::InvalidData("把握程度必须在 0 到 1 之间".to_string()));
             }
         }
 
+        match group.kind {
+            LabelGroupKind::Choice | LabelGroupKind::Boolean => {
+                if score_value.is_some() {
+                    return Err(StoreError::InvalidData("选择题和是否题只能写标签".to_string()));
+                }
+                let label_id = label_id
+                    .ok_or_else(|| StoreError::InvalidData("选择题和是否题必须写一个标签".to_string()))?;
+                let belongs = self
+                    .conn()
+                    .query_row(
+                        "SELECT 1 FROM mail_label WHERE id = ?1 AND group_id = ?2",
+                        rusqlite::params![label_id, group_id],
+                        |_| Ok(true),
+                    )
+                    .optional()?
+                    .unwrap_or(false);
+                if !belongs {
+                    return Err(StoreError::InvalidData("标签不存在或不属于该组".to_string()));
+                }
+            }
+            LabelGroupKind::Score => {
+                if label_id.is_some() {
+                    return Err(StoreError::InvalidData("打分题只能写数字".to_string()));
+                }
+                let score =
+                    score_value.ok_or_else(|| StoreError::InvalidData("打分题必须写数字".to_string()))?;
+                let (min, max) = match (group.score_min, group.score_max) {
+                    (Some(min), Some(max)) => (min, max),
+                    _ => {
+                        return Err(StoreError::InvalidData(
+                            "打分题缺少上下限，不能写结果".to_string(),
+                        ))
+                    }
+                };
+                if !(min..=max).contains(&score) {
+                    return Err(StoreError::InvalidData(format!("打分必须在 {min} 到 {max} 之间")));
+                }
+            }
+        }
+
         self.conn().execute(
-            "INSERT INTO message_label (message_id, label_id, source, confidence)
-             VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(message_id) DO UPDATE SET
+            "INSERT INTO message_label
+                 (message_id, group_id, label_id, score_value, source, confidence)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(message_id, group_id) DO UPDATE SET
                  label_id = excluded.label_id,
+                 score_value = excluded.score_value,
                  source = excluded.source,
                  confidence = excluded.confidence,
                  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
-            rusqlite::params![message_id, label_id, source.as_str(), confidence],
+            rusqlite::params![
+                message_id,
+                group_id,
+                label_id,
+                score_value,
+                source.as_str(),
+                confidence
+            ],
         )?;
         Ok(())
     }
 
-    /// 读邮件的标签，返回标签、把握程度和来源；没有标签返回 `None`。
+    /// 过渡兼容：只读内容分类组的结果。
     pub fn get_message_label(
         &self,
         message_id: i64,
     ) -> Result<Option<(MailLabel, Option<f64>, MailLabelSource)>, StoreError> {
-        let found = self
-            .conn()
-            .query_row(
-                "SELECT l.id, l.name, l.color, l.sort_order, l.is_fallback, ml.confidence, ml.source
-                 FROM message_label ml
-                 JOIN mail_label l ON l.id = ml.label_id
-                 WHERE ml.message_id = ?1",
-                [message_id],
-                |row| {
-                    let label = MailLabel {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        color: row.get(2)?,
-                        sort_order: row.get(3)?,
-                        is_fallback: row.get::<_, i64>(4)? != 0,
-                    };
-                    let confidence: Option<f64> = row.get(5)?;
-                    let source: String = row.get(6)?;
-                    Ok((label, confidence, source))
-                },
-            )
-            .optional()?;
-
-        Ok(found.map(|(label, confidence, source)| {
-            let source = MailLabelSource::parse(&source).unwrap_or(MailLabelSource::Auto);
-            (label, confidence, source)
-        }))
+        let content = self.legacy_content_group_id()?;
+        match self.message_group_result(message_id, content)? {
+            Some(result) => match result.label {
+                Some(label) => Ok(Some((label, result.confidence, result.source))),
+                None => Ok(None),
+            },
+            None => Ok(None),
+        }
     }
 
-    /// 清空邮件的标签；返回是否真的删掉了一行。
+    /// 读一封邮件某个组的结果；没有结果返回 `None`。
+    pub fn message_group_result(
+        &self,
+        message_id: i64,
+        group_id: i64,
+    ) -> Result<Option<MessageGroupResult>, StoreError> {
+        let sql = format!("{SELECT_GROUP_RESULT} WHERE ml.message_id = ?1 AND ml.group_id = ?2");
+        self.conn()
+            .query_row(&sql, rusqlite::params![message_id, group_id], row_to_group_result)
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    /// 过渡兼容：只清内容分类组的结果。
     pub fn clear_message_label(&self, message_id: i64) -> Result<bool, StoreError> {
-        let changed = self
-            .conn()
-            .execute("DELETE FROM message_label WHERE message_id = ?1", [message_id])?;
+        self.clear_message_group_value(message_id, self.legacy_content_group_id()?)
+    }
+
+    /// 清空一封邮件某个组的结果；返回是否真的删掉了一行。
+    pub fn clear_message_group_value(&self, message_id: i64, group_id: i64) -> Result<bool, StoreError> {
+        let changed = self.conn().execute(
+            "DELETE FROM message_label WHERE message_id = ?1 AND group_id = ?2",
+            rusqlite::params![message_id, group_id],
+        )?;
         Ok(changed > 0)
     }
 
-    /// 按标签名精确取邮件编号（升序）。
+    /// 列出某封邮件的全部组结果，按组排序升序。
+    pub fn list_message_group_results(&self, message_id: i64) -> Result<Vec<MessageGroupResult>, StoreError> {
+        let sql =
+            format!("{SELECT_GROUP_RESULT} WHERE ml.message_id = ?1 ORDER BY g.sort_order ASC, g.id ASC");
+        let mut stmt = self.conn().prepare(&sql)?;
+        let mut rows = stmt.query([message_id])?;
+        let mut results = Vec::new();
+        while let Some(row) = rows.next()? {
+            results.push(row_to_group_result(row)?);
+        }
+        Ok(results)
+    }
+
+    /// 过渡兼容：按内容分类组的标签名精确取邮件编号（升序）。
     pub fn list_message_ids_with_label(&self, label_name: &str) -> Result<Vec<i64>, StoreError> {
+        let content = self.legacy_content_group_id()?;
         let mut stmt = self.conn().prepare(
             "SELECT ml.message_id
              FROM message_label ml
              JOIN mail_label l ON l.id = ml.label_id
-             WHERE l.name = ?1
+             WHERE ml.group_id = ?1 AND l.name = ?2
              ORDER BY ml.message_id ASC",
         )?;
-        let mut rows = stmt.query([label_name])?;
+        let mut rows = stmt.query(rusqlite::params![content, label_name])?;
         let mut ids = Vec::new();
         while let Some(row) = rows.next()? {
             ids.push(row.get::<_, i64>(0)?);
@@ -988,6 +1218,129 @@ mod tests {
         ));
     }
 
+    fn default_group_id(store: &Store, name: &str) -> i64 {
+        store
+            .list_label_groups()
+            .expect("标签组列表")
+            .into_iter()
+            .find(|group| group.name == name)
+            .expect("找到标签组")
+            .id
+    }
+
+    fn group_label_id(store: &Store, group_id: i64, name: &str) -> i64 {
+        store
+            .list_group_labels(group_id)
+            .expect("组内标签列表")
+            .into_iter()
+            .find(|label| label.name == name)
+            .expect("找到组内标签")
+            .id
+    }
+
+    #[test]
+    fn message_group_result_round_trip() {
+        let store = store();
+        let message = seeded_messages(&store, &[600])[0];
+        let content = default_group_id(&store, "内容分类");
+        let bill = group_label_id(&store, content, "账单");
+
+        store
+            .set_message_group_value(
+                message,
+                content,
+                Some(bill),
+                None,
+                MailLabelSource::Auto,
+                Some(0.9),
+            )
+            .expect("写内容分类结果");
+
+        let found = store
+            .message_group_result(message, content)
+            .expect("读结果")
+            .expect("有结果");
+        assert_eq!(found.group.id, content);
+        assert_eq!(found.label.as_ref().expect("标签").name, "账单");
+        assert_eq!(found.score_value, None);
+        assert_eq!(found.source, MailLabelSource::Auto);
+        assert_eq!(found.confidence, Some(0.9));
+
+        let all = store.list_message_group_results(message).expect("列出全部组结果");
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].group.id, content);
+
+        assert!(store
+            .clear_message_group_value(message, content)
+            .expect("清空结果"));
+        assert!(store
+            .message_group_result(message, content)
+            .expect("再读")
+            .is_none());
+    }
+
+    #[test]
+    fn score_group_result_stores_number() {
+        let store = store();
+        let message = seeded_messages(&store, &[601])[0];
+        let urgency = default_group_id(&store, "紧急程度");
+
+        store
+            .set_message_group_value(
+                message,
+                urgency,
+                None,
+                Some(3),
+                MailLabelSource::Manual,
+                Some(0.8),
+            )
+            .expect("写 3 分");
+
+        let found = store
+            .message_group_result(message, urgency)
+            .expect("读结果")
+            .expect("有结果");
+        assert_eq!(found.score_value, Some(3));
+        assert_eq!(found.label, None);
+        assert_eq!(found.source, MailLabelSource::Manual);
+
+        assert!(matches!(
+            store
+                .set_message_group_value(message, urgency, None, Some(9), MailLabelSource::Manual, None,)
+                .expect_err("9 分越界"),
+            StoreError::InvalidData(_)
+        ));
+    }
+
+    #[test]
+    fn deleting_group_clears_results() {
+        let store = store();
+        let message = seeded_messages(&store, &[602])[0];
+        let group = store
+            .create_label_group("临时维度", LabelGroupKind::Choice, None, None)
+            .expect("建组");
+        let label = store.create_group_label(group, "临时标签").expect("建标签");
+        store
+            .set_message_group_value(message, group, Some(label), None, MailLabelSource::Manual, None)
+            .expect("写结果");
+        assert!(store
+            .message_group_result(message, group)
+            .expect("读结果")
+            .is_some());
+
+        store.delete_label_group(group).expect("删组");
+
+        let rows: i64 = store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM message_label WHERE group_id = ?1",
+                [group],
+                |row| row.get(0),
+            )
+            .expect("数组结果");
+        assert_eq!(rows, 0);
+        assert!(store.get_mail_label(label).expect("查标签").is_none());
+    }
     #[test]
     fn label_group_crud_and_uniqueness() {
         let store = store();
