@@ -405,6 +405,7 @@ describe("列表标签胶囊", () => {
       labelId: 2,
       labelName: "账单",
       labelColor: "orange",
+      groupResults: [],
       ...overrides,
     };
   }
@@ -531,6 +532,7 @@ describe("收件箱右键立即分类", () => {
       labelId: null,
       labelName: null,
       labelColor: null,
+      groupResults: [],
       ...overrides,
     };
   }

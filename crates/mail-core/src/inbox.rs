@@ -8,7 +8,7 @@ use mail_store::{AccountInboxSummary, InboxFolder, InboxMessage, InboxQuery, Inb
 use crate::engine::{EngineError, MailEngine};
 
 /// 一页收件箱邮件。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InboxMessagePage {
     /// 本页邮件。
     pub items: Vec<InboxMessage>,
@@ -21,7 +21,7 @@ pub struct InboxMessagePage {
 }
 
 /// 一页会话线程。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InboxThreadPage {
     /// 本页线程。
     pub items: Vec<InboxThread>,

@@ -53,6 +53,7 @@ const MESSAGE: InboxMessage = {
   labelId: null,
   labelName: null,
   labelColor: null,
+  groupResults: [],
 };
 
 /** 网易 163 超大附件的正文片段：正文里只有下载链接，没有 MIME 附件。 */

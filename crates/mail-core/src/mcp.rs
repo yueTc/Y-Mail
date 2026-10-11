@@ -869,6 +869,7 @@ mod tests {
             label_id: None,
             label_name: None,
             label_color: None,
+            group_results: Vec::new(),
         };
         let view = McpMessageView::from(&message);
         assert_eq!(view.subject, "你好");

@@ -247,6 +247,8 @@ export interface InboxMessage {
   labelName: string | null;
   /** 标签颜色键；没有标签为 null。 */
   labelColor: string | null;
+  /** 一封邮件在各标签组里的结果，按组的显示顺序升序；没有结果就是空数组。 */
+  groupResults: MessageGroupResult[];
 }
 
 /** 折叠后的一条会话线程。 */
@@ -638,6 +640,39 @@ export interface MailLabel {
   color: string;
   sortOrder: number;
   isFallback: boolean;
+}
+
+/** 标签组类型：choice 选择题、boolean 是否题、score 打分题。 */
+export type LabelGroupKind = "choice" | "boolean" | "score";
+
+/** 一个标签组（一个判断维度）。 */
+export interface LabelGroup {
+  id: number;
+  name: string;
+  kind: LabelGroupKind;
+  enabled: boolean;
+  /** 这一组的把握门槛，范围 0.5–0.99。 */
+  confidenceThreshold: number;
+  /** 打分题下限；其它类型为 null。 */
+  scoreMin: number | null;
+  /** 打分题上限；其它类型为 null。 */
+  scoreMax: number | null;
+  sortOrder: number;
+}
+
+/** 这条结果是自动分类写的还是用户手改的。 */
+export type MailLabelSource = "auto" | "manual";
+
+/** 一封邮件在一个标签组里的结果。 */
+export interface MessageGroupResult {
+  group: LabelGroup;
+  /** 选择题或是否题命中的标签；打分题为 null。 */
+  label: MailLabel | null;
+  /** 打分题的数字；选择题或是否题为 null。 */
+  scoreValue: number | null;
+  source: MailLabelSource;
+  /** 把握程度。 */
+  confidence: number | null;
 }
 
 /** 分类预览里的一封目标邮件。 */

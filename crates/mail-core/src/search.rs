@@ -14,7 +14,7 @@ use crate::engine::{EngineError, MailEngine};
 const MAX_DEEP_ACCOUNTS: usize = 3;
 
 /// 深拉返回：本地结果 + 是否真的补过历史 + 补历史时的问题。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DeepSearchPage {
     /// 最终这一页结果。
     pub page: SearchPage,
@@ -112,7 +112,7 @@ mod tests {
     }
 
     #[test]
-    fn 标签筛选能搜到贴了标签的邮件() {
+    fn 标签组筛选能搜到贴了标签的邮件() {
         use mail_domain::FolderKind;
         use mail_store::{InboxQuery, MailLabelSource, NewMessage};
 
@@ -173,21 +173,35 @@ mod tests {
             .first()
             .expect("应有邮件")
             .id;
+        let content_group = store
+            .list_label_groups()
+            .expect("标签组")
+            .into_iter()
+            .find(|group| group.name == "内容分类")
+            .expect("预置内容分类组")
+            .id;
         let label_id = store
-            .list_mail_labels()
-            .expect("标签")
+            .list_group_labels(content_group)
+            .expect("组内标签")
             .into_iter()
             .find(|label| label.name == "账单")
             .expect("预置账单")
             .id;
         store
-            .set_message_label(message_id, label_id, MailLabelSource::Auto, Some(0.9))
+            .set_message_group_value(
+                message_id,
+                content_group,
+                Some(label_id),
+                None,
+                MailLabelSource::Auto,
+                Some(0.9),
+            )
             .expect("贴标签");
         // 引擎的 store() 是普通互斥锁，调用引擎方法前必须先放掉手里的守卫。
         drop(store);
 
         let page = engine
-            .search_messages(&SearchQuery::new("label:账单", Some(account_id), 0, 50))
+            .search_messages(&SearchQuery::new("tag:内容分类:账单", Some(account_id), 0, 50))
             .expect("搜索标签");
         assert_eq!(page.total, 1);
         assert_eq!(page.items[0].message.label_name.as_deref(), Some("账单"));

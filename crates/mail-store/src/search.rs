@@ -10,11 +10,12 @@
 //!
 //! 安全：关键词只作为 SQL 参数或 FTS 查询串片段，绝不拼接进原始 SQL 文本。
 
-use rusqlite::ToSql;
+use rusqlite::{OptionalExtension, ToSql};
 
 use crate::connection::Store;
 use crate::error::StoreError;
-use crate::inbox::{row_to_message, InboxMessage, INBOX_COLUMNS, LABEL_JOIN};
+use crate::inbox::{row_to_message, InboxMessage, INBOX_COLUMNS};
+use crate::label::LabelGroupKind;
 
 /// 高亮片段的控制字符：FTS 的 snippet() 用它标记命中范围。
 const HL_START: char = '\u{1}';
@@ -30,7 +31,7 @@ pub struct SnippetSegment {
 }
 
 /// 一条搜索结果：邮件 + 高亮片段。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SearchHit {
     /// 命中的邮件（字段与收件箱一致）。
     pub message: InboxMessage,
@@ -39,7 +40,7 @@ pub struct SearchHit {
 }
 
 /// 一页搜索结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SearchPage {
     /// 本页结果。
     pub items: Vec<SearchHit>,
@@ -89,8 +90,17 @@ pub(crate) struct ParsedQuery {
     pub unread_only: bool,
     /// `before:YYYY-MM-DD`。
     pub before: Option<String>,
-    /// `label:标签名`；按名称精确匹配，英文忽略大小写。
-    pub label: Option<String>,
+    /// `tag:组名:值`；按组筛选，具体怎么比由组类型决定。
+    pub tag: Option<TagFilter>,
+}
+
+/// `tag:组名:值` 里的条件。组名里不允许英文冒号，所以按第一个冒号切开。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TagFilter {
+    /// 组名。
+    pub group: String,
+    /// 值；可能是标签名，也可能是 `>=N` / `<=N` 这样的分数比较。
+    pub value: String,
 }
 
 impl ParsedQuery {
@@ -101,7 +111,7 @@ impl ParsedQuery {
             || self.has_attachment
             || self.unread_only
             || self.before.is_some()
-            || self.label.is_some()
+            || self.tag.is_some()
     }
 }
 
@@ -134,11 +144,19 @@ pub(crate) fn parse_query(raw: &str) -> ParsedQuery {
                 continue;
             }
         }
-        if let Some(value) = token.strip_prefix("label:") {
-            let value = value.trim_matches('"').trim();
-            if !value.is_empty() {
-                parsed.label = Some(value.to_string());
-                continue;
+        if let Some(value) = token.strip_prefix("tag:") {
+            // 组名里不能有英文冒号，所以第一个冒号后面全是值。
+            let quoted = value.trim_matches('"');
+            if let Some((group, rest)) = quoted.split_once(':') {
+                let group = group.trim();
+                let rest = rest.trim();
+                if !group.is_empty() && !rest.is_empty() {
+                    parsed.tag = Some(TagFilter {
+                        group: group.to_string(),
+                        value: rest.to_string(),
+                    });
+                    continue;
+                }
             }
         }
         if !token.is_empty() {
@@ -182,8 +200,23 @@ impl FilterBuilder {
     }
 }
 
+/// `tag:` 条件解析出来的组信息，决定 SQL 怎么拼。
+enum ResolvedTag<'a> {
+    /// 选择题 / 是否题：按组内标签名精确匹配。
+    Label { group_id: i64, name: &'a str },
+    /// 打分题：按分数等于或比较。
+    Score { group_id: i64, op: ScoreOp, value: i64 },
+}
+
+/// 打分题的比较方式。
+enum ScoreOp {
+    Equal,
+    AtLeast,
+    AtMost,
+}
+
 /// 查询只在一处拼装，两个分支（FTS / LIKE）共用同样的过滤条件。
-fn build_filter(parsed: &ParsedQuery, use_fts: bool) -> FilterBuilder {
+fn build_filter(parsed: &ParsedQuery, use_fts: bool, tag: Option<&ResolvedTag<'_>>) -> FilterBuilder {
     let mut builder = FilterBuilder {
         sql: Vec::new(),
         params: Vec::new(),
@@ -224,16 +257,34 @@ fn build_filter(parsed: &ParsedQuery, use_fts: bool) -> FilterBuilder {
         let index = builder.push_param(format!("{before}T00:00:00Z"));
         builder.sql.push(format!("m.date_utc < ?{index}"));
     }
-    if let Some(label) = &parsed.label {
-        // 标签名精确匹配；中文按原样，英文忽略大小写。颜色永不参与匹配。
-        let exact = builder.push_param(label.clone());
-        let folded = builder.push_param(label.clone());
-        builder.sql.push(format!(
-            "EXISTS (SELECT 1 FROM message_label ml2 \
-             JOIN mail_label l2 ON l2.id = ml2.label_id \
-             WHERE ml2.message_id = m.id \
-               AND (l2.name = ?{exact} OR LOWER(l2.name) = LOWER(?{folded})))"
-        ));
+    match tag {
+        Some(ResolvedTag::Label { group_id, name }) => {
+            // 标签名精确匹配；中文按原样，英文忽略大小写。颜色永不参与匹配。
+            let group = builder.push_param(*group_id);
+            let exact = builder.push_param((*name).to_string());
+            let folded = builder.push_param((*name).to_string());
+            builder.sql.push(format!(
+                "EXISTS (SELECT 1 FROM message_label ml2 \
+                 JOIN mail_label l2 ON l2.id = ml2.label_id \
+                 WHERE ml2.message_id = m.id AND ml2.group_id = ?{group} \
+                   AND (l2.name = ?{exact} OR LOWER(l2.name) = LOWER(?{folded})))"
+            ));
+        }
+        Some(ResolvedTag::Score { group_id, op, value }) => {
+            let group = builder.push_param(*group_id);
+            let score = builder.push_param(*value);
+            let cmp = match op {
+                ScoreOp::Equal => "=",
+                ScoreOp::AtLeast => ">=",
+                ScoreOp::AtMost => "<=",
+            };
+            builder.sql.push(format!(
+                "EXISTS (SELECT 1 FROM message_label ml2 \
+                 WHERE ml2.message_id = m.id AND ml2.group_id = ?{group} \
+                   AND ml2.score_value {cmp} ?{score})"
+            ));
+        }
+        None => {}
     }
     builder
 }
@@ -293,7 +344,11 @@ impl Store {
         let has_text_terms = !parsed.keywords.is_empty() || !parsed.from.is_empty();
         let use_fts = has_text_terms && !short_keyword && !short_from;
 
-        let mut filter = build_filter(&parsed, use_fts);
+        let resolved_tag = match &parsed.tag {
+            Some(tag) => Some(self.resolve_tag(tag)?),
+            None => None,
+        };
+        let mut filter = build_filter(&parsed, use_fts, resolved_tag.as_ref());
         let mut where_parts = std::mem::take(&mut filter.sql);
         if let Some(account_id) = query.account_id {
             let index = filter.push_param(account_id);
@@ -327,7 +382,6 @@ impl Store {
              FROM message m \
              JOIN folder f ON f.id = m.folder_id \
              JOIN account a ON a.id = m.account_id \
-             {LABEL_JOIN} \
              {} \
              WHERE {where_sql} \
              ORDER BY m.date_utc DESC, m.id DESC \
@@ -349,6 +403,7 @@ impl Store {
             };
             items.push(SearchHit { message, snippet });
         }
+        self.fill_group_results(items.iter_mut().map(|hit| &mut hit.message))?;
 
         Ok(SearchPage {
             items,
@@ -357,10 +412,55 @@ impl Store {
             limit: query.limit,
         })
     }
+
+    /// 把 `tag:` 里的组名查成组信息；组名不存在或类型对不上都报中文错误。
+    fn resolve_tag<'a>(&self, tag: &'a TagFilter) -> Result<ResolvedTag<'a>, StoreError> {
+        let found: Option<(i64, String)> = self
+            .conn()
+            .query_row(
+                "SELECT id, kind FROM mail_label_group WHERE name = ?1",
+                [tag.group.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((group_id, kind)) = found else {
+            return Err(StoreError::InvalidData(format!(
+                "没有找到标签组「{}」",
+                tag.group
+            )));
+        };
+        match LabelGroupKind::parse(&kind).unwrap_or(LabelGroupKind::Choice) {
+            LabelGroupKind::Choice | LabelGroupKind::Boolean => {
+                if tag.value.starts_with(">=") || tag.value.starts_with("<=") {
+                    return Err(StoreError::InvalidData(format!(
+                        "标签组「{}」不是打分题，不能按分数比较",
+                        tag.group
+                    )));
+                }
+                Ok(ResolvedTag::Label {
+                    group_id,
+                    name: tag.value.as_str(),
+                })
+            }
+            LabelGroupKind::Score => {
+                let (op, number) = if let Some(rest) = tag.value.strip_prefix(">=") {
+                    (ScoreOp::AtLeast, rest)
+                } else if let Some(rest) = tag.value.strip_prefix("<=") {
+                    (ScoreOp::AtMost, rest)
+                } else {
+                    (ScoreOp::Equal, tag.value.as_str())
+                };
+                let value = number.trim().parse::<i64>().map_err(|_| {
+                    StoreError::InvalidData(format!("标签组「{}」是打分题，筛选值要写数字", tag.group))
+                })?;
+                Ok(ResolvedTag::Score { group_id, op, value })
+            }
+        }
+    }
 }
 
 /// 收件箱行结构的列数（`INBOX_COLUMNS` 的列数）。
-const INBOX_COLUMN_COUNT: usize = 22;
+const INBOX_COLUMN_COUNT: usize = 19;
 
 fn fts_join(use_fts: bool) -> &'static str {
     if use_fts {
@@ -462,7 +562,7 @@ fn fallback_snippet(message: &InboxMessage, parsed: &ParsedQuery, body_window: &
 mod tests {
     #[test]
     fn search_column_count_matches_inbox_columns() {
-        assert_eq!(super::INBOX_COLUMN_COUNT, 22);
+        assert_eq!(super::INBOX_COLUMN_COUNT, 19);
         assert_eq!(
             super::INBOX_COLUMN_COUNT,
             crate::inbox::INBOX_COLUMNS.split(',').count()
@@ -558,7 +658,7 @@ mod tests {
     }
 
     #[test]
-    fn label_filter_is_case_insensitive_for_ascii_and_exact_for_chinese() {
+    fn tag_search_filters_by_group_and_label() {
         let store = migrated();
         let a = account(&store, "a@example.com");
         let f = inbox(&store, a);
@@ -606,42 +706,185 @@ mod tests {
             .expect("贴英文标签");
 
         let chinese = store
-            .search_messages(&SearchQuery::new("label:账单", Some(a), 0, 50))
+            .search_messages(&SearchQuery::new("tag:内容分类:账单", Some(a), 0, 50))
             .expect("中文标签搜索");
-        assert_eq!(chinese.total, 1);
+        assert_eq!(chinese.total, 1, "tag: 组名:值 精确命中");
         assert_eq!(chinese.items[0].message.id, chinese_message);
 
         let upper = store
-            .search_messages(&SearchQuery::new("label:BILLS", Some(a), 0, 50))
+            .search_messages(&SearchQuery::new("tag:内容分类:BILLS", Some(a), 0, 50))
             .expect("英文标签大写搜索");
         assert_eq!(upper.total, 1, "英文标签忽略大小写");
 
         let partial = store
-            .search_messages(&SearchQuery::new("label:bill", Some(a), 0, 50))
+            .search_messages(&SearchQuery::new("tag:内容分类:bill", Some(a), 0, 50))
             .expect("英文前缀不应命中");
         assert_eq!(partial.total, 0, "英文标签要精确匹配，不做前缀");
 
         let chinese_partial = store
-            .search_messages(&SearchQuery::new("label:账单x", Some(a), 0, 50))
+            .search_messages(&SearchQuery::new("tag:内容分类:账单x", Some(a), 0, 50))
             .expect("中文前缀不应命中");
         assert_eq!(chinese_partial.total, 0, "中文标签要精确匹配");
 
-        // 只有 label:、没有关键词，也要返回普通数据库结果。
-        assert_eq!(chinese.items.len(), 1, "label: 单独用时不进全文检索");
+        // 只有 tag:、没有关键词，也要返回普通数据库结果。
+        assert_eq!(chinese.items.len(), 1, "tag: 单独用时不进全文检索");
 
         // 与 from: 叠加。
         let stacked = store
-            .search_messages(&SearchQuery::new("label:账单 from:zhangsan", Some(a), 0, 50))
+            .search_messages(&SearchQuery::new(
+                "tag:内容分类:账单 from:zhangsan",
+                Some(a),
+                0,
+                50,
+            ))
             .expect("叠加搜索");
         assert_eq!(stacked.total, 1);
         assert_eq!(stacked.items[0].message.id, chinese_message);
 
         let stacked_miss = store
-            .search_messages(&SearchQuery::new("label:账单 from:lisi", Some(a), 0, 50))
+            .search_messages(&SearchQuery::new("tag:内容分类:账单 from:lisi", Some(a), 0, 50))
             .expect("叠加不命中");
         assert_eq!(stacked_miss.total, 0);
     }
 
+    #[test]
+    fn tag_search_supports_score_comparison() {
+        let store = migrated();
+        let a = account(&store, "a@example.com");
+        let f = inbox(&store, a);
+        store
+            .insert_messages(&[
+                message(
+                    a,
+                    f,
+                    1,
+                    "低紧急邮件",
+                    "张三",
+                    "zhangsan@example.com",
+                    "2026-10-04T10:00:00Z",
+                    true,
+                    false,
+                ),
+                message(
+                    a,
+                    f,
+                    2,
+                    "高紧急邮件",
+                    "李四",
+                    "lisi@example.com",
+                    "2026-10-04T11:00:00Z",
+                    true,
+                    false,
+                ),
+            ])
+            .expect("插入邮件");
+        let low = message_id(&store, 1);
+        let high = message_id(&store, 2);
+        let urgency = group_id(&store, "紧急程度");
+        store
+            .set_message_group_value(low, urgency, None, Some(2), crate::MailLabelSource::Auto, None)
+            .expect("写 2");
+        store
+            .set_message_group_value(high, urgency, None, Some(5), crate::MailLabelSource::Auto, None)
+            .expect("写 5");
+
+        let at_least = store
+            .search_messages(&SearchQuery::new("tag:紧急程度:>=3", Some(a), 0, 50))
+            .expect("大于等于");
+        assert_eq!(at_least.total, 1, ">=3 只回高紧急那封");
+        assert_eq!(at_least.items[0].message.id, high);
+
+        let equal = store
+            .search_messages(&SearchQuery::new("tag:紧急程度:2", Some(a), 0, 50))
+            .expect("等于");
+        assert_eq!(equal.total, 1, "等于 2 只回低紧急那封");
+        assert_eq!(equal.items[0].message.id, low);
+
+        let at_most = store
+            .search_messages(&SearchQuery::new("tag:紧急程度:<=3", Some(a), 0, 50))
+            .expect("小于等于");
+        assert_eq!(at_most.total, 1, "<=3 只回低紧急那封");
+        assert_eq!(at_most.items[0].message.id, low);
+    }
+
+    #[test]
+    fn label_prefix_is_no_longer_recognized() {
+        let store = migrated();
+        let a = account(&store, "a@example.com");
+        let f = inbox(&store, a);
+        store
+            .insert_messages(&[message(
+                a,
+                f,
+                1,
+                "账单邮件",
+                "张三",
+                "zhangsan@example.com",
+                "2026-10-04T10:00:00Z",
+                true,
+                false,
+            )])
+            .expect("插入邮件");
+        let id = message_id(&store, 1);
+        let bill = store
+            .list_mail_labels()
+            .expect("标签")
+            .into_iter()
+            .find(|label| label.name == "账单")
+            .expect("预置账单")
+            .id;
+        store
+            .set_message_label(id, bill, crate::MailLabelSource::Auto, None)
+            .expect("贴标签");
+
+        let legacy = store
+            .search_messages(&SearchQuery::new("label:账单", Some(a), 0, 50))
+            .expect("旧写法");
+        assert_eq!(legacy.total, 0, "label: 已失效，不再当标签筛选");
+
+        let current = store
+            .search_messages(&SearchQuery::new("tag:内容分类:账单", Some(a), 0, 50))
+            .expect("新写法");
+        assert_eq!(current.total, 1, "tag: 新写法能搜到");
+    }
+
+    #[test]
+    fn tag_search_rejects_unknown_group() {
+        let store = migrated();
+        let a = account(&store, "a@example.com");
+        let f = inbox(&store, a);
+        store
+            .insert_messages(&[message(
+                a,
+                f,
+                1,
+                "普通邮件",
+                "张三",
+                "zhangsan@example.com",
+                "2026-10-04T10:00:00Z",
+                true,
+                false,
+            )])
+            .expect("插入邮件");
+
+        let error = store
+            .search_messages(&SearchQuery::new("tag:不存在的组:账单", Some(a), 0, 50))
+            .expect_err("组名不存在应报中文错，不静默返回空");
+        let message = error.to_string();
+        assert!(message.contains("没有找到标签组"), "实际提示：{message}");
+        assert!(message.contains("不存在的组"), "实际提示：{message}");
+    }
+
+    /// 取一个默认标签组的编号（按组名）。
+    fn group_id(store: &Store, name: &str) -> i64 {
+        store
+            .list_label_groups()
+            .expect("标签组")
+            .into_iter()
+            .find(|group| group.name == name)
+            .unwrap_or_else(|| panic!("应存在标签组 {name}"))
+            .id
+    }
     #[test]
     fn 解析查询串识别四种语法() {
         let parsed = parse_query("发票 from:alice has:attachment is:unread before:2026-10-01");

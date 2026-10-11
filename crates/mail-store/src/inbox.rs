@@ -13,10 +13,11 @@ use rusqlite::OptionalExtension;
 
 use crate::connection::Store;
 use crate::error::StoreError;
+use crate::label::MessageGroupResult;
 use crate::sync::decode_attributes;
 
 /// 统一收件箱的一行邮件（已带上账号色标等展示字段）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InboxMessage {
     /// `message` 表主键。
     pub id: i64,
@@ -54,16 +55,18 @@ pub struct InboxMessage {
     pub account_color: String,
     /// 所属文件夹路径。
     pub folder_path: String,
-    /// 本地标签主键；没有标签为 None。
+    /// 过渡兼容：「内容分类」组的结果，方便老界面继续显示一个胶囊；后续任务会移除。
     pub label_id: Option<i64>,
-    /// 标签名；没有标签为 None。
+    /// 过渡兼容：标签名；没有标签为 None。
     pub label_name: Option<String>,
-    /// 标签颜色键；没有标签为 None。
+    /// 过渡兼容：标签颜色键；没有标签为 None。
     pub label_color: Option<String>,
+    /// 各组分类结果，按组的显示顺序升序；没有结果就是空数组。
+    pub group_results: Vec<MessageGroupResult>,
 }
 
 /// 折叠后的一条会话线程。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InboxThread {
     /// 所属账号。
     pub account_id: i64,
@@ -130,15 +133,13 @@ impl Default for InboxQuery {
 }
 
 /// 邮件列表用到的列（顺序与 `row_to_message` 的下标一一对应）。
+///
+/// 分类结果不放进主查询 JOIN：一封邮件现在每个组各一条结果，直接 JOIN 会把一封邮件列成多行。
+/// 组结果在查询收尾时按邮件编号批量补上。
 pub(crate) const INBOX_COLUMNS: &str = "m.id, m.account_id, m.folder_id, m.uid, m.thread_key, \
     m.subject, m.from_name, m.from_addr, m.date_utc, m.size, \
     m.has_attachments, m.is_read, m.is_flagged, m.snippet, m.message_id_header, \
-    a.email, a.display_name, a.color, f.full_path, \
-    ml.label_id, l.name, l.color";
-
-/// 收件箱查询统一带的标签关联：没有标签时三列全空。
-pub(crate) const LABEL_JOIN: &str = "LEFT JOIN message_label ml ON ml.message_id = m.id \
-    LEFT JOIN mail_label l ON l.id = ml.label_id";
+    a.email, a.display_name, a.color, f.full_path";
 
 /// 作用范围过滤：?1 账号编号，?2 文件夹编号，?3 文件夹类型，?5 是否只看红旗。
 ///
@@ -154,13 +155,10 @@ const THREAD_BASE: &str = "SELECT m.id, m.account_id, m.folder_id, m.uid, m.thre
     m.subject, m.from_name, m.from_addr, m.date_utc, m.size, \
     m.has_attachments, m.is_read, m.is_flagged, m.snippet, m.message_id_header, \
     a.email, a.display_name, a.color, f.full_path, \
-    ml.label_id, l.name, l.color, \
     COALESCE(NULLIF(m.thread_key, ''), NULLIF(m.message_id_header, ''), '#' || m.id) AS tkey \
     FROM message m \
     JOIN folder f ON f.id = m.folder_id \
-    JOIN account a ON a.id = m.account_id \
-    LEFT JOIN message_label ml ON ml.message_id = m.id \
-    LEFT JOIN mail_label l ON l.id = ml.label_id";
+    JOIN account a ON a.id = m.account_id";
 
 /// 线程聚合的排序与计数（窗口函数，SQLite 3.25 起可用）。
 const THREAD_RANKED: &str = "SELECT base.*, \
@@ -217,9 +215,10 @@ pub(crate) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxM
         account_display_name: row.get(16)?,
         account_color: row.get(17)?,
         folder_path: row.get(18)?,
-        label_id: row.get(19)?,
-        label_name: row.get(20)?,
-        label_color: row.get(21)?,
+        label_id: None,
+        label_name: None,
+        label_color: None,
+        group_results: Vec::new(),
     })
 }
 
@@ -227,25 +226,56 @@ pub(crate) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxM
 fn row_to_thread(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxThread> {
     let mut latest = row_to_message(row)?;
     let account_id: i64 = row.get(1)?;
-    let thread_key: String = row.get(22)?;
+    let thread_key: String = row.get(19)?;
     latest.thread_key = thread_key.clone();
     Ok(InboxThread {
         account_id,
         thread_key,
-        message_count: row.get(24)?,
-        unread_count: row.get(25)?,
+        message_count: row.get(21)?,
+        unread_count: row.get(22)?,
         latest,
     })
 }
 
 impl Store {
+    /// 给一批邮件批量补上各组结果（按组的显示顺序升序）。
+    ///
+    /// 顺带把过渡兼容的单个标签字段填成「内容分类」组的结果，方便老界面继续显示一个胶囊。
+    pub(crate) fn fill_group_results<'a>(
+        &self,
+        messages: impl IntoIterator<Item = &'a mut InboxMessage>,
+    ) -> Result<(), StoreError> {
+        let messages: Vec<&mut InboxMessage> = messages.into_iter().collect();
+        if messages.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<i64> = messages.iter().map(|message| message.id).collect();
+        let mut grouped = self.group_results_for_messages(&ids)?;
+        let content_group = self.legacy_content_group_id().ok();
+        for message in messages {
+            let results = grouped.remove(&message.id).unwrap_or_default();
+            if let Some(group_id) = content_group {
+                if let Some(label) = results
+                    .iter()
+                    .find(|result| result.group.id == group_id)
+                    .and_then(|result| result.label.as_ref())
+                {
+                    message.label_id = Some(label.id);
+                    message.label_name = Some(label.name.clone());
+                    message.label_color = Some(label.color.clone());
+                }
+            }
+            message.group_results = results;
+        }
+        Ok(())
+    }
+
     /// 统一收件箱：平铺分页查询（每封邮件一行，时间倒序）。
     pub fn list_inbox_messages(&self, query: &InboxQuery) -> Result<Vec<InboxMessage>, StoreError> {
         let sql = format!(
             "SELECT {INBOX_COLUMNS} FROM message m \
              JOIN folder f ON f.id = m.folder_id \
              JOIN account a ON a.id = m.account_id \
-             {LABEL_JOIN} \
              WHERE {SCOPE_FILTER} AND (?4 = 0 OR m.is_read = 0) \
              AND (?5 = 0 OR m.is_flagged = 1) \
              ORDER BY m.date_utc DESC, m.id DESC LIMIT ?6 OFFSET ?7"
@@ -264,6 +294,7 @@ impl Store {
         while let Some(row) = rows.next()? {
             items.push(row_to_message(row)?);
         }
+        self.fill_group_results(items.iter_mut())?;
         Ok(items)
     }
 
@@ -311,6 +342,7 @@ impl Store {
         while let Some(row) = rows.next()? {
             items.push(row_to_thread(row)?);
         }
+        self.fill_group_results(items.iter_mut().map(|thread| &mut thread.latest))?;
         Ok(items)
     }
 
@@ -341,12 +373,16 @@ impl Store {
     /// 不在本方法里触碰正文缓存，正文由读信模块单独读取。
     pub fn get_inbox_message(&self, message_id: i64) -> Result<Option<InboxMessage>, StoreError> {
         let sql = format!(
-            "SELECT {INBOX_COLUMNS} FROM message m JOIN folder f ON f.id = m.folder_id JOIN account a ON a.id = m.account_id {LABEL_JOIN} WHERE m.id = ?1"
+            "SELECT {INBOX_COLUMNS} FROM message m JOIN folder f ON f.id = m.folder_id JOIN account a ON a.id = m.account_id WHERE m.id = ?1"
         );
-        self.conn()
+        let mut message = self
+            .conn()
             .query_row(&sql, [message_id], row_to_message)
-            .optional()
-            .map_err(StoreError::from)
+            .optional()?;
+        if let Some(message) = message.as_mut() {
+            self.fill_group_results([message])?;
+        }
+        Ok(message)
     }
 
     /// 按主键切换一封邮件的已读状态，并同步维护所在文件夹的未读数。
@@ -400,7 +436,6 @@ impl Store {
             "SELECT {INBOX_COLUMNS} FROM message m \
              JOIN folder f ON f.id = m.folder_id \
              JOIN account a ON a.id = m.account_id \
-             {LABEL_JOIN} \
              WHERE m.account_id = ?1 AND f.kind = 'inbox' \
                AND COALESCE(NULLIF(m.thread_key, ''), NULLIF(m.message_id_header, ''), '#' || m.id) = ?2 \
              ORDER BY m.date_utc DESC, m.id DESC LIMIT ?3"
@@ -411,6 +446,7 @@ impl Store {
         while let Some(row) = rows.next()? {
             items.push(row_to_message(row)?);
         }
+        self.fill_group_results(items.iter_mut())?;
         Ok(items)
     }
 
@@ -590,7 +626,50 @@ mod tests {
     }
 
     #[test]
-    fn inbox_thread_uses_latest_message_label() {
+    fn inbox_message_carries_group_results_in_order() {
+        let store = migrated();
+        let a = account(&store, "a@example.com", "#111111");
+        let fa = inbox(&store, a);
+        store
+            .insert_messages(&[message(a, fa, 1, "t1", "<m1@x>", "2026-10-01T00:00:00Z", true)])
+            .expect("插入邮件");
+        let id = store
+            .list_inbox_messages(&InboxQuery {
+                account_id: Some(a),
+                ..Default::default()
+            })
+            .expect("读邮件")[0]
+            .id;
+        let content = group_id(&store, "内容分类");
+        let urgency = group_id(&store, "紧急程度");
+        let bill = group_label_id(&store, content, "账单");
+        store
+            .set_message_group_value(id, content, Some(bill), None, crate::MailLabelSource::Auto, None)
+            .expect("写内容分类");
+        store
+            .set_message_group_value(id, urgency, None, Some(4), crate::MailLabelSource::Auto, None)
+            .expect("写紧急程度");
+
+        let messages = store
+            .list_inbox_messages(&InboxQuery {
+                account_id: Some(a),
+                ..Default::default()
+            })
+            .expect("读邮件");
+        assert_eq!(messages.len(), 1);
+        let results = &messages[0].group_results;
+        assert_eq!(results.len(), 2, "两个组各一条结果");
+        assert_eq!(results[0].group.name, "内容分类", "按组顺序，内容分类在前");
+        assert_eq!(results[1].group.name, "紧急程度", "紧急程度在后");
+        assert_eq!(
+            results[0].label.as_ref().map(|label| label.name.as_str()),
+            Some("账单")
+        );
+        assert_eq!(results[1].score_value, Some(4));
+    }
+
+    #[test]
+    fn thread_row_uses_latest_message_results() {
         let store = migrated();
         let a = account(&store, "a@example.com", "#111111");
         let fa = inbox(&store, a);
@@ -600,18 +679,15 @@ mod tests {
                 message(a, fa, 2, "t1", "<m2@x>", "2026-10-02T00:00:00Z", true),
             ])
             .expect("插入邮件");
-        let ids: Vec<i64> = {
-            let ids: Vec<i64> = store
-                .list_inbox_messages(&InboxQuery {
-                    account_id: Some(a),
-                    ..Default::default()
-                })
-                .expect("读邮件")
-                .into_iter()
-                .map(|message| message.id)
-                .collect();
-            ids
-        };
+        let ids: Vec<i64> = store
+            .list_inbox_messages(&InboxQuery {
+                account_id: Some(a),
+                ..Default::default()
+            })
+            .expect("读邮件")
+            .into_iter()
+            .map(|message| message.id)
+            .collect();
         let labels = store.list_mail_labels().expect("标签");
         let bill = labels.iter().find(|label| label.name == "账单").expect("账单").id;
         let notice = labels.iter().find(|label| label.name == "通知").expect("通知").id;
@@ -634,8 +710,41 @@ mod tests {
         assert_eq!(threads[0].latest.label_id, Some(notice));
         assert_eq!(threads[0].latest.label_name.as_deref(), Some("通知"));
         assert_eq!(threads[0].latest.label_color.as_deref(), Some("teal"));
+        assert_eq!(
+            threads[0].latest.group_results.len(),
+            1,
+            "折叠行只带最新一封的结果"
+        );
+        assert_eq!(
+            threads[0].latest.group_results[0]
+                .label
+                .as_ref()
+                .map(|label| label.name.as_str()),
+            Some("通知")
+        );
     }
 
+    /// 取一个默认标签组的编号（按组名）。
+    fn group_id(store: &Store, name: &str) -> i64 {
+        store
+            .list_label_groups()
+            .expect("标签组")
+            .into_iter()
+            .find(|group| group.name == name)
+            .unwrap_or_else(|| panic!("应存在标签组 {name}"))
+            .id
+    }
+
+    /// 取某个组里一个标签的编号（按标签名）。
+    fn group_label_id(store: &Store, group_id: i64, name: &str) -> i64 {
+        store
+            .list_group_labels(group_id)
+            .expect("组内标签")
+            .into_iter()
+            .find(|label| label.name == name)
+            .unwrap_or_else(|| panic!("组 {group_id} 里应存在标签 {name}"))
+            .id
+    }
     #[test]
     fn 平铺查询按时间倒序且支持过滤分页() {
         let store = migrated();

@@ -128,6 +128,7 @@ const MESSAGE: InboxMessage = {
   labelId: null,
   labelName: null,
   labelColor: null,
+  groupResults: [],
 };
 
 const BODY: MessageBody = {

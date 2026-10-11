@@ -2159,15 +2159,35 @@ mod tests {
             .id
     }
 
-    /// 假 HTTP 服务：收一次请求，回固定 JSON；用来测「检查延迟」的完整往返。
+    /// 假 HTTP 服务：收一次请求，回固定 JSON；用来测协议往返。
+    ///
+    /// 会先把请求头和按 Content-Length 声明的正文读完再回包，避免请求被拆成
+    /// 多个 TCP 包时服务端提前关连接、让客户端偶发报协议错。
     async fn fake_chat_server(payload: &'static str) -> u16 {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("绑定");
         let port = listener.local_addr().expect("地址").port();
         tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("接受连接");
-            let mut buf = vec![0u8; 8192];
-            let _ = socket.read(&mut buf).await;
+            let mut request = Vec::new();
+            let mut buf = [0u8; 4096];
+            // 要读到的总字节数；读完请求头才能按 Content-Length 算出来。
+            let mut want = usize::MAX;
+            loop {
+                let read = match socket.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => read,
+                };
+                request.extend_from_slice(&buf[..read]);
+                if want == usize::MAX {
+                    if let Some(head_end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        want = head_end + 4 + request_content_length(&request[..head_end]);
+                    }
+                }
+                if request.len() >= want {
+                    break;
+                }
+            }
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
                 payload.len()
@@ -2175,6 +2195,19 @@ mod tests {
             socket.write_all(response.as_bytes()).await.expect("写响应");
         });
         port
+    }
+
+    /// 从请求头里取 Content-Length；没有就按 0 算（无正文的请求）。
+    fn request_content_length(head: &[u8]) -> usize {
+        String::from_utf8_lossy(head)
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse().ok())
+                    .flatten()
+            })
+            .unwrap_or(0)
     }
 
     #[tokio::test]

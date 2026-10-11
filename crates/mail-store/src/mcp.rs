@@ -5,11 +5,9 @@
 //! - 开关复用 `setting` 表的 `mcp.enabled` / `mcp.write_tools_enabled`，默认都是关闭；
 //! - 本模块只读 / 写这两类数据，不碰凭据保险箱，也不接触邮件正文。
 
-use rusqlite::OptionalExtension;
-
 use crate::connection::Store;
 use crate::error::StoreError;
-use crate::inbox::{row_to_message, InboxMessage, INBOX_COLUMNS, LABEL_JOIN};
+use crate::inbox::InboxMessage;
 
 /// MCP 总开关的 setting 键。
 pub const MCP_ENABLED_KEY: &str = "mcp.enabled";
@@ -119,17 +117,7 @@ impl Store {
 impl Store {
     /// 读一封邮件的展示元数据。
     pub fn get_message_view(&self, message_id: i64) -> Result<Option<InboxMessage>, StoreError> {
-        let sql = format!(
-            "SELECT {INBOX_COLUMNS} FROM message m \
-             JOIN folder f ON f.id = m.folder_id \
-             JOIN account a ON a.id = m.account_id \
-             {LABEL_JOIN} \
-             WHERE m.id = ?1"
-        );
-        self.conn()
-            .query_row(&sql, rusqlite::params![message_id], row_to_message)
-            .optional()
-            .map_err(StoreError::from)
+        self.get_inbox_message(message_id)
     }
 }
 

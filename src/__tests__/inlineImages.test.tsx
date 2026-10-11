@@ -40,6 +40,7 @@ const MESSAGE: InboxMessage = {
   labelId: null,
   labelName: null,
   labelColor: null,
+  groupResults: [],
 };
 
 /** 一段最小 PNG 的 data URL（后端只会给受控形状）。 */

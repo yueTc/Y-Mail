@@ -4,6 +4,8 @@
 //! 每封邮件在每个标签组里最多一条结果（`message_label` 的主键是邮件和组）。
 //! 颜色只存固定色板键，不存十六进制色值；模型不接触颜色。
 
+use std::collections::HashMap;
+
 use rusqlite::OptionalExtension;
 
 use crate::connection::Store;
@@ -259,41 +261,55 @@ JOIN mail_label_group g ON g.id = ml.group_id
 LEFT JOIN mail_label l ON l.id = ml.label_id";
 
 fn row_to_group_result(row: &rusqlite::Row<'_>) -> rusqlite::Result<MessageGroupResult> {
-    let kind_raw: String = row.get(2)?;
+    row_to_group_result_at(row, 0)
+}
+
+/// 从第 `offset` 列开始读一条组结果；批量查询在前面多带了一列邮件编号。
+fn row_to_group_result_at(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<MessageGroupResult> {
+    let kind_raw: String = row.get(offset + 2)?;
     let group = LabelGroup {
-        id: row.get(0)?,
-        name: row.get(1)?,
+        id: row.get(offset)?,
+        name: row.get(offset + 1)?,
         kind: LabelGroupKind::parse(&kind_raw).unwrap_or(LabelGroupKind::Choice),
-        enabled: row.get::<_, i64>(3)? != 0,
-        confidence_threshold: row.get(4)?,
-        score_min: row.get(5)?,
-        score_max: row.get(6)?,
-        sort_order: row.get(7)?,
+        enabled: row.get::<_, i64>(offset + 3)? != 0,
+        confidence_threshold: row.get(offset + 4)?,
+        score_min: row.get(offset + 5)?,
+        score_max: row.get(offset + 6)?,
+        sort_order: row.get(offset + 7)?,
     };
-    let label_id: Option<i64> = row.get(8)?;
+    let label_id: Option<i64> = row.get(offset + 8)?;
     let label = match label_id {
         Some(id) => Some(MailLabel {
             id,
-            group_id: row.get(9)?,
-            name: row.get(10)?,
-            color: row.get(11)?,
-            sort_order: row.get(12)?,
-            is_fallback: row.get::<_, i64>(13)? != 0,
+            group_id: row.get(offset + 9)?,
+            name: row.get(offset + 10)?,
+            color: row.get(offset + 11)?,
+            sort_order: row.get(offset + 12)?,
+            is_fallback: row.get::<_, i64>(offset + 13)? != 0,
         }),
         None => None,
     };
-    let source_raw: String = row.get(15)?;
+    let source_raw: String = row.get(offset + 15)?;
     Ok(MessageGroupResult {
         group,
         label,
-        score_value: row.get(14)?,
+        score_value: row.get(offset + 14)?,
         source: MailLabelSource::parse(&source_raw).unwrap_or(MailLabelSource::Auto),
-        confidence: row.get(16)?,
+        confidence: row.get(offset + 16)?,
     })
 }
+
+/// 批量取组结果用的查询：比单条版本多带一列邮件编号，排在所有字段前面。
+const SELECT_GROUP_RESULT_BY_MESSAGE: &str = "
+SELECT ml.message_id, g.id, g.name, g.kind, g.enabled, g.confidence_threshold, g.score_min, g.score_max, g.sort_order,
+       l.id, l.group_id, l.name, l.color, l.sort_order, l.is_fallback,
+       ml.score_value, ml.source, ml.confidence
+FROM message_label ml
+JOIN mail_label_group g ON g.id = ml.group_id
+LEFT JOIN mail_label l ON l.id = ml.label_id";
 impl Store {
     /// 取默认的「内容分类」组编号；只给旧接口过渡用。
-    fn legacy_content_group_id(&self) -> Result<i64, StoreError> {
+    pub(crate) fn legacy_content_group_id(&self) -> Result<i64, StoreError> {
         self.conn()
             .query_row(
                 "SELECT id FROM mail_label_group WHERE name = '内容分类'",
@@ -862,6 +878,39 @@ impl Store {
             results.push(row_to_group_result(row)?);
         }
         Ok(results)
+    }
+
+    /// 批量取一批邮件的全部组结果，按邮件编号分组；每组内按组的显示顺序升序。
+    ///
+    /// 供收件箱、搜索列表一次取完，避免每封邮件各查一遍。没有结果的邮件不出现在返回值里。
+    pub fn group_results_for_messages(
+        &self,
+        message_ids: &[i64],
+    ) -> Result<HashMap<i64, Vec<MessageGroupResult>>, StoreError> {
+        let mut grouped: HashMap<i64, Vec<MessageGroupResult>> = HashMap::new();
+        if message_ids.is_empty() {
+            return Ok(grouped);
+        }
+        let mut unique = message_ids.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        let placeholders = std::iter::repeat_n("?", unique.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "{SELECT_GROUP_RESULT_BY_MESSAGE} WHERE ml.message_id IN ({placeholders}) \
+             ORDER BY ml.message_id ASC, g.sort_order ASC, g.id ASC"
+        );
+        let mut stmt = self.conn().prepare(&sql)?;
+        let mut rows = stmt.query(rusqlite::params_from_iter(unique.iter()))?;
+        while let Some(row) = rows.next()? {
+            let message_id: i64 = row.get(0)?;
+            grouped
+                .entry(message_id)
+                .or_default()
+                .push(row_to_group_result_at(row, 1)?);
+        }
+        Ok(grouped)
     }
 
     /// 过渡兼容：按内容分类组的标签名精确取邮件编号（升序）。
