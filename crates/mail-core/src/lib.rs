@@ -27,8 +27,8 @@ pub mod sync_settings;
 
 pub use ai::{
     ai_provider_supports, AiAuthorizationPreview, AiProviderInput, AiProviderView, AiTarget, AiTextOutcome,
-    AiTranslation, ClassifyPreview, ClassifyPreviewGroup, ClassifyPreviewTarget, NotificationLatency,
-    CLASSIFY_BODY_MAX_CHARS, TYPESAFE_PROBE_MODEL,
+    AiTranslation, ClassifiedMessageGroups, ClassifyPreview, ClassifyPreviewGroup, ClassifyPreviewTarget,
+    NotificationLatency, CLASSIFY_BODY_MAX_CHARS, TYPESAFE_PROBE_MODEL,
 };
 pub use checks::ConnectionReport;
 pub use compose::{ComposeAttachment, ComposeParticipant, DraftSeed, OutboxItem, SendOutcome};
@@ -58,10 +58,10 @@ pub use mail_mime::decode_encoded_words;
 pub use mail_store::{
     AccountInboxSummary, AiFunction, AiModelMapEntry, AiProviderKind, AiThinkingLevel, AttachmentState,
     BodyState, ContactDraft, ContactImportRow, ContactImportStats, ContactScope, ContactSource, InboxFolder,
-    InboxMessage, InboxQuery, InboxThread, MailLabel, MailLabelSource, McpAuditRecord, MessageLocation,
-    NewAiAudit, NewAiProvider, NewOutbox, OutboxKind, OutboxState, SearchHit, SearchPage, SearchQuery,
-    SnippetSegment, Store, StoredAiAudit, StoredAiCache, StoredAiProvider, StoredAttachment, StoredContact,
-    StoredContactGroup, StoredOutbox, StoredSignature,
+    InboxMessage, InboxQuery, InboxThread, LabelGroup, LabelGroupKind, MailLabel, MailLabelSource,
+    McpAuditRecord, MessageGroupResult, MessageLocation, NewAiAudit, NewAiProvider, NewOutbox, OutboxKind,
+    OutboxState, SearchHit, SearchPage, SearchQuery, SnippetSegment, Store, StoredAiAudit, StoredAiCache,
+    StoredAiProvider, StoredAttachment, StoredContact, StoredContactGroup, StoredOutbox, StoredSignature,
 };
 pub use paths::SqlitePaths;
 pub use secrets::{ChunkedSecretStore, KeyringSecretStore, MemorySecretStore, SecretStore, SecretStoreError};

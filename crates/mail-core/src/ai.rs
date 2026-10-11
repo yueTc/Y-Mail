@@ -237,6 +237,15 @@ pub struct ClassifyPreviewTarget {
     pub content_hash: String,
 }
 
+/// 一次分类里，一封邮件本次写下的各组结果。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassifiedMessageGroups {
+    /// 邮件主键。
+    pub message_id: i64,
+    /// 这封邮件本次写下的各组结果，按组显示顺序。
+    pub results: Vec<MessageGroupResult>,
+}
+
 /// 已经确认、等待真正外发的一次性授权。
 #[derive(Clone)]
 pub struct PendingAiAuthorization {
@@ -657,6 +666,127 @@ impl MailEngine {
         Ok(self.store().reorder_mail_labels(label_ids)?)
     }
 
+    /// 取全部标签组，按显示顺序。
+    pub fn list_label_groups(&self) -> Result<Vec<LabelGroup>, EngineError> {
+        Ok(self.store().list_label_groups()?)
+    }
+
+    /// 取某个组内的标签，按显示顺序。
+    pub fn list_group_labels(&self, group_id: i64) -> Result<Vec<MailLabel>, EngineError> {
+        Ok(self.store().list_group_labels(group_id)?)
+    }
+
+    /// 按主键取一个标签组。
+    pub fn get_label_group(&self, group_id: i64) -> Result<Option<LabelGroup>, EngineError> {
+        Ok(self.store().get_label_group(group_id)?)
+    }
+
+    /// 新建标签组并返回；打分题必须同时传上下限。
+    pub fn create_label_group(
+        &self,
+        name: &str,
+        kind: &str,
+        score_min: Option<i64>,
+        score_max: Option<i64>,
+    ) -> Result<LabelGroup, EngineError> {
+        let kind = LabelGroupKind::parse(kind.trim())
+            .ok_or_else(|| EngineError::BadRequest("题型只能是 choice、boolean 或 score".to_string()))?;
+        let id = self
+            .store()
+            .create_label_group(name, kind, score_min, score_max)?;
+        self.store()
+            .get_label_group(id)?
+            .ok_or_else(|| EngineError::BadRequest("标签组不存在".to_string()))
+    }
+
+    /// 给标签组改名。
+    pub fn rename_label_group(&self, group_id: i64, name: &str) -> Result<(), EngineError> {
+        Ok(self.store().rename_label_group(group_id, name)?)
+    }
+
+    /// 开或关一个标签组。
+    pub fn set_label_group_enabled(&self, group_id: i64, enabled: bool) -> Result<(), EngineError> {
+        Ok(self.store().set_label_group_enabled(group_id, enabled)?)
+    }
+
+    /// 改一个标签组的把握门槛（0.50 到 0.99）。
+    pub fn set_label_group_threshold(&self, group_id: i64, threshold: f64) -> Result<(), EngineError> {
+        Ok(self.store().set_label_group_threshold(group_id, threshold)?)
+    }
+
+    /// 删除标签组；组内标签与该组所有邮件结果由外键级联清掉。
+    pub fn delete_label_group(&self, group_id: i64) -> Result<(), EngineError> {
+        Ok(self.store().delete_label_group(group_id)?)
+    }
+
+    /// 按给定顺序重排全部标签组；必须传全部组编号。
+    pub fn reorder_label_groups(&self, group_ids: &[i64]) -> Result<(), EngineError> {
+        Ok(self.store().reorder_label_groups(group_ids)?)
+    }
+
+    /// 在某个组里新增标签并返回新标签。
+    pub fn create_group_label(&self, group_id: i64, name: &str) -> Result<MailLabel, EngineError> {
+        let id = self.store().create_group_label(group_id, name)?;
+        self.store()
+            .get_mail_label(id)?
+            .ok_or_else(|| EngineError::BadRequest("标签不存在".to_string()))
+    }
+
+    /// 给某个组内标签改名。
+    pub fn rename_group_label(&self, group_id: i64, label_id: i64, name: &str) -> Result<(), EngineError> {
+        Ok(self.store().rename_group_label(group_id, label_id, name)?)
+    }
+
+    /// 改某个组内标签颜色；只接受固定色板键。
+    pub fn set_group_label_color(
+        &self,
+        group_id: i64,
+        label_id: i64,
+        color: &str,
+    ) -> Result<(), EngineError> {
+        Ok(self.store().set_group_label_color(group_id, label_id, color)?)
+    }
+
+    /// 删除某个组内标签；兜底标签会被拒绝。
+    pub fn delete_group_label(&self, group_id: i64, label_id: i64) -> Result<(), EngineError> {
+        Ok(self.store().delete_group_label(group_id, label_id)?)
+    }
+
+    /// 按给定顺序重排某个组内的全部标签。
+    pub fn reorder_group_labels(&self, group_id: i64, label_ids: &[i64]) -> Result<(), EngineError> {
+        Ok(self.store().reorder_group_labels(group_id, label_ids)?)
+    }
+
+    /// 手动写某封邮件某个组的结果；来源记 `manual`，该组从此锁定。
+    pub fn set_message_group_value(
+        &self,
+        message_id: i64,
+        group_id: i64,
+        label_id: Option<i64>,
+        score_value: Option<i64>,
+    ) -> Result<(), EngineError> {
+        self.store().set_message_group_value(
+            message_id,
+            group_id,
+            label_id,
+            score_value,
+            MailLabelSource::Manual,
+            None,
+        )?;
+        Ok(())
+    }
+
+    /// 读一封邮件的全部组结果，按组显示顺序。
+    pub fn message_group_results(&self, message_id: i64) -> Result<Vec<MessageGroupResult>, EngineError> {
+        Ok(self.store().list_message_group_results(message_id)?)
+    }
+
+    /// 清空某封邮件某组的结果并解锁，后续可以重判。
+    pub fn clear_message_group_value(&self, message_id: i64, group_id: i64) -> Result<(), EngineError> {
+        self.store().clear_message_group_value(message_id, group_id)?;
+        Ok(())
+    }
+
     /// 手动设置或清除某封邮件的标签；来源记 `manual`。
     pub fn set_message_label(&self, message_id: i64, label_id: Option<i64>) -> Result<(), EngineError> {
         match label_id {
@@ -681,24 +811,23 @@ impl MailEngine {
 
     /// 消费一次性分类授权，对目标邮件逐封跑一次多组分类。
     ///
-    /// 令牌校验失败整体拒绝；进入分类阶段后，某一封失败不影响其它封。
-    /// 返回本次写下的所有标签结果（打分题没有标签，不出现在返回值里）。
-    /// 过渡方案：命令层契约改造在后续任务，这里暂保留旧的 `threshold` 参数占位。
-    pub async fn classify_messages(
-        &self,
-        token: &str,
-        _threshold: f64,
-    ) -> Result<Vec<MailLabel>, EngineError> {
+    /// 令牌校验失败整体拒绝；进入分类阶段后，某一封失败不影响其它封（错误已在
+    /// 分类里记过审计），返回按邮件分组的本次写下的各组结果。
+    pub async fn classify_messages(&self, token: &str) -> Result<Vec<ClassifiedMessageGroups>, EngineError> {
         let ids = self.consume_classify_authorization(token)?;
-        let mut labels = Vec::new();
+        let mut out = Vec::with_capacity(ids.len());
         for id in ids {
-            for result in self.classify_message_groups(id).await? {
-                if let Some(label) = result.label {
-                    labels.push(label);
+            match self.classify_message_groups(id).await {
+                Ok(results) => out.push(ClassifiedMessageGroups {
+                    message_id: id,
+                    results,
+                }),
+                Err(error) => {
+                    tracing::warn!(message_id = id, error = %error, "单封分类失败，跳过该封");
                 }
             }
         }
-        Ok(labels)
+        Ok(out)
     }
 
     /// 取所有开启的标签组，按排序升序。

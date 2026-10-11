@@ -13,8 +13,9 @@ use mail_core::{
     AiModelMapEntry, AiProviderInput, AiProviderKind, AiProviderView, AiTextOutcome, AiThinkingLevel,
     AiTranslation, ClassifyPreview, ConnectionReport, ContactDraft, ContactExportKind, ContactImportEntry,
     ContactImportMode, ContactScope, EngineError, InboxFolder, InboxMessage, InboxQuery, InboxThread,
-    MailEngine, MailLabel, NewOutbox, OutboxKind, SearchHit, SearchQuery, SnippetSegment, StoredAiAudit,
-    StoredAttachment, StoredContact, StoredOutbox, StoredSignature,
+    LabelGroup, LabelGroupKind, MailEngine, MailLabel, MessageGroupResult, NewOutbox, OutboxKind, SearchHit,
+    SearchQuery, SnippetSegment, StoredAiAudit, StoredAttachment, StoredContact, StoredOutbox,
+    StoredSignature,
 };
 use mail_domain::account::{
     Account, AccountDraft, AccountId, AccountProxyMode, AuthType, OAuthProvider, Security, ServerConfig,
@@ -3404,6 +3405,8 @@ impl AiModelMapDto {
 pub struct MailLabelDto {
     /// 主键。
     pub id: i64,
+    /// 所属标签组主键。
+    pub group_id: i64,
     /// 标签名。
     pub name: String,
     /// 固定色板键；界面按主题映射成色值。
@@ -3418,12 +3421,109 @@ impl MailLabelDto {
     fn from_label(label: &MailLabel) -> Self {
         Self {
             id: label.id,
+            group_id: label.group_id,
             name: label.name.clone(),
             color: label.color.clone(),
             sort_order: label.sort_order,
             is_fallback: label.is_fallback,
         }
     }
+}
+
+/// 界面看到的一个标签组（含组内标签）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelGroupDto {
+    /// 主键。
+    pub id: i64,
+    /// 组名。
+    pub name: String,
+    /// 题型标识：choice / boolean / score。
+    pub kind: String,
+    /// 这一组是否参与自动分类。
+    pub enabled: bool,
+    /// 这一组的把握门槛。
+    pub confidence_threshold: f64,
+    /// 打分题下限，其它类型为空。
+    pub score_min: Option<i64>,
+    /// 打分题上限，其它类型为空。
+    pub score_max: Option<i64>,
+    /// 显示顺序。
+    pub sort_order: i64,
+    /// 组内标签，按显示顺序。
+    pub labels: Vec<MailLabelDto>,
+}
+
+impl LabelGroupDto {
+    fn from_group(group: &LabelGroup, labels: &[MailLabel]) -> Self {
+        Self {
+            id: group.id,
+            name: group.name.clone(),
+            kind: group.kind.as_str().to_string(),
+            enabled: group.enabled,
+            confidence_threshold: group.confidence_threshold,
+            score_min: group.score_min,
+            score_max: group.score_max,
+            sort_order: group.sort_order,
+            labels: labels.iter().map(MailLabelDto::from_label).collect(),
+        }
+    }
+}
+
+/// 一封邮件在某个标签组里的结果；只带展示字段。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupResultDto {
+    /// 标签组主键。
+    pub group_id: i64,
+    /// 标签组名。
+    pub group_name: String,
+    /// 题型标识：choice / boolean / score。
+    pub kind: String,
+    /// 命中的标签主键；打分题为空。
+    pub label_id: Option<i64>,
+    /// 命中的标签名；打分题为空。
+    pub label_name: Option<String>,
+    /// 命中的标签颜色；打分题为空。
+    pub label_color: Option<String>,
+    /// 打分题的数字；选择题和是否题为空。
+    pub score_value: Option<i64>,
+}
+
+impl GroupResultDto {
+    fn from_result(result: &MessageGroupResult) -> Self {
+        let kind = result.group.kind.as_str().to_string();
+        match &result.label {
+            Some(label) => Self {
+                group_id: result.group.id,
+                group_name: result.group.name.clone(),
+                kind,
+                label_id: Some(label.id),
+                label_name: Some(label.name.clone()),
+                label_color: Some(label.color.clone()),
+                score_value: result.score_value,
+            },
+            None => Self {
+                group_id: result.group.id,
+                group_name: result.group.name.clone(),
+                kind,
+                label_id: None,
+                label_name: None,
+                label_color: None,
+                score_value: result.score_value,
+            },
+        }
+    }
+}
+
+/// 一次分类后，一封邮件写下的各组结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassifiedMessageDto {
+    /// 邮件主键。
+    pub message_id: i64,
+    /// 这封邮件本次写下的各组结果，按组显示顺序。
+    pub group_results: Vec<GroupResultDto>,
 }
 
 /// 分类预览里的一个「本次将开启的标签组」。
@@ -3928,7 +4028,7 @@ pub async fn clear_ai_cache(state: tauri::State<'_, AppState>) -> Result<usize, 
     Ok(engine.clear_ai_cache()?)
 }
 
-// ============================ 邮件分类标签 ============================
+// ============================ 邮件分类标签组 ============================
 
 /// 标签名规整：去首尾空白、非空、不超过 64 个字符。
 fn normalize_label_name(name: &str) -> Result<String, CommandError> {
@@ -3942,94 +4042,283 @@ fn normalize_label_name(name: &str) -> Result<String, CommandError> {
     Ok(trimmed.to_string())
 }
 
-/// 取全部本地标签（按显示顺序）。
-#[tauri::command]
-pub async fn list_mail_labels(state: tauri::State<'_, AppState>) -> Result<Vec<MailLabelDto>, CommandError> {
-    let engine = state.engine().await;
-    Ok(engine
-        .list_mail_labels()?
-        .iter()
-        .map(MailLabelDto::from_label)
-        .collect())
+/// 组名规整：去首尾空白、非空、不超过 64 个字符、不含英文冒号。
+fn normalize_group_name(name: &str) -> Result<String, CommandError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(CommandError::input("组名不能为空"));
+    }
+    if trimmed.chars().count() > 64 {
+        return Err(CommandError::input("组名不能超过 64 个字符"));
+    }
+    if trimmed.contains(':') {
+        return Err(CommandError::input("组名不能包含英文冒号"));
+    }
+    Ok(trimmed.to_string())
 }
 
-/// 新增标签；颜色由后端按固定色板自动分配。
-#[tauri::command]
-pub async fn create_mail_label(
-    state: tauri::State<'_, AppState>,
-    name: String,
-) -> Result<MailLabelDto, CommandError> {
-    let name = normalize_label_name(&name)?;
-    let engine = state.engine().await;
-    let label = engine.create_mail_label(&name)?;
-    Ok(MailLabelDto::from_label(&label))
+/// 标签组编号规整。
+fn ensure_group_id(group_id: i64) -> Result<(), CommandError> {
+    if group_id <= 0 {
+        return Err(CommandError::input("标签组编号不合法"));
+    }
+    Ok(())
 }
 
-/// 给标签改名；兜底标签也能改名。
-#[tauri::command]
-pub async fn rename_mail_label(
-    state: tauri::State<'_, AppState>,
-    label_id: i64,
-    name: String,
-) -> Result<(), CommandError> {
+/// 标签编号规整。
+fn ensure_label_id(label_id: i64) -> Result<(), CommandError> {
     if label_id <= 0 {
         return Err(CommandError::input("标签编号不合法"));
     }
-    let name = normalize_label_name(&name)?;
-    let engine = state.engine().await;
-    engine.rename_mail_label(label_id, &name)?;
     Ok(())
 }
 
-/// 修改标签颜色；只接受固定色板键，兜底标签拒绝修改。
-#[tauri::command]
-pub async fn set_mail_label_color(
-    state: tauri::State<'_, AppState>,
-    label_id: i64,
-    color: String,
-) -> Result<(), CommandError> {
-    if label_id <= 0 {
-        return Err(CommandError::input("标签编号不合法"));
+/// 取全部标签组（含组内标签），按显示顺序。
+fn label_groups_snapshot(engine: &MailEngine) -> Result<Vec<LabelGroupDto>, CommandError> {
+    let groups = engine.list_label_groups()?;
+    let mut out = Vec::with_capacity(groups.len());
+    for group in &groups {
+        let labels = engine.list_group_labels(group.id)?;
+        out.push(LabelGroupDto::from_group(group, &labels));
     }
-    let engine = state.engine().await;
-    engine.set_mail_label_color(label_id, color.trim())?;
-    Ok(())
+    Ok(out)
 }
 
-/// 删除标签；兜底标签拒绝删除，关联的邮件标签由外键级联清掉。
-#[tauri::command]
-pub async fn delete_mail_label(state: tauri::State<'_, AppState>, label_id: i64) -> Result<(), CommandError> {
-    if label_id <= 0 {
-        return Err(CommandError::input("标签编号不合法"));
-    }
-    let engine = state.engine().await;
-    engine.delete_mail_label(label_id)?;
-    Ok(())
+/// 建组：组名先规整，题型与上下限交给引擎校验，再回一条完整快照。
+fn create_label_group_snapshot(
+    engine: &MailEngine,
+    name: &str,
+    kind: &str,
+    score_min: Option<i64>,
+    score_max: Option<i64>,
+) -> Result<LabelGroupDto, CommandError> {
+    let name = normalize_group_name(name)?;
+    let group = engine.create_label_group(&name, kind, score_min, score_max)?;
+    let labels = engine.list_group_labels(group.id)?;
+    Ok(LabelGroupDto::from_group(&group, &labels))
 }
 
-/// 按给定顺序重排标签；必须传全部标签编号。
-#[tauri::command]
-pub async fn reorder_mail_labels(
-    state: tauri::State<'_, AppState>,
-    label_ids: Vec<i64>,
-) -> Result<(), CommandError> {
-    let engine = state.engine().await;
-    engine.reorder_mail_labels(&label_ids)?;
-    Ok(())
-}
-
-/// 手动设置或清除某封邮件的标签；来源记 `manual`。
-#[tauri::command]
-pub async fn set_message_label(
-    state: tauri::State<'_, AppState>,
+/// 手动写某封邮件某组的结果；先校验组与标签的归属，再落库。
+fn set_message_group_value_snapshot(
+    engine: &MailEngine,
     message_id: i64,
+    group_id: i64,
     label_id: Option<i64>,
+    score_value: Option<i64>,
 ) -> Result<(), CommandError> {
     if message_id <= 0 {
         return Err(CommandError::input("邮件编号不合法"));
     }
+    ensure_group_id(group_id)?;
+    let group = engine
+        .get_label_group(group_id)?
+        .ok_or_else(|| CommandError::input("标签组不存在"))?;
+    match group.kind {
+        LabelGroupKind::Choice | LabelGroupKind::Boolean => {
+            let label_id = label_id.ok_or_else(|| CommandError::input("这类标签组必须选一个标签"))?;
+            let belongs = engine
+                .list_group_labels(group_id)?
+                .iter()
+                .any(|label| label.id == label_id);
+            if !belongs {
+                return Err(CommandError::input("这个标签不属于该标签组"));
+            }
+            engine.set_message_group_value(message_id, group_id, Some(label_id), None)?;
+        }
+        LabelGroupKind::Score => {
+            let value = score_value.ok_or_else(|| CommandError::input("打分题必须填一个数字"))?;
+            engine.set_message_group_value(message_id, group_id, None, Some(value))?;
+        }
+    }
+    Ok(())
+}
+
+/// 取全部标签组（含组内标签、类型、开关、门槛、上下限、排序）。
+#[tauri::command]
+pub async fn list_label_groups(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<LabelGroupDto>, CommandError> {
     let engine = state.engine().await;
-    engine.set_message_label(message_id, label_id)?;
+    label_groups_snapshot(&engine)
+}
+
+/// 新建标签组；打分题要同时传下限和上限。
+#[tauri::command]
+pub async fn create_label_group(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    kind: String,
+    score_min: Option<i64>,
+    score_max: Option<i64>,
+) -> Result<LabelGroupDto, CommandError> {
+    let engine = state.engine().await;
+    create_label_group_snapshot(&engine, &name, &kind, score_min, score_max)
+}
+
+/// 给标签组改名。
+#[tauri::command]
+pub async fn rename_label_group(
+    state: tauri::State<'_, AppState>,
+    group_id: i64,
+    name: String,
+) -> Result<(), CommandError> {
+    ensure_group_id(group_id)?;
+    let name = normalize_group_name(&name)?;
+    let engine = state.engine().await;
+    engine.rename_label_group(group_id, &name)?;
+    Ok(())
+}
+
+/// 开或关一个标签组。
+#[tauri::command]
+pub async fn set_label_group_enabled(
+    state: tauri::State<'_, AppState>,
+    group_id: i64,
+    enabled: bool,
+) -> Result<(), CommandError> {
+    ensure_group_id(group_id)?;
+    let engine = state.engine().await;
+    engine.set_label_group_enabled(group_id, enabled)?;
+    Ok(())
+}
+
+/// 改一个标签组的把握门槛，范围 0.50 到 0.99。
+#[tauri::command]
+pub async fn set_label_group_threshold(
+    state: tauri::State<'_, AppState>,
+    group_id: i64,
+    threshold: f64,
+) -> Result<(), CommandError> {
+    ensure_group_id(group_id)?;
+    if threshold.is_nan() || !(0.5..=0.99).contains(&threshold) {
+        return Err(CommandError::input("把握门槛必须在 0.50 到 0.99 之间"));
+    }
+    let engine = state.engine().await;
+    engine.set_label_group_threshold(group_id, threshold)?;
+    Ok(())
+}
+
+/// 删除标签组；组内标签与该组所有邮件结果一并清掉。
+#[tauri::command]
+pub async fn delete_label_group(
+    state: tauri::State<'_, AppState>,
+    group_id: i64,
+) -> Result<(), CommandError> {
+    ensure_group_id(group_id)?;
+    let engine = state.engine().await;
+    engine.delete_label_group(group_id)?;
+    Ok(())
+}
+
+/// 按给定顺序重排全部标签组；必须传全部组编号。
+#[tauri::command]
+pub async fn reorder_label_groups(
+    state: tauri::State<'_, AppState>,
+    group_ids: Vec<i64>,
+) -> Result<(), CommandError> {
+    let engine = state.engine().await;
+    engine.reorder_label_groups(&group_ids)?;
+    Ok(())
+}
+
+/// 在某个组里新增标签；颜色由后端按固定色板自动分配。
+#[tauri::command]
+pub async fn create_mail_label(
+    state: tauri::State<'_, AppState>,
+    group_id: i64,
+    name: String,
+) -> Result<MailLabelDto, CommandError> {
+    ensure_group_id(group_id)?;
+    let name = normalize_label_name(&name)?;
+    let engine = state.engine().await;
+    let label = engine.create_group_label(group_id, &name)?;
+    Ok(MailLabelDto::from_label(&label))
+}
+
+/// 给组内标签改名；兜底标签也能改名。
+#[tauri::command]
+pub async fn rename_mail_label(
+    state: tauri::State<'_, AppState>,
+    group_id: i64,
+    label_id: i64,
+    name: String,
+) -> Result<(), CommandError> {
+    ensure_group_id(group_id)?;
+    ensure_label_id(label_id)?;
+    let name = normalize_label_name(&name)?;
+    let engine = state.engine().await;
+    engine.rename_group_label(group_id, label_id, &name)?;
+    Ok(())
+}
+
+/// 修改组内标签颜色；只接受固定色板键，兜底标签拒绝修改。
+#[tauri::command]
+pub async fn set_mail_label_color(
+    state: tauri::State<'_, AppState>,
+    group_id: i64,
+    label_id: i64,
+    color: String,
+) -> Result<(), CommandError> {
+    ensure_group_id(group_id)?;
+    ensure_label_id(label_id)?;
+    let engine = state.engine().await;
+    engine.set_group_label_color(group_id, label_id, color.trim())?;
+    Ok(())
+}
+
+/// 删除组内标签；兜底标签拒绝删除，关联的邮件结果由外键级联清掉。
+#[tauri::command]
+pub async fn delete_mail_label(
+    state: tauri::State<'_, AppState>,
+    group_id: i64,
+    label_id: i64,
+) -> Result<(), CommandError> {
+    ensure_group_id(group_id)?;
+    ensure_label_id(label_id)?;
+    let engine = state.engine().await;
+    engine.delete_group_label(group_id, label_id)?;
+    Ok(())
+}
+
+/// 按给定顺序重排某个组内的全部标签；必须传该组全部标签编号。
+#[tauri::command]
+pub async fn reorder_mail_labels(
+    state: tauri::State<'_, AppState>,
+    group_id: i64,
+    label_ids: Vec<i64>,
+) -> Result<(), CommandError> {
+    ensure_group_id(group_id)?;
+    let engine = state.engine().await;
+    engine.reorder_group_labels(group_id, &label_ids)?;
+    Ok(())
+}
+
+/// 手动设置某封邮件某组的结果；来源记 `manual`，该组从此锁定。
+#[tauri::command]
+pub async fn set_message_group_value(
+    state: tauri::State<'_, AppState>,
+    message_id: i64,
+    group_id: i64,
+    label_id: Option<i64>,
+    score_value: Option<i64>,
+) -> Result<(), CommandError> {
+    let engine = state.engine().await;
+    set_message_group_value_snapshot(&engine, message_id, group_id, label_id, score_value)
+}
+
+/// 清空某封邮件某组的结果并解锁，后续可以重判。
+#[tauri::command]
+pub async fn clear_message_group_value(
+    state: tauri::State<'_, AppState>,
+    message_id: i64,
+    group_id: i64,
+) -> Result<(), CommandError> {
+    if message_id <= 0 {
+        return Err(CommandError::input("邮件编号不合法"));
+    }
+    ensure_group_id(group_id)?;
+    let engine = state.engine().await;
+    engine.clear_message_group_value(message_id, group_id)?;
     Ok(())
 }
 
@@ -4052,23 +4341,97 @@ pub async fn preview_classify_messages(
 pub async fn classify_messages(
     state: tauri::State<'_, AppState>,
     token: String,
-) -> Result<Vec<MailLabelDto>, CommandError> {
+) -> Result<Vec<ClassifiedMessageDto>, CommandError> {
     if token.trim().is_empty() {
         return Err(CommandError::input("缺少外发确认令牌"));
     }
-    let threshold = f64::from(state.classify_confidence_percent()) / 100.0;
     let engine = state.engine().await;
-    let labels = engine.classify_messages(&token, threshold).await?;
-    Ok(labels.iter().map(MailLabelDto::from_label).collect())
+    let messages = engine.classify_messages(&token).await?;
+    Ok(messages
+        .iter()
+        .map(|message| ClassifiedMessageDto {
+            message_id: message.message_id,
+            group_results: message.results.iter().map(GroupResultDto::from_result).collect(),
+        })
+        .collect())
 }
 #[cfg(test)]
 mod tests {
-    use super::{clamp_ui_zoom, is_external_link, strip_verbatim_prefix, MailLabelDto};
+    use super::{
+        clamp_ui_zoom, create_label_group_snapshot, is_external_link, label_groups_snapshot,
+        set_message_group_value_snapshot, strip_verbatim_prefix, MailLabelDto,
+    };
+    use mail_core::MailEngine;
+
+    /// 建一个临时引擎，跑命令层抽出来的组逻辑。
+    fn test_engine(dir: &std::path::Path) -> MailEngine {
+        MailEngine::initialize_with_secrets(dir, std::sync::Arc::new(mail_core::MemorySecretStore::new()))
+            .expect("初始化引擎")
+    }
+
+    #[test]
+    fn label_group_commands_round_trip() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = test_engine(dir.path());
+
+        // 建组：默认关着、选择题默认门槛 0.75。
+        // 注意：迁移已经建好「内容分类」组，这里换一个名字避免重名。
+        let created = create_label_group_snapshot(&engine, "主题分类", "choice", None, None).expect("建组");
+        assert_eq!(created.name, "主题分类");
+        assert_eq!(created.kind, "choice");
+        assert!(!created.enabled);
+        assert!(created.labels.is_empty());
+
+        // 列表能读到刚建的组。
+        let listed = label_groups_snapshot(&engine).expect("列表");
+        let found = listed
+            .iter()
+            .find(|group| group.id == created.id)
+            .expect("列表里应有刚建的组");
+        assert_eq!(found.name, "主题分类");
+
+        // 改名、开组、改门槛都生效。
+        engine.rename_label_group(created.id, "用途分类").expect("改名");
+        engine.set_label_group_enabled(created.id, true).expect("开组");
+        engine.set_label_group_threshold(created.id, 0.9).expect("改门槛");
+        let listed = label_groups_snapshot(&engine).expect("再列表");
+        let found = listed
+            .iter()
+            .find(|group| group.id == created.id)
+            .expect("列表里应有改过的组");
+        assert_eq!(found.name, "用途分类");
+        assert!(found.enabled);
+        assert!((found.confidence_threshold - 0.9).abs() < 1e-9);
+
+        // 删组后列表里不再有这个编号。
+        engine.delete_label_group(created.id).expect("删组");
+        let listed = label_groups_snapshot(&engine).expect("列表");
+        assert!(listed.iter().all(|group| group.id != created.id));
+    }
+
+    #[test]
+    fn set_message_group_value_rejects_foreign_label() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = test_engine(dir.path());
+        let group_a = engine
+            .create_label_group("主题分类", "choice", None, None)
+            .expect("建 A 组");
+        let group_b = engine
+            .create_label_group("优先级", "choice", None, None)
+            .expect("建 B 组");
+        let label_a = engine.create_group_label(group_a.id, "账单").expect("加标签");
+
+        // 拿 A 组的标签往 B 组写：要报错，且是中文提示。
+        let error = set_message_group_value_snapshot(&engine, 1, group_b.id, Some(label_a.id), None)
+            .expect_err("跨组写标签必须报错");
+        assert!(error.message.contains("不属于该标签组"), "{}", error.message);
+    }
 
     #[test]
     fn label_dto_never_contains_secret_fields() {
         let dto = MailLabelDto {
             id: 1,
+            group_id: 1,
             name: "账单".to_string(),
             color: "orange".to_string(),
             sort_order: 10,
