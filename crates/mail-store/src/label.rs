@@ -60,6 +60,139 @@ impl MailLabelSource {
     }
 }
 
+/// 组名的最大字符数。
+pub const MAX_GROUP_NAME_CHARS: usize = 64;
+
+/// 把握门槛的最小值。
+pub const MIN_GROUP_THRESHOLD: f64 = 0.5;
+
+/// 把握门槛的最大值。
+pub const MAX_GROUP_THRESHOLD: f64 = 0.99;
+
+/// 标签组类型，对应 jev 的三种题型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LabelGroupKind {
+    /// 选择题：从一组标签里选一个。
+    Choice,
+    /// 是否题：返回 0 到 1 的概率，落两条标签之一。
+    Boolean,
+    /// 打分题：返回各档位概率，落一个分数。
+    Score,
+}
+
+impl LabelGroupKind {
+    /// 存库用的标识。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Choice => "choice",
+            Self::Boolean => "boolean",
+            Self::Score => "score",
+        }
+    }
+
+    /// 从存库标识解析；未知值返回 `None`。
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "choice" => Some(Self::Choice),
+            "boolean" => Some(Self::Boolean),
+            "score" => Some(Self::Score),
+            _ => None,
+        }
+    }
+}
+
+/// 一个标签组（一个判断维度）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct LabelGroup {
+    /// 主键。
+    pub id: i64,
+    /// 组名（全局唯一，不含英文冒号）。
+    pub name: String,
+    /// 组类型。
+    pub kind: LabelGroupKind,
+    /// 这一组是否参与自动分类。
+    pub enabled: bool,
+    /// 这一组的把握门槛。
+    pub confidence_threshold: f64,
+    /// 打分题下限，其它类型为空。
+    pub score_min: Option<i64>,
+    /// 打分题上限，其它类型为空。
+    pub score_max: Option<i64>,
+    /// 显示顺序，小的在前。
+    pub sort_order: i64,
+}
+
+const SELECT_GROUP: &str =
+    "SELECT id, name, kind, enabled, confidence_threshold, score_min, score_max, sort_order FROM mail_label_group";
+
+fn row_to_group(row: &rusqlite::Row<'_>) -> rusqlite::Result<LabelGroup> {
+    let kind_raw: String = row.get(2)?;
+    Ok(LabelGroup {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        kind: LabelGroupKind::parse(&kind_raw).unwrap_or(LabelGroupKind::Choice),
+        enabled: row.get::<_, i64>(3)? != 0,
+        confidence_threshold: row.get(4)?,
+        score_min: row.get(5)?,
+        score_max: row.get(6)?,
+        sort_order: row.get(7)?,
+    })
+}
+
+/// 校验并规整组名：去首尾空白、非空、不超过 64 个字符、不含英文冒号。
+fn normalized_group_name(name: &str) -> Result<String, StoreError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(StoreError::InvalidData("组名不能为空".to_string()));
+    }
+    if trimmed.chars().count() > MAX_GROUP_NAME_CHARS {
+        return Err(StoreError::InvalidData(format!(
+            "组名不能超过 {MAX_GROUP_NAME_CHARS} 个字符"
+        )));
+    }
+    if trimmed.contains(':') {
+        return Err(StoreError::InvalidData("组名不能包含英文冒号".to_string()));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// 校验把握门槛：必须在 0.5 到 0.99 之间。
+fn validate_group_threshold(value: f64) -> Result<(), StoreError> {
+    if value.is_nan() || !(MIN_GROUP_THRESHOLD..=MAX_GROUP_THRESHOLD).contains(&value) {
+        return Err(StoreError::InvalidData(format!(
+            "把握门槛必须在 {MIN_GROUP_THRESHOLD} 到 {MAX_GROUP_THRESHOLD} 之间"
+        )));
+    }
+    Ok(())
+}
+
+/// 校验打分题的上下限：必须同时填、下限小于上限、档位数在 2 到 10 之间。
+fn validate_score_range(min: Option<i64>, max: Option<i64>) -> Result<(), StoreError> {
+    match (min, max) {
+        (Some(min), Some(max)) => {
+            if min >= max {
+                return Err(StoreError::InvalidData("打分下限必须小于上限".to_string()));
+            }
+            let levels = max - min + 1;
+            if !(2..=10).contains(&levels) {
+                return Err(StoreError::InvalidData("打分档位必须在 2 到 10 之间".to_string()));
+            }
+            Ok(())
+        }
+        _ => Err(StoreError::InvalidData("打分题必须同时填下限和上限".to_string())),
+    }
+}
+
+/// 把「组名重复」的唯一索引报错翻译成可读错误，其它原样透传。
+fn map_group_name_error(err: rusqlite::Error) -> StoreError {
+    if let rusqlite::Error::SqliteFailure(_, Some(message)) = &err {
+        if message.contains("mail_label_group.name") || message.contains("idx_mail_label_group_unique_name") {
+            return StoreError::InvalidData("已经有同名标签组".to_string());
+        }
+    }
+    StoreError::from(err)
+}
+
 const SELECT_LABEL: &str = "SELECT id, name, color, sort_order, is_fallback FROM mail_label";
 
 fn row_to_label(row: &rusqlite::Row<'_>) -> rusqlite::Result<MailLabel> {
@@ -245,6 +378,170 @@ impl Store {
         for (index, id) in ids.iter().enumerate() {
             tx.execute(
                 "UPDATE mail_label
+                 SET sort_order = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE id = ?1",
+                rusqlite::params![id, (index as i64 + 1) * 10],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+impl Store {
+    /// 列出全部标签组，按 `sort_order` 升序、主键升序。
+    pub fn list_label_groups(&self) -> Result<Vec<LabelGroup>, StoreError> {
+        let sql = format!("{SELECT_GROUP} ORDER BY sort_order ASC, id ASC");
+        let mut stmt = self.conn().prepare(&sql)?;
+        let mut rows = stmt.query([])?;
+        let mut groups = Vec::new();
+        while let Some(row) = rows.next()? {
+            groups.push(row_to_group(row)?);
+        }
+        Ok(groups)
+    }
+
+    /// 按主键取一个标签组。
+    pub fn get_label_group(&self, id: i64) -> Result<Option<LabelGroup>, StoreError> {
+        let sql = format!("{SELECT_GROUP} WHERE id = ?1");
+        self.conn()
+            .query_row(&sql, [id], row_to_group)
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    /// 新建标签组，返回新主键。是否题默认门槛 0.5，其余类型默认 0.75。
+    pub fn create_label_group(
+        &self,
+        name: &str,
+        kind: LabelGroupKind,
+        score_min: Option<i64>,
+        score_max: Option<i64>,
+    ) -> Result<i64, StoreError> {
+        let name = normalized_group_name(name)?;
+        match kind {
+            LabelGroupKind::Score => validate_score_range(score_min, score_max)?,
+            LabelGroupKind::Choice | LabelGroupKind::Boolean => {
+                if score_min.is_some() || score_max.is_some() {
+                    return Err(StoreError::InvalidData("只有打分题才能填上下限".to_string()));
+                }
+            }
+        }
+        let default_threshold = match kind {
+            LabelGroupKind::Boolean => 0.5,
+            _ => 0.75,
+        };
+
+        let tx = self.conn().unchecked_transaction()?;
+        let max_order: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(sort_order), 0) FROM mail_label_group",
+            [],
+            |row| row.get(0),
+        )?;
+        tx.execute(
+            "INSERT INTO mail_label_group
+                 (name, kind, enabled, confidence_threshold, score_min, score_max, sort_order)
+             VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                name,
+                kind.as_str(),
+                default_threshold,
+                score_min,
+                score_max,
+                max_order + 10
+            ],
+        )
+        .map_err(map_group_name_error)?;
+        let id = tx.last_insert_rowid();
+        tx.commit()?;
+        Ok(id)
+    }
+
+    /// 给标签组改名。
+    pub fn rename_label_group(&self, id: i64, name: &str) -> Result<(), StoreError> {
+        let name = normalized_group_name(name)?;
+        let changed = self
+            .conn()
+            .execute(
+                "UPDATE mail_label_group
+                 SET name = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE id = ?1",
+                rusqlite::params![id, name],
+            )
+            .map_err(map_group_name_error)?;
+        if changed == 0 {
+            return Err(StoreError::InvalidData("标签组不存在".to_string()));
+        }
+        Ok(())
+    }
+
+    /// 开或关一个标签组。
+    pub fn set_label_group_enabled(&self, id: i64, enabled: bool) -> Result<(), StoreError> {
+        let changed = self.conn().execute(
+            "UPDATE mail_label_group
+             SET enabled = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE id = ?1",
+            rusqlite::params![id, i64::from(enabled)],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::InvalidData("标签组不存在".to_string()));
+        }
+        Ok(())
+    }
+
+    /// 改一个标签组的把握门槛，范围 0.5 到 0.99。
+    pub fn set_label_group_threshold(&self, id: i64, threshold: f64) -> Result<(), StoreError> {
+        validate_group_threshold(threshold)?;
+        let changed = self.conn().execute(
+            "UPDATE mail_label_group
+             SET confidence_threshold = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE id = ?1",
+            rusqlite::params![id, threshold],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::InvalidData("标签组不存在".to_string()));
+        }
+        Ok(())
+    }
+
+    /// 删除标签组；组内标签与该组所有邮件结果由外键级联清掉。
+    pub fn delete_label_group(&self, id: i64) -> Result<(), StoreError> {
+        let changed = self
+            .conn()
+            .execute("DELETE FROM mail_label_group WHERE id = ?1", [id])?;
+        if changed == 0 {
+            return Err(StoreError::InvalidData("标签组不存在".to_string()));
+        }
+        Ok(())
+    }
+
+    /// 重新排序；必须传入全部组主键且不能重复，按传入顺序写 `sort_order`。
+    pub fn reorder_label_groups(&self, ids: &[i64]) -> Result<(), StoreError> {
+        let mut existing: Vec<i64> = {
+            let mut stmt = self.conn().prepare("SELECT id FROM mail_label_group")?;
+            let mut rows = stmt.query([])?;
+            let mut collected = Vec::new();
+            while let Some(row) = rows.next()? {
+                collected.push(row.get::<_, i64>(0)?);
+            }
+            collected
+        };
+
+        let mut given = ids.to_vec();
+        given.sort_unstable();
+        given.dedup();
+        if given.len() != ids.len() {
+            return Err(StoreError::InvalidData("排序里不能有重复标签组".to_string()));
+        }
+        existing.sort_unstable();
+        if given != existing {
+            return Err(StoreError::InvalidData("排序必须包含全部标签组".to_string()));
+        }
+
+        let tx = self.conn().unchecked_transaction()?;
+        for (index, id) in ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE mail_label_group
                  SET sort_order = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                  WHERE id = ?1",
                 rusqlite::params![id, (index as i64 + 1) * 10],
@@ -687,6 +984,197 @@ mod tests {
         dup[1] = dup[0];
         assert!(matches!(
             store.reorder_mail_labels(&dup).expect_err("重复"),
+            StoreError::InvalidData(_)
+        ));
+    }
+
+    #[test]
+    fn label_group_crud_and_uniqueness() {
+        let store = store();
+
+        let groups = store.list_label_groups().expect("初始组");
+        assert_eq!(groups.len(), 3, "应有三个默认组");
+        assert_eq!(groups[0].name, "内容分类");
+        assert_eq!(groups[0].kind, LabelGroupKind::Choice);
+
+        let id = store
+            .create_label_group("项目维度", LabelGroupKind::Choice, None, None)
+            .expect("建组");
+        let created = store
+            .list_label_groups()
+            .expect("再查")
+            .into_iter()
+            .find(|group| group.id == id)
+            .expect("新组应在列表里");
+        assert_eq!(created.name, "项目维度");
+        assert_eq!(created.kind, LabelGroupKind::Choice);
+        assert!(!created.enabled, "新组默认关闭");
+        assert_eq!(created.confidence_threshold, 0.75);
+        assert_eq!(created.score_min, None);
+        assert_eq!(created.score_max, None);
+        assert_eq!(created.sort_order, 40, "新组应排在最后");
+
+        assert!(matches!(
+            store
+                .create_label_group("项目维度", LabelGroupKind::Choice, None, None)
+                .expect_err("重名组应被拒"),
+            StoreError::InvalidData(_)
+        ));
+        assert!(matches!(
+            store
+                .create_label_group("内容分类", LabelGroupKind::Choice, None, None)
+                .expect_err("与默认组重名应被拒"),
+            StoreError::InvalidData(_)
+        ));
+
+        store.rename_label_group(id, "项目类型").expect("改名");
+        let renamed = store
+            .list_label_groups()
+            .expect("查改名")
+            .into_iter()
+            .find(|group| group.id == id)
+            .expect("改名后仍在");
+        assert_eq!(renamed.name, "项目类型");
+
+        store.set_label_group_enabled(id, true).expect("开组");
+        let enabled = store
+            .list_label_groups()
+            .expect("查开关")
+            .into_iter()
+            .find(|group| group.id == id)
+            .expect("组在")
+            .enabled;
+        assert!(enabled);
+        store.set_label_group_enabled(id, false).expect("关组");
+
+        store.set_label_group_threshold(id, 0.6).expect("改门槛");
+        let threshold = store
+            .list_label_groups()
+            .expect("查门槛")
+            .into_iter()
+            .find(|group| group.id == id)
+            .expect("组在")
+            .confidence_threshold;
+        assert_eq!(threshold, 0.6);
+        assert!(matches!(
+            store.set_label_group_threshold(id, 0.4).expect_err("门槛太低"),
+            StoreError::InvalidData(_)
+        ));
+        assert!(matches!(
+            store.set_label_group_threshold(id, 1.0).expect_err("门槛太高"),
+            StoreError::InvalidData(_)
+        ));
+
+        store.delete_label_group(id).expect("删组");
+        assert!(store
+            .list_label_groups()
+            .expect("删后")
+            .iter()
+            .all(|group| group.id != id));
+
+        let ids: Vec<i64> = store
+            .list_label_groups()
+            .expect("组")
+            .iter()
+            .map(|group| group.id)
+            .collect();
+        assert!(matches!(
+            store.reorder_label_groups(&ids[..2]).expect_err("少传应被拒"),
+            StoreError::InvalidData(_)
+        ));
+        let mut reversed = ids.clone();
+        reversed.reverse();
+        store.reorder_label_groups(&reversed).expect("排序");
+        let after = store.list_label_groups().expect("查排序");
+        assert_eq!(after.iter().map(|group| group.id).collect::<Vec<_>>(), reversed);
+    }
+
+    #[test]
+    fn score_group_validates_range() {
+        let store = store();
+
+        assert!(matches!(
+            store
+                .create_label_group("坏打分", LabelGroupKind::Score, Some(5), Some(1))
+                .expect_err("上下限倒挂应被拒"),
+            StoreError::InvalidData(_)
+        ));
+        assert!(matches!(
+            store
+                .create_label_group("坏打分", LabelGroupKind::Score, Some(3), Some(3))
+                .expect_err("上下限相等应被拒"),
+            StoreError::InvalidData(_)
+        ));
+        assert!(matches!(
+            store
+                .create_label_group("坏打分", LabelGroupKind::Score, Some(1), Some(11))
+                .expect_err("档位超过十条应被拒"),
+            StoreError::InvalidData(_)
+        ));
+        assert!(matches!(
+            store
+                .create_label_group("坏打分", LabelGroupKind::Score, Some(1), None)
+                .expect_err("只给下限应被拒"),
+            StoreError::InvalidData(_)
+        ));
+
+        let id = store
+            .create_label_group("打分维度", LabelGroupKind::Score, Some(1), Some(5))
+            .expect("1 到 5 应通过");
+        let group = store
+            .list_label_groups()
+            .expect("组")
+            .into_iter()
+            .find(|group| group.id == id)
+            .expect("在");
+        assert_eq!(group.kind, LabelGroupKind::Score);
+        assert_eq!(group.score_min, Some(1));
+        assert_eq!(group.score_max, Some(5));
+
+        assert!(matches!(
+            store
+                .create_label_group("坏选择", LabelGroupKind::Choice, Some(1), Some(5))
+                .expect_err("选择题不该有上下限"),
+            StoreError::InvalidData(_)
+        ));
+        assert!(matches!(
+            store
+                .create_label_group("坏是否", LabelGroupKind::Boolean, Some(1), Some(5))
+                .expect_err("是否题不该有上下限"),
+            StoreError::InvalidData(_)
+        ));
+    }
+
+    #[test]
+    fn group_name_rejects_colon() {
+        let store = store();
+        assert!(matches!(
+            store
+                .create_label_group("项目:类型", LabelGroupKind::Choice, None, None)
+                .expect_err("含英文冒号应被拒"),
+            StoreError::InvalidData(_)
+        ));
+        assert!(matches!(
+            store
+                .create_label_group("   ", LabelGroupKind::Choice, None, None)
+                .expect_err("空名应被拒"),
+            StoreError::InvalidData(_)
+        ));
+        let long = "很长".repeat(40);
+        assert!(matches!(
+            store
+                .create_label_group(&long, LabelGroupKind::Choice, None, None)
+                .expect_err("超长应被拒"),
+            StoreError::InvalidData(_)
+        ));
+
+        let id = store
+            .create_label_group("正常组", LabelGroupKind::Choice, None, None)
+            .expect("建组");
+        assert!(matches!(
+            store
+                .rename_label_group(id, "改:名")
+                .expect_err("改名含冒号应被拒"),
             StoreError::InvalidData(_)
         ));
     }
