@@ -713,12 +713,8 @@ impl MailEngine {
 
     /// 自动分类：对一封邮件跑一次多组分类，返回是否真的发了请求。
     ///
-    /// 一个组都没开就跳过，不当错误；`threshold` 参数已废弃，保留只为兼容旧调用点。
-    pub async fn classify_message_if_untagged(
-        &self,
-        message_id: i64,
-        _threshold: f64,
-    ) -> Result<bool, EngineError> {
+    /// 一个组都没开就跳过，不当错误。
+    pub async fn classify_message_if_untagged(&self, message_id: i64) -> Result<bool, EngineError> {
         if self.enabled_classify_groups()?.is_empty() {
             return Ok(false);
         }

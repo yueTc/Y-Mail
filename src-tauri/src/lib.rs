@@ -375,7 +375,6 @@ pub fn run() {
                 notify_enabled,
                 notify_ai_enabled,
                 classify_enabled,
-                classify_confidence_percent,
             );
 
             Ok(())

@@ -15,7 +15,7 @@
 //! [`register_notification_identity`]。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -80,7 +80,6 @@ pub fn spawn(
     enabled: Arc<AtomicBool>,
     ai_enabled: Arc<AtomicBool>,
     classify_enabled: Arc<AtomicBool>,
-    classify_confidence_percent: Arc<AtomicU8>,
 ) {
     tauri::async_runtime::spawn(async move {
         let mut seen: HashMap<i64, i64> = HashMap::new();
@@ -96,7 +95,8 @@ pub fn spawn(
             };
 
             // 分类消费跟通知开关无关，只看分类开关；开关关着时队列原样保留。
-            drain_classify_queue(&app, &classify_enabled, &classify_confidence_percent).await;
+            // 每组的门槛在编排里逐组读，这里不再传全局百分比。
+            drain_classify_queue(&app, &classify_enabled).await;
 
             if !primed {
                 // 启动时先把已有邮件记下来，不补弹历史通知。
@@ -161,7 +161,7 @@ fn take_classify_batch(ids: Vec<i64>) -> Vec<i64> {
 ///
 /// 开关关着时原样保留队列、一次模型都不调；开着时每轮最多处理 20 封。
 /// 每封独立取一次引擎锁，避免长时间占住界面命令要用的锁；存储锁绝不跨 await。
-async fn drain_classify_queue(app: &AppHandle, enabled: &AtomicBool, percent: &AtomicU8) {
+async fn drain_classify_queue(app: &AppHandle, enabled: &AtomicBool) {
     if !classify_drain_enabled(enabled) {
         return;
     }
@@ -173,12 +173,12 @@ async fn drain_classify_queue(app: &AppHandle, enabled: &AtomicBool, percent: &A
     if ids.is_empty() {
         return;
     }
-    let threshold = f64::from(percent.load(Ordering::Relaxed)) / 100.0;
     for message_id in ids {
         let state = app.state::<AppState>();
         let engine = state.engine().await;
-        // 已有标签的邮件在编排层直接跳过，绝不覆盖用户手改的结果。
-        if let Err(error) = engine.classify_message_if_untagged(message_id, threshold).await {
+        // 每封按当前开启的标签组分类；门槛从各组的配置读，不看全局百分比。
+        // 已有结果的组在编排层直接跳过，绝不覆盖用户手改的结果。
+        if let Err(error) = engine.classify_message_if_untagged(message_id).await {
             tracing::debug!(message_id, error = %error, "自动分类失败，跳过这封");
         }
     }
@@ -495,6 +495,16 @@ mod tests {
             !classify_drain_enabled(&off),
             "开关关着时不消费队列、一次模型都不调"
         );
+        let on = std::sync::atomic::AtomicBool::new(true);
+        assert!(classify_drain_enabled(&on));
+    }
+
+    #[test]
+    fn classify_drain_uses_group_thresholds() {
+        // 总开关关着：一次都不处理。
+        let off = std::sync::atomic::AtomicBool::new(false);
+        assert!(!classify_drain_enabled(&off));
+        // 总开关开着：走一次多次分类编排；门槛在编排里逐组读，不再看全局百分比。
         let on = std::sync::atomic::AtomicBool::new(true);
         assert!(classify_drain_enabled(&on));
     }
