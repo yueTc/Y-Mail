@@ -34,7 +34,7 @@
 - 右键邮件按组手动修改；手动改过的组锁定，AI 不再覆盖。
 - 搜索统一为 `tag:组名:值`，支持打分题 `tag:组名:>=3`；删除 `label:`。
 - 老数据搬家：现有标签与已贴标签原样进入「内容分类」组，不丢。
-- 版本号提升到 0.4.0。
+- 版本号保持 0.3.0（本功能不单独升版本）。
 
 ### 1.2 本规格不包含
 
@@ -100,7 +100,7 @@
 
 ## 3. 接口与数据
 
-### 3.1 数据模型（新增迁移 `0014_mail_label_groups.sql`）
+### 3.1 数据模型（新增迁移 `0016_mail_label_groups.sql`）
 
 **新表 `mail_label_group`（标签组）：**
 
@@ -378,7 +378,7 @@ groupResults: [
 - **R31**（MUST）点列表里的胶囊等于执行对应的 `tag:` 搜索。
 - **R32**（MUST）审计记录功能、站点、模型、是否外发、本次各组结果摘要；不记正文。
 - **R33**（MUST）设置里「一键关闭 AI」后所有组停止外发；已有结果保留。
-- **R34**（SHOULD）版本号提升到 0.4.0，7 个版本文件保持一致。
+- **R34**（SHOULD）版本号保持 0.3.0，7 个版本文件保持一致。
 
 ---
 
@@ -400,8 +400,8 @@ groupResults: [
 
 | 文件 | 类型 | 说明 |
 |---|---|---|
-| `crates/mail-store/src/migrations/sql/0014_mail_label_groups.sql` | new | 建组表、给标签加组、重建结果表、数据搬家、预置三个默认组 |
-| `crates/mail-store/src/migrations/mod.rs` | edit | 注册 0014 |
+| `crates/mail-store/src/migrations/sql/0016_mail_label_groups.sql` | new | 建组表、给标签加组、重建结果表、数据搬家、预置三个默认组 |
+| `crates/mail-store/src/migrations/mod.rs` | edit | 注册 0016 |
 | `crates/mail-store/src/label.rs` | edit | 组的增删改查、组内标签管理、组结果读写、按 `tag:` 取邮件 |
 | `crates/mail-store/src/inbox.rs` | edit | 列表查询改成按组带出多条结果；线程行取最新一封 |
 | `crates/mail-store/src/search.rs` | edit | 删 `label:`，新增 `tag:组名:值` 与 `>=` / `<=` 比较 |
@@ -423,7 +423,7 @@ groupResults: [
 
 ### Wave B1：数据层（无依赖）
 
-- 写迁移 `0014_mail_label_groups.sql`，建组表、给标签加组、重建结果表。
+- 写迁移 `0016_mail_label_groups.sql`，建组表、给标签加组、重建结果表。
 - 数据搬家：八条标签进「内容分类」，老结果带组号搬过来，预置三个默认组。
 - `mail-store::label` 增加组增删改查、组内标签管理、组结果读写。
 - 单测：迁移后标签不丢、默认三组在、组内唯一约束生效、老结果 group_id 正确。
@@ -449,7 +449,7 @@ groupResults: [
 
 ### Wave B5：收尾
 
-- 版本号提升到 0.4.0（7 个版本文件）。
+- 版本号保持 0.3.0，核对 7 个版本文件一致。
 - 四关全绿：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`、`npm run build`。
 - 更新 `.ai-memory/`（handoff.md、project_memory.md、当日 daily.md）。
 
@@ -460,4 +460,4 @@ groupResults: [
 - **未验证**：真机 jev 对「一次请求多个问题」的实际响应与耗时，实现阶段先用假服务端覆盖，接真机需用户提供密钥后实测。
 - **未验证**：打分题中文档位描述在不同档位数下的实际区分度，实现后用真实邮件抽样看效果，必要时调描述表。
 - **口径变更**：本规格取代 2026-10-09 规格的 D3、1.2 中「不做需要我回复判断」一条、R14/R15；实施时以本规格为准，旧规格不再同步维护。
-- **待用户确认**：版本号按 0.4.0 写；若要改口径，实现前同步 7 个版本文件。
+- **已确认**：版本号保持 0.3.0，不动版本文件。
