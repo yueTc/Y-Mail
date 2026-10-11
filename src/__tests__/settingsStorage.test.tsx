@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import SettingsWorkspace from "../SettingsWorkspace";
-import { api, type AppSettings } from "../api";
+import { api, type AppSettings, type GroupResult, type InboxMessage } from "../api";
 import { open } from "@tauri-apps/plugin-dialog";
 
 vi.mock("../api", () => ({
@@ -310,5 +310,56 @@ describe("设置页通讯录分组", () => {
 
     expect(api.clearAutoContacts).not.toHaveBeenCalled();
     confirm.mockRestore();
+  });
+});
+
+describe("收件箱消息的标签组结果", () => {
+  it("一封邮件按组顺序带出每组结果", () => {
+    const groupResults: GroupResult[] = [
+      {
+        groupId: 2,
+        groupName: "重要程度",
+        kind: "score",
+        labelId: null,
+        labelName: null,
+        labelColor: null,
+        scoreValue: 87,
+      },
+      {
+        groupId: 1,
+        groupName: "内容分类",
+        kind: "choice",
+        labelId: 5,
+        labelName: "账单",
+        labelColor: "orange",
+        scoreValue: null,
+      },
+    ];
+    const message: InboxMessage = {
+      id: 1,
+      accountId: 1,
+      folderId: 1,
+      uid: 10,
+      threadKey: "t1",
+      subject: "账单",
+      fromName: "张三",
+      fromAddr: "z@example.com",
+      dateUtc: "2026-10-11T00:00:00Z",
+      size: 100,
+      hasAttachments: false,
+      isRead: false,
+      isFlagged: false,
+      snippet: "",
+      accountEmail: "a@example.com",
+      accountName: "测试账号",
+      accountColor: "#3366ff",
+      folderPath: "INBOX",
+      groupResults,
+    };
+
+    expect(message.groupResults.map((result) => result.groupId)).toEqual([2, 1]);
+    expect(message.groupResults[0].scoreValue).toBe(87);
+    expect(message.groupResults[1].labelName).toBe("账单");
+    expect(message.groupResults[1].kind).toBe("choice");
   });
 });

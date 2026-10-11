@@ -142,9 +142,7 @@ function message(overrides: Partial<InboxMessage> = {}): InboxMessage {
     accountName: "测试账号",
     accountColor: "#3366ff",
     folderPath: "工作",
-    labelId: null,
-    labelName: null,
-    labelColor: null,
+    groupResults: [],
     ...overrides,
   } as InboxMessage;
 }

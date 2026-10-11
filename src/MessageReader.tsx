@@ -1091,7 +1091,9 @@ export default function MessageReader({
           <label>
             {t("标签")}<select
               aria-label={t("邮件标签")}
-              value={message.labelId === null ? "" : String(message.labelId)}
+              value={String(
+                message.groupResults.find((result) => result.labelId !== null)?.labelId ?? "",
+              )}
               disabled={labelBusy}
               onChange={(event) => void saveLabel(event.target.value)}
             >

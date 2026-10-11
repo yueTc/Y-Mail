@@ -618,7 +618,14 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
     setLabelBusy(true);
     setLabelError("");
     try {
-      await api.createMailLabel(name);
+      // TODO(Task 11)：标签组管理界面做完后，新标签直接加在用户选中的组里。
+      const groups = await api.listLabelGroups();
+      const group = groups[0];
+      if (!group) {
+        setLabelError(t("还没有标签组，请先新建一个标签组"));
+        return;
+      }
+      await api.createMailLabel(group.id, name);
       setNewLabelName("");
       await reloadLabels();
     } catch (caught) {
@@ -640,7 +647,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       setLabelBusy(true);
       setLabelError("");
       try {
-        await api.renameMailLabel(label.id, name);
+        await api.renameMailLabel(label.groupId, label.id, name);
         await reloadLabels();
       } catch (caught) {
         setLabelError(describeError(caught));
@@ -657,7 +664,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       setLabelBusy(true);
       setLabelError("");
       try {
-        await api.setMailLabelColor(label.id, color);
+        await api.setMailLabelColor(label.groupId, label.id, color);
         await reloadLabels();
       } catch (caught) {
         setLabelError(describeError(caught));
@@ -681,7 +688,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       setLabelBusy(true);
       setLabelError("");
       try {
-        await api.deleteMailLabel(label.id);
+        await api.deleteMailLabel(label.groupId, label.id);
         await reloadLabels();
       } catch (caught) {
         setLabelError(describeError(caught));
@@ -695,15 +702,19 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   /** 上下调序：把当前顺序整体提交，成功后再重新拉取。 */
   const moveLabel = useCallback(
     async (labelId: number, delta: number) => {
-      const index = labels.findIndex((label) => label.id === labelId);
+      const label = labels.find((item) => item.id === labelId);
+      if (!label) return;
+      // 排序只在同一个组里调整；跨组排序属于 Task 11 的活。
+      const groupLabels = labels.filter((item) => item.groupId === label.groupId);
+      const index = groupLabels.findIndex((item) => item.id === labelId);
       const target = index + delta;
-      if (index < 0 || target < 0 || target >= labels.length) return;
-      const next = labels.map((label) => label.id);
+      if (index < 0 || target < 0 || target >= groupLabels.length) return;
+      const next = groupLabels.map((item) => item.id);
       [next[index], next[target]] = [next[target], next[index]];
       setLabelBusy(true);
       setLabelError("");
       try {
-        await api.reorderMailLabels(next);
+        await api.reorderMailLabels(label.groupId, next);
         await reloadLabels();
       } catch (caught) {
         setLabelError(describeError(caught));

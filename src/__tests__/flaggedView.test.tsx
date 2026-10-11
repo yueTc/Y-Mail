@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import InboxPanel from "../InboxPanel";
-import type { Account, AppSettings, InboxFolder, InboxMessage } from "../api";
+import type { Account, AppSettings, GroupResult, InboxFolder, InboxMessage } from "../api";
 import { api } from "../api";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -382,6 +382,25 @@ describe("邮箱右键编辑", () => {
   });
 });
 describe("列表标签胶囊", () => {
+  const billPill: GroupResult = {
+    groupId: 1,
+    groupName: "内容分类",
+    kind: "choice",
+    labelId: 2,
+    labelName: "账单",
+    labelColor: "orange",
+    scoreValue: null,
+  };
+  const notifyPill: GroupResult = {
+    groupId: 1,
+    groupName: "内容分类",
+    kind: "choice",
+    labelId: 3,
+    labelName: "通知",
+    labelColor: "teal",
+    scoreValue: null,
+  };
+
   function labelledMessage(overrides: Partial<InboxMessage> = {}): InboxMessage {
     return {
       id: 1,
@@ -402,10 +421,7 @@ describe("列表标签胶囊", () => {
       accountName: "测试账号",
       accountColor: "#3366ff",
       folderPath: "INBOX",
-      labelId: 2,
-      labelName: "账单",
-      labelColor: "orange",
-      groupResults: [],
+      groupResults: [billPill],
       ...overrides,
     };
   }
@@ -446,7 +462,7 @@ describe("列表标签胶囊", () => {
 
   it("没有标签时不渲染胶囊", async () => {
     vi.mocked(api.listInboxMessages).mockResolvedValue({
-      items: [labelledMessage({ labelId: null, labelName: null, labelColor: null })],
+      items: [labelledMessage({ groupResults: [] })],
       total: 1,
       offset: 0,
       limit: 200,
@@ -464,7 +480,7 @@ describe("列表标签胶囊", () => {
           threadKey: "t1",
           messageCount: 2,
           unreadCount: 1,
-          latest: labelledMessage({ labelId: 3, labelName: "通知", labelColor: "teal" }),
+          latest: labelledMessage({ groupResults: [notifyPill] }),
         },
       ],
       total: 1,
@@ -486,7 +502,7 @@ describe("列表标签胶囊", () => {
           threadKey: "t1",
           messageCount: 1,
           unreadCount: 1,
-          latest: labelledMessage({ labelId: 3, labelName: "通知", labelColor: "teal" }),
+          latest: labelledMessage({ groupResults: [notifyPill] }),
         },
       ],
       total: 1,
@@ -494,7 +510,7 @@ describe("列表标签胶囊", () => {
       limit: 200,
     });
     vi.mocked(api.listThreadMessages).mockResolvedValue([
-      labelledMessage({ id: 11, uid: 11, labelId: 2, labelName: "账单", labelColor: "orange" }),
+      labelledMessage({ id: 11, uid: 11 }),
     ]);
     render(<InboxPanel />);
     fireEvent.click(await screen.findByLabelText("按会话聚合"));
@@ -529,9 +545,6 @@ describe("收件箱右键立即分类", () => {
       accountName: "测试账号",
       accountColor: "#3366ff",
       folderPath: "INBOX",
-      labelId: null,
-      labelName: null,
-      labelColor: null,
       groupResults: [],
       ...overrides,
     };
@@ -554,9 +567,10 @@ describe("收件箱右键立即分类", () => {
       authorizationToken: "tok-1",
       expiresInSeconds: 300,
       targets: [{ messageId: 42, contentHash: "hash-1" }],
+      enabledGroups: [{ name: "内容分类", kind: "choice" }],
     });
     vi.mocked(api.classifyMessages).mockResolvedValue([
-      { id: 2, name: "账单", color: "orange", sortOrder: 20, isFallback: false },
+      { messageId: 42, groupResults: [] },
     ]);
     return render(<InboxPanel />);
   }

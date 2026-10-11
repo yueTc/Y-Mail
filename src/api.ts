@@ -241,14 +241,8 @@ export interface InboxMessage {
   accountName: string;
   accountColor: string;
   folderPath: string;
-  /** 本地标签主键；没有标签为 null。 */
-  labelId: number | null;
-  /** 标签名；没有标签为 null。 */
-  labelName: string | null;
-  /** 标签颜色键；没有标签为 null。 */
-  labelColor: string | null;
   /** 一封邮件在各标签组里的结果，按组的显示顺序升序；没有结果就是空数组。 */
-  groupResults: MessageGroupResult[];
+  groupResults: GroupResult[];
 }
 
 /** 折叠后的一条会话线程。 */
@@ -635,6 +629,8 @@ export interface AiModelMap {
 /** 一条本地分类标签。 */
 export interface MailLabel {
   id: number;
+  /** 所属标签组主键。 */
+  groupId: number;
   name: string;
   /** 固定色板键，例如 orange。 */
   color: string;
@@ -658,21 +654,31 @@ export interface LabelGroup {
   /** 打分题上限；其它类型为 null。 */
   scoreMax: number | null;
   sortOrder: number;
+  /** 组内标签，按显示顺序。 */
+  labels: MailLabel[];
 }
 
-/** 这条结果是自动分类写的还是用户手改的。 */
-export type MailLabelSource = "auto" | "manual";
-
-/** 一封邮件在一个标签组里的结果。 */
-export interface MessageGroupResult {
-  group: LabelGroup;
-  /** 选择题或是否题命中的标签；打分题为 null。 */
-  label: MailLabel | null;
-  /** 打分题的数字；选择题或是否题为 null。 */
+/** 一封邮件在一个标签组里的结果；选择题/是否题带标签，打分题带分数。 */
+export interface GroupResult {
+  /** 标签组主键。 */
+  groupId: number;
+  /** 标签组名。 */
+  groupName: string;
+  kind: LabelGroupKind;
+  /** 命中的标签主键；打分题为 null。 */
+  labelId: number | null;
+  /** 命中的标签名；打分题为 null。 */
+  labelName: string | null;
+  /** 命中的标签颜色键；打分题为 null。 */
+  labelColor: string | null;
+  /** 打分题的数字；选择题和是否题为 null。 */
   scoreValue: number | null;
-  source: MailLabelSource;
-  /** 把握程度。 */
-  confidence: number | null;
+}
+
+/** 分类结果里一封邮件在各组的结果。 */
+export interface ClassifiedMessage {
+  messageId: number;
+  groupResults: GroupResult[];
 }
 
 /** 分类预览里的一封目标邮件。 */
@@ -680,6 +686,12 @@ export interface ClassifyTarget {
   messageId: number;
   /** 外发正文的内容哈希；只用于校验。 */
   contentHash: string;
+}
+
+/** 分类预览里本次将开启的一个标签组。 */
+export interface ClassifyGroup {
+  name: string;
+  kind: LabelGroupKind;
 }
 
 /** 分类前的外发确认预览；不含正文与密钥。 */
@@ -692,6 +704,8 @@ export interface ClassifyPreview {
   authorizationToken: string;
   expiresInSeconds: number;
   targets: ClassifyTarget[];
+  /** 本次将开启的标签组。 */
+  enabledGroups: ClassifyGroup[];
 }
 
 /** 通知识别「检查延迟」的一次结果。 */
@@ -1223,32 +1237,91 @@ export const api = {
 
   clearAiCache: () => call<number>("clear_ai_cache"),
 
-  // ===== 邮件自动分类标签 =====
+  // ===== 邮件自动分类标签组 =====
 
-  listMailLabels: () => call<MailLabel[]>("list_mail_labels"),
+  /** 取所有标签组，含组内标签。 */
+  listLabelGroups: () => call<LabelGroup[]>("list_label_groups"),
 
-  createMailLabel: (name: string) => call<MailLabel>("create_mail_label", { name }),
+  /** 新建标签组；打分题要同时传下限和上限。 */
+  createLabelGroup: (name: string, kind: LabelGroupKind, scoreMin?: number, scoreMax?: number) =>
+    call<LabelGroup>("create_label_group", { name, kind, scoreMin, scoreMax }),
 
-  renameMailLabel: (labelId: number, name: string) =>
-    call<void>("rename_mail_label", { labelId, name }),
+  renameLabelGroup: (groupId: number, name: string) =>
+    call<void>("rename_label_group", { groupId, name }),
 
-  setMailLabelColor: (labelId: number, color: string) =>
-    call<void>("set_mail_label_color", { labelId, color }),
+  setLabelGroupEnabled: (groupId: number, enabled: boolean) =>
+    call<void>("set_label_group_enabled", { groupId, enabled }),
 
-  deleteMailLabel: (labelId: number) => call<void>("delete_mail_label", { labelId }),
+  /** 改一个标签组的把握门槛，范围 0.50 到 0.99。 */
+  setLabelGroupThreshold: (groupId: number, threshold: number) =>
+    call<void>("set_label_group_threshold", { groupId, threshold }),
 
-  reorderMailLabels: (labelIds: number[]) =>
-    call<void>("reorder_mail_labels", { labelIds }),
+  deleteLabelGroup: (groupId: number) => call<void>("delete_label_group", { groupId }),
 
-  setMessageLabel: (messageId: number, labelId: number | null) =>
-    call<void>("set_message_label", { messageId, labelId }),
+  /** 按给定顺序重排全部标签组；必须传全部组编号。 */
+  reorderLabelGroups: (groupIds: number[]) =>
+    call<void>("reorder_label_groups", { groupIds }),
+
+  /** 在某个组里新增标签；颜色由后端按固定色板自动分配。 */
+  createMailLabel: (groupId: number, name: string) =>
+    call<MailLabel>("create_mail_label", { groupId, name }),
+
+  renameMailLabel: (groupId: number, labelId: number, name: string) =>
+    call<void>("rename_mail_label", { groupId, labelId, name }),
+
+  setMailLabelColor: (groupId: number, labelId: number, color: string) =>
+    call<void>("set_mail_label_color", { groupId, labelId, color }),
+
+  deleteMailLabel: (groupId: number, labelId: number) =>
+    call<void>("delete_mail_label", { groupId, labelId }),
+
+  /** 按给定顺序重排某个组内的全部标签；必须传该组全部标签编号。 */
+  reorderMailLabels: (groupId: number, labelIds: number[]) =>
+    call<void>("reorder_mail_labels", { groupId, labelIds }),
+
+  /** 手动设置某封邮件某组的结果；选择题/是否题传标签，打分题传分数。 */
+  setMessageGroupValue: (
+    messageId: number,
+    groupId: number,
+    labelId: number | null,
+    scoreValue: number | null,
+  ) => call<void>("set_message_group_value", { messageId, groupId, labelId, scoreValue }),
+
+  /** 清空某封邮件某组的结果并解锁。 */
+  clearMessageGroupValue: (messageId: number, groupId: number) =>
+    call<void>("clear_message_group_value", { messageId, groupId }),
+
+  // TODO(Task 11/12)：下面两个是过渡兼容封装，界面迁到标签组命令后删除。
+  /** @deprecated 用 listLabelGroups；这里把所有组的标签摊平成一张表。 */
+  listMailLabels: async () =>
+    (await call<LabelGroup[]>("list_label_groups")).flatMap((group) => group.labels),
+
+  /** @deprecated 用 setMessageGroupValue / clearMessageGroupValue。 */
+  setMessageLabel: async (messageId: number, labelId: number | null) => {
+    if (labelId === null) {
+      const message = await call<InboxMessage | null>("get_inbox_message", { messageId });
+      const hit = message?.groupResults.find((result) => result.labelId !== null);
+      if (hit) await call<void>("clear_message_group_value", { messageId, groupId: hit.groupId });
+      return;
+    }
+    const groups = await call<LabelGroup[]>("list_label_groups");
+    const group = groups.find((item) => item.labels.some((label) => label.id === labelId));
+    if (!group) throw new Error("找不到这个标签所在的标签组");
+    await call<void>("set_message_group_value", {
+      messageId,
+      groupId: group.id,
+      labelId,
+      scoreValue: null,
+    });
+  },
 
   /** 分类前的外发确认预览：只读本地正文，不发网络请求。 */
   previewClassifyMessages: (messageIds: number[]) =>
     call<ClassifyPreview>("preview_classify_messages", { messageIds }),
 
   /** 拿预览回来的令牌执行分类；令牌一次性。 */
-  classifyMessages: (token: string) => call<MailLabel[]>("classify_messages", { token }),
+  classifyMessages: (token: string) =>
+    call<ClassifiedMessage[]>("classify_messages", { token }),
   // ===== MCP 外部接入（Wave 8）=====
 
   mcpStatus: () => call<McpStatus>("mcp_status"),

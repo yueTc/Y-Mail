@@ -1717,12 +1717,8 @@ pub struct InboxMessageDto {
     pub account_color: String,
     /// 文件夹路径。
     pub folder_path: String,
-    /// 本地标签主键；没有标签为 null。
-    pub label_id: Option<i64>,
-    /// 标签名；没有标签为 null。
-    pub label_name: Option<String>,
-    /// 标签颜色键；没有标签为 null。
-    pub label_color: Option<String>,
+    /// 一封邮件在各标签组里的结果，按组的显示顺序升序；没有结果就是空数组。
+    pub group_results: Vec<GroupResultDto>,
 }
 
 impl InboxMessageDto {
@@ -1748,9 +1744,11 @@ impl InboxMessageDto {
             account_name: message.account_display_name.clone(),
             account_color: message.account_color.clone(),
             folder_path: message.folder_path.clone(),
-            label_id: message.label_id,
-            label_name: message.label_name.clone(),
-            label_color: message.label_color.clone(),
+            group_results: message
+                .group_results
+                .iter()
+                .map(GroupResultDto::from_result)
+                .collect(),
         }
     }
 }

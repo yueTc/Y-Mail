@@ -50,9 +50,6 @@ const MESSAGE: InboxMessage = {
   accountName: "测试账号",
   accountColor: "#3366ff",
   folderPath: "INBOX",
-  labelId: null,
-  labelName: null,
-  labelColor: null,
   groupResults: [],
 };
 
@@ -315,14 +312,14 @@ describe("读信窗格的附件与深色模式", () => {
 });
 describe("读信页手动改标签", () => {
   const LABELS: MailLabel[] = [
-    { id: 1, name: "客户", color: "blue", sortOrder: 10, isFallback: false },
-    { id: 2, name: "账单", color: "orange", sortOrder: 20, isFallback: false },
-    { id: 3, name: "通知", color: "teal", sortOrder: 30, isFallback: false },
-    { id: 4, name: "推广", color: "purple", sortOrder: 40, isFallback: false },
-    { id: 5, name: "招聘", color: "green", sortOrder: 50, isFallback: false },
-    { id: 6, name: "同事", color: "indigo", sortOrder: 60, isFallback: false },
-    { id: 7, name: "家人", color: "pink", sortOrder: 70, isFallback: false },
-    { id: 8, name: "其他", color: "gray", sortOrder: 1000, isFallback: true },
+    { id: 1, groupId: 1, name: "客户", color: "blue", sortOrder: 10, isFallback: false },
+    { id: 2, groupId: 1, name: "账单", color: "orange", sortOrder: 20, isFallback: false },
+    { id: 3, groupId: 1, name: "通知", color: "teal", sortOrder: 30, isFallback: false },
+    { id: 4, groupId: 1, name: "推广", color: "purple", sortOrder: 40, isFallback: false },
+    { id: 5, groupId: 1, name: "招聘", color: "green", sortOrder: 50, isFallback: false },
+    { id: 6, groupId: 1, name: "同事", color: "indigo", sortOrder: 60, isFallback: false },
+    { id: 7, groupId: 1, name: "家人", color: "pink", sortOrder: 70, isFallback: false },
+    { id: 8, groupId: 1, name: "其他", color: "gray", sortOrder: 1000, isFallback: true },
   ];
 
   it("下拉列出八条标签，能选账单也能清除，并通知外层刷新", async () => {

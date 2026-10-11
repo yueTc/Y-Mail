@@ -81,6 +81,7 @@ vi.mock("../api", () => {
     disableAllAi: vi.fn(),
     clearAiCache: vi.fn(),
     checkNotificationLatency: vi.fn(),
+    listLabelGroups: vi.fn(),
     listMailLabels: vi.fn(),
     createMailLabel: vi.fn(),
     renameMailLabel: vi.fn(),
@@ -125,9 +126,6 @@ const MESSAGE: InboxMessage = {
   accountName: "测试账号",
   accountColor: "#3366ff",
   folderPath: "INBOX",
-  labelId: null,
-  labelName: null,
-  labelColor: null,
   groupResults: [],
 };
 
@@ -870,20 +868,33 @@ describe("邮件自动分类设置", () => {
 });
 describe("分类标签管理", () => {
   const LABELS: MailLabel[] = [
-    { id: 1, name: "客户", color: "blue", sortOrder: 10, isFallback: false },
-    { id: 2, name: "账单", color: "orange", sortOrder: 20, isFallback: false },
-    { id: 3, name: "通知", color: "teal", sortOrder: 30, isFallback: false },
-    { id: 4, name: "推广", color: "purple", sortOrder: 40, isFallback: false },
-    { id: 5, name: "招聘", color: "green", sortOrder: 50, isFallback: false },
-    { id: 6, name: "同事", color: "indigo", sortOrder: 60, isFallback: false },
-    { id: 7, name: "家人", color: "pink", sortOrder: 70, isFallback: false },
-    { id: 8, name: "其他", color: "gray", sortOrder: 1000, isFallback: true },
+    { id: 1, groupId: 1, name: "客户", color: "blue", sortOrder: 10, isFallback: false },
+    { id: 2, groupId: 1, name: "账单", color: "orange", sortOrder: 20, isFallback: false },
+    { id: 3, groupId: 1, name: "通知", color: "teal", sortOrder: 30, isFallback: false },
+    { id: 4, groupId: 1, name: "推广", color: "purple", sortOrder: 40, isFallback: false },
+    { id: 5, groupId: 1, name: "招聘", color: "green", sortOrder: 50, isFallback: false },
+    { id: 6, groupId: 1, name: "同事", color: "indigo", sortOrder: 60, isFallback: false },
+    { id: 7, groupId: 1, name: "家人", color: "pink", sortOrder: 70, isFallback: false },
+    { id: 8, groupId: 1, name: "其他", color: "gray", sortOrder: 1000, isFallback: true },
   ];
 
   function prepare() {
     vi.mocked(api.listAiProviders).mockResolvedValue([]);
     vi.mocked(api.listAiModelMaps).mockResolvedValue([]);
     vi.mocked(api.listAiAudit).mockResolvedValue([]);
+    vi.mocked(api.listLabelGroups).mockResolvedValue([
+      {
+        id: 1,
+        name: "内容分类",
+        kind: "choice",
+        enabled: true,
+        confidenceThreshold: 0.75,
+        scoreMin: null,
+        scoreMax: null,
+        sortOrder: 10,
+        labels: LABELS,
+      },
+    ]);
     vi.mocked(api.listMailLabels).mockResolvedValue(LABELS);
     vi.mocked(api.createMailLabel).mockResolvedValue(LABELS[0]);
     vi.mocked(api.renameMailLabel).mockResolvedValue(undefined);
@@ -918,7 +929,7 @@ describe("分类标签管理", () => {
     const select = (await screen.findByLabelText("账单颜色")) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: "red" } });
     await waitFor(() =>
-      expect(vi.mocked(api.setMailLabelColor)).toHaveBeenCalledWith(2, "red"),
+      expect(vi.mocked(api.setMailLabelColor)).toHaveBeenCalledWith(1, 2, "red"),
     );
     await waitFor(() => expect(vi.mocked(api.listMailLabels).mock.calls.length).toBeGreaterThan(1));
   });
@@ -928,7 +939,7 @@ describe("分类标签管理", () => {
     const input = await screen.findByLabelText("新增标签");
     fireEvent.change(input, { target: { value: "项目" } });
     fireEvent.click(screen.getByRole("button", { name: "新增" }));
-    await waitFor(() => expect(vi.mocked(api.createMailLabel)).toHaveBeenCalledWith("项目"));
+    await waitFor(() => expect(vi.mocked(api.createMailLabel)).toHaveBeenCalledWith(1, "项目"));
   });
 
   it("改名失焦会提交", async () => {
@@ -937,7 +948,7 @@ describe("分类标签管理", () => {
     fireEvent.change(input, { target: { value: "账单邮件" } });
     fireEvent.blur(input);
     await waitFor(() =>
-      expect(vi.mocked(api.renameMailLabel)).toHaveBeenCalledWith(2, "账单邮件"),
+      expect(vi.mocked(api.renameMailLabel)).toHaveBeenCalledWith(1, 2, "账单邮件"),
     );
   });
 
@@ -945,7 +956,7 @@ describe("分类标签管理", () => {
     prepare();
     fireEvent.click(await screen.findByRole("button", { name: "上移账单" }));
     await waitFor(() =>
-      expect(vi.mocked(api.reorderMailLabels)).toHaveBeenCalledWith([2, 1, 3, 4, 5, 6, 7, 8]),
+      expect(vi.mocked(api.reorderMailLabels)).toHaveBeenCalledWith(1, [2, 1, 3, 4, 5, 6, 7, 8]),
     );
   });
 });
