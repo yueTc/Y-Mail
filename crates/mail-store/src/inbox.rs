@@ -465,6 +465,11 @@ pub struct InboxFolder {
     pub changeable: bool,
     /// 能不能新建子文件夹。
     pub allows_children: bool,
+    /// 服务商有没有明确拒绝过在这里建子文件夹。
+    ///
+    /// 与 `allows_children` 的区别：那是「服务器属性说可以」，这是「真发 CREATE 被拒过」。
+    /// 界面用它在菜单里给出置灰说明，而不是让用户再撞一次墙。
+    pub child_create_blocked: bool,
 }
 
 impl Store {
@@ -472,7 +477,7 @@ impl Store {
     pub fn list_inbox_folders(&self) -> Result<Vec<InboxFolder>, StoreError> {
         let sql = "SELECT f.account_id, f.id, f.full_path, f.kind, \
             COUNT(m.id), COALESCE(SUM(CASE WHEN m.is_read = 0 THEN 1 ELSE 0 END), 0), \
-            COALESCE(f.server_path, ''), f.delimiter, f.attributes \
+            COALESCE(f.server_path, ''), f.delimiter, f.attributes, f.child_create_blocked \
             FROM folder f \
             LEFT JOIN message m ON m.folder_id = f.id \
             GROUP BY f.id \
@@ -487,9 +492,10 @@ impl Store {
             let full_path: String = row.get(2)?;
             let kind: String = row.get(3)?;
             let attributes = decode_attributes(&row.get::<_, String>(8)?);
+            let child_create_blocked = row.get::<_, i64>(9)? != 0;
             let folder_kind = FolderKind::parse(&kind).unwrap_or(FolderKind::Custom);
             let changeable = folder_changeable(&full_path, folder_kind, &attributes);
-            let allows_children = folder_allows_children(&attributes);
+            let allows_children = folder_allows_children(&attributes) && !child_create_blocked;
             items.push(InboxFolder {
                 account_id: row.get(0)?,
                 folder_id: row.get(1)?,
@@ -502,6 +508,7 @@ impl Store {
                 attributes,
                 changeable,
                 allows_children,
+                child_create_blocked,
             });
         }
         Ok(items)

@@ -1806,6 +1806,8 @@ pub struct InboxFolderDto {
     pub changeable: bool,
     /// 能不能新建子文件夹。
     pub allows_children: bool,
+    /// 服务商有没有明确拒绝过在这里建子文件夹。界面据此给置灰说明。
+    pub child_create_blocked: bool,
 }
 
 impl InboxFolderDto {
@@ -1820,6 +1822,7 @@ impl InboxFolderDto {
             delimiter: folder.delimiter.clone(),
             changeable: folder.changeable,
             allows_children: folder.allows_children,
+            child_create_blocked: folder.child_create_blocked,
         }
     }
 }

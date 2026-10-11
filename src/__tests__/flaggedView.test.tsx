@@ -108,6 +108,7 @@ function folder(overrides: Partial<InboxFolder> = {}): InboxFolder {
     delimiter: "/",
     changeable: false,
     allowsChildren: false,
+    childCreateBlocked: false,
     ...overrides,
   };
 }

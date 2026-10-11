@@ -7,8 +7,8 @@
 
 use std::sync::Mutex;
 
-use mail_domain::{folder_allows_children, folder_changeable, FolderKind};
-use mail_imap::{build_server_path, FolderInfo};
+use mail_domain::{folder_allows_children, folder_changeable, ConnectionErrorKind, FolderKind};
+use mail_imap::{build_server_path, rejection_blocks_children, FolderInfo};
 use mail_store::{NewFolder, Store};
 
 use crate::compose::lock_store;
@@ -132,6 +132,16 @@ impl MailEngine {
         let mut client = self.connect_client(account_id).await?;
         if let Err(error) = client.create_folder(&target_server).await {
             let _ = client.logout().await;
+            // 服务商明确说这里不能再分层时，把结论记到父文件夹上；
+            // 下次右键不再开放入口，免得用户反复撞同一个拒绝。
+            if error.kind == ConnectionErrorKind::Rejected && rejection_blocks_children(&error.message) {
+                if let Some(parent_id) = parent_folder_id {
+                    let store = lock_store(&self.store);
+                    if let Err(mark_error) = store.set_folder_child_create_blocked(parent_id, true) {
+                        tracing::warn!(error = %mark_error, "记录服务商不允许建子文件夹失败");
+                    }
+                }
+            }
             return Err(EngineError::from(error));
         }
         let folders = client.list_folders().await?;

@@ -886,6 +886,10 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
       await refreshSidebar();
     } catch (caught) {
       setFolderError(describeError(caught));
+      // 服务商拒绝后本地可能记下了「这里不能再分层」，刷新一下让右键菜单同步。
+      if (folderDialog.mode === "create-child") {
+        await refreshSidebar();
+      }
     } finally {
       setFolderBusy(false);
     }
@@ -1779,6 +1783,10 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
             onClick={() => openCreateFolderDialog(folderMenu.folder.accountId, folderMenu.folder)}
           >
             {t("新建子文件夹")}</button>
+        )}
+        {folderMenu.folder.childCreateBlocked && (
+          <button type="button" role="menuitem" className="context-menu-item" disabled>
+            {t("服务商不允许在此文件夹下建子文件夹")}</button>
         )}
         {folderMenu.folder.changeable && (
           <button

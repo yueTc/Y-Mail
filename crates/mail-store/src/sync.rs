@@ -38,6 +38,11 @@ pub struct StoredFolder {
     pub unread_count: i64,
     /// 服务器 LIST 返回的文件夹属性（如 `\Sent`、`\Noselect`）。
     pub attributes: Vec<String>,
+    /// 服务商有没有明确拒绝过在这个文件夹下建子文件夹。
+    ///
+    /// 有的服务商在 LIST 里不返回 `\NoInferiors`，只有真发 CREATE 才回 NO；
+    /// 这里存的就是那次拒绝的结论，界面据此不再重复开放入口。
+    pub child_create_blocked: bool,
 }
 
 /// 准备对齐到本地的一条服务器文件夹。
@@ -133,7 +138,8 @@ pub struct StoredSyncJob {
 }
 
 const SELECT_FOLDER: &str = "SELECT id, account_id, full_path, server_path, delimiter, kind, \
-    uidvalidity, uidnext, synced_min_uid, last_sync_at, unread_count, attributes FROM folder";
+    uidvalidity, uidnext, synced_min_uid, last_sync_at, unread_count, attributes, \
+    child_create_blocked FROM folder";
 
 fn row_to_folder(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredFolder> {
     let kind: String = row.get(5)?;
@@ -153,6 +159,7 @@ fn row_to_folder(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredFolder> {
         last_sync_at: row.get(9)?,
         unread_count: row.get(10)?,
         attributes: decode_attributes(&row.get::<_, String>(11)?),
+        child_create_blocked: row.get::<_, i64>(12)? != 0,
     })
 }
 
@@ -471,6 +478,20 @@ impl Store {
             folders.push(row_to_folder(row)?);
         }
         Ok(folders)
+    }
+
+    /// 记住「服务商明确拒绝在这个文件夹下建子文件夹」这个结论。
+    ///
+    /// 服务器 LIST 属性不总是可靠（有的服务商不返回 `\NoInferiors`），
+    /// 只有真发一次 CREATE 才知道结果；把这个结果落盘，界面下次不再开放入口。
+    pub fn set_folder_child_create_blocked(&self, folder_id: i64, blocked: bool) -> Result<(), StoreError> {
+        self.conn().execute(
+            "UPDATE folder SET child_create_blocked = ?2, \
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+             WHERE id = ?1",
+            rusqlite::params![folder_id, if blocked { 1_i64 } else { 0_i64 }],
+        )?;
+        Ok(())
     }
 
     /// 记录 SELECT 的结果：UIDVALIDITY、UIDNEXT 与未读数。

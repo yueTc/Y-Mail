@@ -9,7 +9,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::parse::{format_uid_set, parse_fetch_line, parse_list_line, parse_select_line, quote_imap_string};
-use super::{ClientConfig, FolderInfo, IdleInterrupt, IdleOutcome, ImapClient};
+use super::{
+    folder_rejection_reason, rejection_blocks_children, ClientConfig, FolderInfo, IdleInterrupt, IdleOutcome,
+    ImapClient,
+};
 
 fn config(port: u16) -> ClientConfig {
     ClientConfig {
@@ -604,6 +607,80 @@ fn 服务器路径会编码新段并拼上父级() {
     assert_eq!(super::build_server_path(Some("A"), "", "B"), "A/B");
 }
 
+#[test]
+fn 服务商拒绝原文会翻成中文() {
+    // 典型的 QQ 邮箱「订阅邮件」拒绝建子文件夹。
+    assert_eq!(
+        folder_rejection_reason("Can not create subfolder"),
+        super::NO_CHILD_FOLDER_REASON
+    );
+    assert_eq!(
+        folder_rejection_reason("NOINFERIORS"),
+        super::NO_CHILD_FOLDER_REASON
+    );
+    // 服务商本来就是中文时照原样用。
+    assert_eq!(
+        folder_rejection_reason("不允许在此处创建子文件夹"),
+        "不允许在此处创建子文件夹"
+    );
+    // 认不出的英文不能把原文端给用户，只给通用兜底。
+    let fallback = folder_rejection_reason("NO some weird reason");
+    assert!(!fallback.contains("weird"), "不能把英文原文端给用户：{fallback}");
+    assert!(!folder_rejection_reason("   ").is_empty());
+}
+
+#[test]
+fn 拒绝原因能判断是否挡住建子文件夹() {
+    assert!(rejection_blocks_children(super::NO_CHILD_FOLDER_REASON));
+    assert!(rejection_blocks_children(
+        "服务商不允许在这个文件夹下面建子文件夹，请换个位置"
+    ));
+    assert!(!rejection_blocks_children("已经有同名的文件夹了"));
+}
+
+#[tokio::test]
+async fn 建子文件夹被拒会翻成中文且判定挡住建子文件夹() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");
+    let addr = listener.local_addr().expect("地址");
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("接受");
+        let mut reader = greeting(socket).await;
+        let _ = read_line(&mut reader).await;
+        reader.get_mut().write_all(b"a001 OK\r\n").await.expect("写");
+        let _ = read_line(&mut reader).await;
+        reader
+            .get_mut()
+            .write_all(b"* CAPABILITY IMAP4rev1\r\na002 OK\r\n")
+            .await
+            .expect("写");
+        assert_eq!(read_line(&mut reader).await, "a003 CREATE \"INBOX/Archive\"");
+        reader
+            .get_mut()
+            .write_all(b"a003 NO CREATE Can not create subfolder\r\n")
+            .await
+            .expect("写");
+    });
+
+    let mut client = ImapClient::connect(&config(addr.port()), None)
+        .await
+        .expect("连接");
+    let error = client
+        .create_folder("INBOX/Archive")
+        .await
+        .expect_err("应当被拒绝");
+    assert_eq!(error.kind, ConnectionErrorKind::Rejected);
+    assert!(
+        error.message.contains(super::NO_CHILD_FOLDER_REASON),
+        "{}",
+        error.message
+    );
+    assert!(
+        !error.message.contains("subfolder"),
+        "不能把英文原文端给用户：{}",
+        error.message
+    );
+    assert!(rejection_blocks_children(&error.message));
+}
 #[tokio::test]
 async fn 新建改名删除文件夹会发对应命令() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");

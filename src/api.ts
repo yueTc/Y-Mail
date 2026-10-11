@@ -283,6 +283,8 @@ export interface InboxFolder {
   changeable: boolean;
   /** 能不能新建子文件夹。 */
   allowsChildren: boolean;
+  /** 服务商有没有明确拒绝过在这里建子文件夹；用来给置灰说明。 */
+  childCreateBlocked: boolean;
 }
 
 /** 删除一封邮件前的预览：是移到已删除，还是彻底删除。 */

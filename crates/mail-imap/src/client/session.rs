@@ -17,8 +17,8 @@ use super::parse::{
     parse_select_line, quote_imap_string, trailing_literal, SelectEvent, Value,
 };
 use super::{
-    Address, ClientConfig, Envelope, FolderInfo, IdleInterrupt, IdleOutcome, ImapClient, MailboxStatus,
-    MessageMeta,
+    folder_rejection_reason, Address, ClientConfig, Envelope, FolderInfo, IdleInterrupt, IdleOutcome,
+    ImapClient, MailboxStatus, MessageMeta,
 };
 
 /// 单行上限。
@@ -113,9 +113,10 @@ impl ImapClient {
         let name = quote_imap_string(server_path)?;
         let reply = self.command(&format!("CREATE {name}")).await?;
         if reply.status != "OK" {
+            tracing::debug!(detail = %reply.detail, "服务商拒绝新建文件夹");
             return Err(ConnectionError::rejected(format!(
                 "新建文件夹失败：{}",
-                reply.detail
+                folder_rejection_reason(&reply.detail)
             )));
         }
         Ok(())
@@ -127,9 +128,10 @@ impl ImapClient {
         let to = quote_imap_string(to)?;
         let reply = self.command(&format!("RENAME {from} {to}")).await?;
         if reply.status != "OK" {
+            tracing::debug!(detail = %reply.detail, "服务商拒绝重命名文件夹");
             return Err(ConnectionError::rejected(format!(
                 "重命名文件夹失败：{}",
-                reply.detail
+                folder_rejection_reason(&reply.detail)
             )));
         }
         Ok(())
@@ -140,9 +142,10 @@ impl ImapClient {
         let name = quote_imap_string(server_path)?;
         let reply = self.command(&format!("DELETE {name}")).await?;
         if reply.status != "OK" {
+            tracing::debug!(detail = %reply.detail, "服务商拒绝删除文件夹");
             return Err(ConnectionError::rejected(format!(
                 "删除文件夹失败：{}",
-                reply.detail
+                folder_rejection_reason(&reply.detail)
             )));
         }
         Ok(())

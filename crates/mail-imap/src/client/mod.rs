@@ -77,6 +77,66 @@ impl FolderInfo {
     }
 }
 
+/// 服务商明确说「这里不能再建子文件夹」时的统一中文说法。
+///
+/// 单独抽成常量：`session` 用它拼错误文案，上层用它判断该不该关掉入口。
+pub const NO_CHILD_FOLDER_REASON: &str = "服务商不允许在这个文件夹下面建子文件夹";
+
+/// 把服务商拒绝文件夹操作的原文翻成用户能看懂的中文。
+///
+/// 认得出常见说法就给对应中文；服务商本来就是中文的照原样用；两边都认不出时
+/// 只给一句通用说明，不把英文原文端给用户。
+pub fn folder_rejection_reason(detail: &str) -> String {
+    let trimmed = detail.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let mapped: Option<&str> = if lower.contains("subfolder")
+        || lower.contains("sub folder")
+        || lower.contains("noinferiors")
+        || lower.contains("inferior")
+        || lower.contains("child folder")
+    {
+        Some(NO_CHILD_FOLDER_REASON)
+    } else if lower.contains("nonexistent")
+        || lower.contains("does not exist")
+        || lower.contains("no such")
+        || lower.contains("not found")
+    {
+        Some("服务商那边没有这个文件夹了")
+    } else if lower.contains("already exist") || lower.contains("exists already") {
+        Some("已经有同名的文件夹了")
+    } else if lower.contains("permission")
+        || lower.contains("denied")
+        || lower.contains("not allowed")
+        || lower.contains("forbidden")
+        || lower.contains("authorization")
+    {
+        Some("服务商没有开放这项操作的权限")
+    } else if lower.contains("not empty") || lower.contains("has children") || lower.contains("in use") {
+        Some("这个文件夹里还有内容，服务商不允许直接删")
+    } else if lower.contains("quota") || lower.contains("limit reached") || lower.contains("too many") {
+        Some("已经达到服务商允许的文件夹上限了")
+    } else if lower.contains("invalid") || lower.contains("illegal") {
+        Some("服务商不接受这个名字")
+    } else {
+        None
+    };
+    if let Some(text) = mapped {
+        return text.to_string();
+    }
+    if !trimmed.is_empty() && trimmed.chars().any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch)) {
+        return trimmed.to_string();
+    }
+    "服务商拒绝了这次操作，没有给出可读的原因".to_string()
+}
+
+/// 这次拒绝是不是「这个位置不能再分层」。
+///
+/// 有的服务商（如 QQ 邮箱的「订阅邮件」）LIST 里不给 `\NoInferiors`，
+/// 只有真发 CREATE 才回 NO；上层拿这个判断把结论记下来。
+pub fn rejection_blocks_children(message: &str) -> bool {
+    message.contains(NO_CHILD_FOLDER_REASON)
+}
+
 /// 把用户输入的显示名拼成服务器要的路径。
 ///
 /// 父路径必须是服务器原始名（可能已是 Modified UTF-7），只有新名字需要编码。

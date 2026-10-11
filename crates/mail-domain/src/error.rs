@@ -52,9 +52,7 @@ impl ConnectionErrorKind {
             }
             Self::ProxyFailure => "请检查代理地址、端口与账号密码，或改用「直连」再试。",
             Self::Protocol => "服务器返回了无法识别的内容，可能是地址或端口填错了。",
-            Self::Rejected => {
-                "服务器明确拒绝了本次请求，请先按提示里的具体原因排查；仍不行再核对服务器地址与端口。"
-            }
+            Self::Rejected => "服务商明确拒绝了这次操作，按上面写明的原因处理即可。",
             Self::Unknown => "请重试；若仍失败，可查看本地日志排查。",
         }
     }

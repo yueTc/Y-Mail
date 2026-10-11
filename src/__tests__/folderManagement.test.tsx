@@ -117,6 +117,7 @@ function folder(overrides: Partial<InboxFolder> = {}): InboxFolder {
     delimiter: "/",
     changeable: true,
     allowsChildren: false,
+    childCreateBlocked: false,
     ...overrides,
   };
 }
@@ -255,6 +256,27 @@ describe("文件夹右键菜单", () => {
     expect(within(menu).getByRole("menuitem", { name: "新建子文件夹" })).toBeTruthy();
   });
 
+  it("服务商拒绝过后只给一条置灰说明，不再开放新建子文件夹", async () => {
+    vi.mocked(api.listInboxFolders).mockResolvedValue([
+      folder({
+        folderId: 10,
+        fullPath: "订阅邮件",
+        changeable: false,
+        allowsChildren: false,
+        childCreateBlocked: true,
+      }),
+    ]);
+    await openAccount();
+
+    fireEvent.contextMenu(screen.getByText("订阅邮件"));
+    const menu = await screen.findByRole("menu", { name: "文件夹菜单" });
+
+    expect(within(menu).queryByRole("menuitem", { name: "新建子文件夹" })).toBeNull();
+    const hint = within(menu).getByRole("menuitem", {
+      name: "服务商不允许在此文件夹下建子文件夹",
+    });
+    expect((hint as HTMLButtonElement).disabled).toBe(true);
+  });
   it("点重命名弹窗预填末段名字，保存后调改名接口", async () => {
     vi.mocked(api.listInboxFolders).mockResolvedValue([
       folder({ folderId: 10, fullPath: "工作/项目", changeable: true, allowsChildren: false }),
@@ -328,6 +350,41 @@ describe("账号右键新建文件夹", () => {
 
     await waitFor(() =>
       expect(vi.mocked(api.createMailFolder)).toHaveBeenCalledWith(1, 10, "子项目"),
+    );
+  });
+  it("建子文件夹被服务商拒绝后刷新侧栏收口入口", async () => {
+    vi.mocked(api.listInboxFolders)
+      .mockResolvedValueOnce([
+        folder({
+          folderId: 10,
+          fullPath: "订阅邮件",
+          changeable: false,
+          allowsChildren: true,
+        }),
+      ])
+      .mockResolvedValue([
+        folder({
+          folderId: 10,
+          fullPath: "订阅邮件",
+          changeable: false,
+          allowsChildren: false,
+          childCreateBlocked: true,
+        }),
+      ]);
+    vi.mocked(api.createMailFolder).mockRejectedValue(
+      new Error("服务商不允许在这个文件夹下面建子文件夹"),
+    );
+    await openAccount();
+
+    fireEvent.contextMenu(screen.getByText("订阅邮件"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "新建子文件夹" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "文件夹" });
+    fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "子项目" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(api.listInboxFolders).mock.calls.length).toBeGreaterThanOrEqual(2),
     );
   });
 });

@@ -106,6 +106,7 @@ describe("统一收件箱前端", () => {
       delimiter: "/",
       changeable: true,
       allowsChildren: true,
+      childCreateBlocked: false,
     };
     const inbox: InboxFolder = { ...custom, folderId: 6, fullPath: "INBOX", kind: "inbox" };
     expect(folderLabel(custom)).toBe("工作/项目");
@@ -139,6 +140,7 @@ describe("左侧文件夹项", () => {
     delimiter: "/",
     changeable: false,
     allowsChildren: false,
+    childCreateBlocked: false,
   };
 
   it("只在收件箱后面插一条红旗邮件，别的文件夹照旧", () => {
@@ -193,6 +195,7 @@ describe("按文件夹类型计数", () => {
     delimiter: "/",
     changeable: false,
     allowsChildren: false,
+    childCreateBlocked: false,
   };
 
   it("草稿和已发送按类型合计，别的类型不算进来", () => {
