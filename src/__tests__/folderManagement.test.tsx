@@ -196,7 +196,7 @@ async function openAccount(): Promise<void> {
 }
 
 describe("文件夹右键菜单", () => {
-  it("系统文件夹只给一条禁用说明，不开放改名删除和新建子文件夹", async () => {
+  it("服务器不让分层的系统文件夹只给一条禁用说明", async () => {
     vi.mocked(api.listInboxFolders).mockResolvedValue([
       folder({ folderId: 1, fullPath: "INBOX", kind: "inbox", changeable: false, allowsChildren: false }),
     ]);
@@ -208,6 +208,23 @@ describe("文件夹右键菜单", () => {
     expect(within(menu).queryByRole("menuitem", { name: "重命名" })).toBeNull();
     expect(within(menu).queryByRole("menuitem", { name: "删除文件夹" })).toBeNull();
     expect(within(menu).queryByRole("menuitem", { name: "新建子文件夹" })).toBeNull();
+    const disabled = within(menu).getByRole("menuitem", { name: "系统文件夹不支持改名或删除" });
+    expect((disabled as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("服务器允许分层的系统文件夹照样给新建子文件夹，只是不给改名删除", async () => {
+    vi.mocked(api.listInboxFolders).mockResolvedValue([
+      folder({ folderId: 1, fullPath: "INBOX", kind: "inbox", changeable: false, allowsChildren: true }),
+    ]);
+    await openAccount();
+
+    fireEvent.contextMenu(screen.getByText("收件箱"));
+    const menu = await screen.findByRole("menu", { name: "文件夹菜单" });
+
+    expect(within(menu).getByRole("menuitem", { name: "新建子文件夹" })).toBeTruthy();
+    expect(within(menu).queryByRole("menuitem", { name: "重命名" })).toBeNull();
+    expect(within(menu).queryByRole("menuitem", { name: "删除文件夹" })).toBeNull();
+    // 系统文件夹的改名删除还是不开放，说明照旧给。
     const disabled = within(menu).getByRole("menuitem", { name: "系统文件夹不支持改名或删除" });
     expect((disabled as HTMLButtonElement).disabled).toBe(true);
   });

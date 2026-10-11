@@ -1798,7 +1798,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
           >
             {t("删除文件夹")}</button>
         )}
-        {!folderMenu.folder.changeable && !folderMenu.folder.allowsChildren && (
+        {!folderMenu.folder.changeable && (
           <button type="button" role="menuitem" className="context-menu-item" disabled>
             {t("系统文件夹不支持改名或删除")}</button>
         )}

@@ -83,7 +83,7 @@ impl MailEngine {
                     if folder.account_id != account_id {
                         return Err(EngineError::BadRequest("父文件夹不属于这个账号".to_string()));
                     }
-                    if !folder_allows_children(folder.kind, &folder.attributes) {
+                    if !folder_allows_children(&folder.attributes) {
                         return Err(EngineError::BadRequest(
                             "这个文件夹不允许再建子文件夹".to_string(),
                         ));

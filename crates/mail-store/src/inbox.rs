@@ -489,7 +489,7 @@ impl Store {
             let attributes = decode_attributes(&row.get::<_, String>(8)?);
             let folder_kind = FolderKind::parse(&kind).unwrap_or(FolderKind::Custom);
             let changeable = folder_changeable(&full_path, folder_kind, &attributes);
-            let allows_children = folder_allows_children(folder_kind, &attributes);
+            let allows_children = folder_allows_children(&attributes);
             items.push(InboxFolder {
                 account_id: row.get(0)?,
                 folder_id: row.get(1)?,

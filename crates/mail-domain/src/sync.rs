@@ -127,11 +127,9 @@ pub fn folder_changeable(full_path: &str, kind: FolderKind, attributes: &[String
 
 /// 文件夹下能不能新建子文件夹。
 ///
-/// 带 `\\NoInferiors` 的文件夹服务器明确说不能再分层；系统文件夹也不开放。
-pub fn folder_allows_children(kind: FolderKind, attributes: &[String]) -> bool {
-    if kind.is_system() {
-        return false;
-    }
+/// 交给服务器的能力说话：带 `\\NoInferiors` 说明服务器明确不能再分层，带 `\\Noselect`
+/// 的空壳也不能当父级。系统文件夹不在这里一刀切，按用户确认的口径跟服务器来。
+pub fn folder_allows_children(attributes: &[String]) -> bool {
     !has_protocol_attribute(attributes, "\\Noselect") && !has_protocol_attribute(attributes, "\\NoInferiors")
 }
 
@@ -394,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn 系统文件夹和收件箱不允许改也不能建子文件夹() {
+    fn 系统文件夹不能改名但能按服务器能力建子文件夹() {
         for kind in [
             FolderKind::Inbox,
             FolderKind::Sent,
@@ -403,16 +401,14 @@ mod tests {
             FolderKind::Junk,
         ] {
             assert!(!folder_changeable("随便", kind, &[]), "{kind:?} 不应开放改名删除");
-            assert!(
-                !folder_allows_children(kind, &[]),
-                "{kind:?} 不应开放新建子文件夹"
-            );
+            // 用户已确认：系统文件夹也能建子文件夹，去留交给服务器能力。
+            assert!(folder_allows_children(&[]), "{kind:?} 建子文件夹应当跟着服务器来");
         }
-        // 类别认不出来，但路径就是收件箱时也要挡住。
+        // 类别认不出来，但路径就是收件箱时也要挡住改名删除。
         assert!(!folder_changeable("inbox", FolderKind::Custom, &[]));
         // 自定义文件夹默认两层都开放。
         assert!(folder_changeable("项目/2026", FolderKind::Custom, &[]));
-        assert!(folder_allows_children(FolderKind::Custom, &[]));
+        assert!(folder_allows_children(&[]));
     }
 
     #[test]
@@ -423,10 +419,12 @@ mod tests {
         // 空壳和已消失的文件夹既不能改也不能建子文件夹。
         assert!(!folder_changeable("归档/全部邮件", FolderKind::Custom, &noselect));
         assert!(!folder_changeable("旧目录", FolderKind::Custom, &inexistent));
-        assert!(!folder_allows_children(FolderKind::Custom, &noselect));
+        assert!(!folder_allows_children(&noselect));
         // 服务器说不能再分层时，只挡子文件夹，不挡改名。
         assert!(folder_changeable("项目", FolderKind::Custom, &no_inferiors));
-        assert!(!folder_allows_children(FolderKind::Custom, &no_inferiors));
+        assert!(!folder_allows_children(&no_inferiors));
+        // 系统文件夹只要服务器没说不能再分层，就能建子文件夹。
+        assert!(folder_allows_children(&[]));
         // Gmail 的方括号命名空间不开放改名删除。
         assert!(!folder_changeable("[Gmail]/全部邮件", FolderKind::Custom, &[]));
     }
