@@ -633,7 +633,8 @@ mod tests {
                  FROM mail_label_group ORDER BY sort_order ASC",
             )
             .expect("准备查询组");
-        let groups: Vec<(String, String, i64, f64, Option<i64>, Option<i64>, i64)> = stmt
+        type RawLabelGroup = (String, String, i64, f64, Option<i64>, Option<i64>, i64);
+        let groups: Vec<RawLabelGroup> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get(0)?,
