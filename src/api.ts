@@ -1330,7 +1330,7 @@ export const api = {
     });
   },
 
-  /** 分类前的外发确认预览：只读本地正文，不发网络请求。 */
+  /** 分类前的外发确认预览：正文本地没有就先联网下载一次，但不发 AI 分类请求。 */
   previewClassifyMessages: (messageIds: number[]) =>
     call<ClassifyPreview>("preview_classify_messages", { messageIds }),
 

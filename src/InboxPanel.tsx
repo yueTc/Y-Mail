@@ -903,7 +903,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
 
   /**
    * 点「立即分类」：先拿外发预览。没开「下次不要提醒」就弹一次确认；
-   * 开了就按用户偏好直接外发，不再逐封确认。取消时完全不读正文、不外发。
+   * 开了就按用户偏好直接外发，不再逐封确认。取消时不外发、不写分类结果，但正文本地没有时可能已先下载到本机。
    */
   const startClassify = useCallback(async (message: InboxMessage) => {
     setMessageMenu(undefined);
