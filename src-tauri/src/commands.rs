@@ -336,6 +336,14 @@ fn default_enabled() -> bool {
     true
 }
 
+/// AI 站点草稿缺省代理：跟随全局。
+fn default_account_proxy() -> AccountProxyDto {
+    AccountProxyDto {
+        mode: AccountProxyModeKind::Inherit,
+        proxy_id: None,
+    }
+}
+
 impl AccountDraftDto {
     fn to_domain(&self) -> Result<AccountDraft, CommandError> {
         Ok(AccountDraft {
@@ -3313,6 +3321,9 @@ pub struct AiProviderDraftDto {
     /// 是否启用。
     #[serde(default)]
     pub enabled: bool,
+    /// 站点级代理策略；缺省跟随全局。
+    #[serde(default = "default_account_proxy")]
+    pub proxy: AccountProxyDto,
 }
 
 impl AiProviderDraftDto {
@@ -3338,6 +3349,7 @@ impl AiProviderDraftDto {
             models: self.models.clone(),
             thinking_level,
             enabled: self.enabled,
+            proxy: self.proxy.to_domain()?,
         })
     }
 }
@@ -3362,6 +3374,8 @@ pub struct AiProviderDto {
     pub thinking_level: String,
     /// 是否启用。
     pub enabled: bool,
+    /// 站点级代理策略。
+    pub proxy: AccountProxyDto,
     /// 保险箱里是否已有密钥。
     pub has_key: bool,
     /// 这个站点类型支持的功能标识（邮件分类只认 TypeSafe jev）。
@@ -3379,6 +3393,7 @@ impl AiProviderDto {
             models: view.models.clone(),
             thinking_level: view.thinking_level.as_str().to_string(),
             enabled: view.enabled,
+            proxy: AccountProxyDto::from_domain(view.proxy),
             has_key: view.has_key,
             supported_functions: ALL_AI_FUNCTIONS
                 .iter()
@@ -3859,14 +3874,19 @@ pub async fn test_ai_provider(
     base_url: String,
     api_key: Option<String>,
     id: Option<i64>,
+    proxy: Option<AccountProxyDto>,
 ) -> Result<Vec<String>, CommandError> {
     let kind = AiProviderKind::parse(&kind).ok_or_else(|| {
         CommandError::input("AI 站点类型只能是 openai_compatible、deepl、ollama 或 typesafe")
     })?;
+    let proxy = match proxy {
+        Some(proxy) => proxy.to_domain()?,
+        None => AccountProxyMode::InheritGlobal,
+    };
     let secret = api_key.map(Secret::new);
     let engine = state.engine().await;
     let models = engine
-        .test_ai_provider(kind, &base_url, secret.as_ref(), id)
+        .test_ai_provider(kind, &base_url, secret.as_ref(), id, proxy)
         .await?;
     Ok(models)
 }
