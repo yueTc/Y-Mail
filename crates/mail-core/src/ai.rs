@@ -111,6 +111,8 @@ pub struct AiTarget {
     pub model: String,
     /// 实际使用的思考程度。
     pub thinking_level: AiThinkingLevel,
+    /// 站点级代理策略。
+    pub proxy: AccountProxyMode,
     /// 是否本机服务。
     pub local: bool,
     /// 保密的系统凭据引用键；不对外展示。
@@ -146,6 +148,8 @@ pub struct AiProviderView {
     pub thinking_level: AiThinkingLevel,
     /// 是否启用。
     pub enabled: bool,
+    /// 站点级代理策略。
+    pub proxy: AccountProxyMode,
     /// 保险箱里是否已有密钥。
     pub has_key: bool,
 }
@@ -169,6 +173,8 @@ pub struct AiProviderInput {
     pub thinking_level: AiThinkingLevel,
     /// 是否启用。
     pub enabled: bool,
+    /// 站点级代理策略。
+    pub proxy: AccountProxyMode,
 }
 
 /// 外发授权弹窗要展示的内容。
@@ -360,6 +366,11 @@ impl MailEngine {
             return Err(EngineError::BadRequest("请填写站点名称".to_string()));
         }
         let base_url = normalize_base_url(&input.base_url, provider_kind(input.kind))?;
+        if let AccountProxyMode::Custom(id) = input.proxy {
+            if self.store().get_proxy(id)?.is_none() {
+                return Err(EngineError::ProxyNotFound(id.0));
+            }
+        }
         let new_provider = NewAiProvider {
             label: label.to_string(),
             kind: input.kind,
@@ -368,6 +379,7 @@ impl MailEngine {
             models: input.models.clone(),
             thinking_level: input.thinking_level,
             enabled: input.enabled,
+            proxy: input.proxy,
         };
 
         match input.id {
@@ -488,8 +500,14 @@ impl MailEngine {
         base_url: &str,
         api_key: Option<&Secret>,
         provider_id: Option<i64>,
+        proxy: AccountProxyMode,
     ) -> Result<Vec<String>, EngineError> {
         let base_url = normalize_base_url(base_url, provider_kind(kind))?;
+        if let AccountProxyMode::Custom(id) = proxy {
+            if self.store().get_proxy(id)?.is_none() {
+                return Err(EngineError::ProxyNotFound(id.0));
+            }
+        }
         let fallback = match provider_id {
             Some(id) if api_key.map(|secret| secret.is_empty()).unwrap_or(true) => {
                 self.stored_ai_provider_secret(id)?
@@ -497,7 +515,7 @@ impl MailEngine {
             _ => None,
         };
         let secret = api_key.filter(|secret| !secret.is_empty()).or(fallback.as_ref());
-        let route = self.resolve_route(AccountProxyMode::InheritGlobal)?;
+        let route = self.resolve_route(proxy)?;
         let endpoint = Endpoint {
             kind: provider_kind(kind),
             base_url: &base_url,
@@ -545,7 +563,7 @@ impl MailEngine {
             Some(key) => self.secrets().get(key)?,
             None => None,
         };
-        let route = self.resolve_route(AccountProxyMode::InheritGlobal)?;
+        let route = self.resolve_route(provider.proxy)?;
         let endpoint = Endpoint {
             kind: provider_kind(provider.kind),
             base_url: &provider.base_url,
@@ -895,7 +913,7 @@ impl MailEngine {
 
         let target = self.resolve_ai_target(AiFunction::Classify)?;
         let secret = self.provider_secret(&target)?;
-        let route = self.resolve_route(AccountProxyMode::InheritGlobal)?;
+        let route = self.resolve_route(target.proxy)?;
         let endpoint = Endpoint {
             kind: provider_kind(target.kind),
             base_url: &target.base_url,
@@ -1273,7 +1291,7 @@ impl MailEngine {
             &source_hash,
         )?;
         let secret = self.provider_secret(&target)?;
-        let route = self.resolve_route(AccountProxyMode::InheritGlobal)?;
+        let route = self.resolve_route(target.proxy)?;
         let endpoint = Endpoint {
             kind: provider_kind(target.kind),
             base_url: &target.base_url,
@@ -1362,7 +1380,7 @@ impl MailEngine {
             &source_hash,
         )?;
         let secret = self.provider_secret(&target)?;
-        let route = self.resolve_route(AccountProxyMode::InheritGlobal)?;
+        let route = self.resolve_route(target.proxy)?;
         let endpoint = Endpoint {
             kind: provider_kind(target.kind),
             base_url: &target.base_url,
@@ -1425,7 +1443,7 @@ impl MailEngine {
             &source_hash,
         )?;
         let secret = self.provider_secret(&target)?;
-        let route = self.resolve_route(AccountProxyMode::InheritGlobal)?;
+        let route = self.resolve_route(target.proxy)?;
         let endpoint = Endpoint {
             kind: provider_kind(target.kind),
             base_url: &target.base_url,
@@ -1479,7 +1497,7 @@ impl MailEngine {
             &source_hash,
         )?;
         let secret = self.provider_secret(&target)?;
-        let route = self.resolve_route(AccountProxyMode::InheritGlobal)?;
+        let route = self.resolve_route(target.proxy)?;
         let endpoint = Endpoint {
             kind: provider_kind(target.kind),
             base_url: &target.base_url,
@@ -1528,7 +1546,7 @@ impl MailEngine {
         }
 
         let secret = self.provider_secret(&target)?;
-        let route = self.resolve_route(AccountProxyMode::InheritGlobal)?;
+        let route = self.resolve_route(target.proxy)?;
         let endpoint = Endpoint {
             kind: provider_kind(target.kind),
             base_url: &target.base_url,
@@ -1565,7 +1583,7 @@ impl MailEngine {
     ) -> Result<NotificationLatency, EngineError> {
         let target = self.resolve_probe_target(provider_id, model, level)?;
         let secret = self.provider_secret(&target)?;
-        let route = self.resolve_route(AccountProxyMode::InheritGlobal)?;
+        let route = self.resolve_route(target.proxy)?;
         let endpoint = Endpoint {
             kind: provider_kind(target.kind),
             base_url: &target.base_url,
@@ -1681,6 +1699,7 @@ impl MailEngine {
             kind: provider.kind,
             model,
             thinking_level: thinking,
+            proxy: provider.proxy,
             local: is_local_host(&host_of(&provider.base_url)),
             api_key_ref: provider.api_key_ref.clone(),
         })
@@ -1718,6 +1737,7 @@ impl MailEngine {
             kind: provider.kind,
             model,
             thinking_level: level.unwrap_or(provider.thinking_level),
+            proxy: provider.proxy,
             local: is_local_host(&host_of(&provider.base_url)),
             api_key_ref: provider.api_key_ref.clone(),
         })
@@ -1800,6 +1820,7 @@ fn provider_view(provider: StoredAiProvider) -> AiProviderView {
         models: provider.models,
         thinking_level: provider.thinking_level,
         enabled: provider.enabled,
+        proxy: provider.proxy,
         has_key: provider.api_key_ref.is_some(),
     }
 }
@@ -1985,6 +2006,7 @@ mod tests {
             kind: AiProviderKind::Ollama,
             model: "qwen".to_string(),
             thinking_level: AiThinkingLevel::Off,
+            proxy: AccountProxyMode::InheritGlobal,
             local: true,
             api_key_ref: None,
         };
@@ -2082,7 +2104,13 @@ mod tests {
         let base = format!("http://127.0.0.1:{port}/v1");
 
         let models = engine
-            .test_ai_provider(AiProviderKind::TypeSafe, &base, None, None)
+            .test_ai_provider(
+                AiProviderKind::TypeSafe,
+                &base,
+                None,
+                None,
+                AccountProxyMode::InheritGlobal,
+            )
             .await
             .expect("TypeSafe 测试连接应成功");
         assert_eq!(models, vec!["jev-latest".to_string()]);
@@ -2112,6 +2140,7 @@ mod tests {
                     models: Vec::new(),
                     thinking_level: AiThinkingLevel::Off,
                     enabled: true,
+                    proxy: AccountProxyMode::InheritGlobal,
                 },
                 None,
             )
@@ -2571,6 +2600,7 @@ mod tests {
                     models: Vec::new(),
                     thinking_level: AiThinkingLevel::Off,
                     enabled: true,
+                    proxy: AccountProxyMode::InheritGlobal,
                 },
                 Some(&secret),
             )
@@ -2625,6 +2655,7 @@ mod tests {
                     models: vec!["qwen".to_string()],
                     thinking_level: AiThinkingLevel::Off,
                     enabled: true,
+                    proxy: AccountProxyMode::InheritGlobal,
                 },
                 None,
             )
@@ -2703,6 +2734,7 @@ mod tests {
                     models: Vec::new(),
                     thinking_level: AiThinkingLevel::Off,
                     enabled: true,
+                    proxy: AccountProxyMode::InheritGlobal,
                 },
                 None,
             )
@@ -2743,6 +2775,7 @@ mod tests {
                     models: Vec::new(),
                     thinking_level: AiThinkingLevel::Off,
                     enabled: false,
+                    proxy: AccountProxyMode::InheritGlobal,
                 },
                 None,
             )
@@ -2796,6 +2829,7 @@ mod tests {
                     models: Vec::new(),
                     thinking_level: AiThinkingLevel::Off,
                     enabled: true,
+                    proxy: AccountProxyMode::InheritGlobal,
                 },
                 None,
             )
@@ -2834,6 +2868,7 @@ mod tests {
                     models: Vec::new(),
                     thinking_level: AiThinkingLevel::Off,
                     enabled: true,
+                    proxy: AccountProxyMode::InheritGlobal,
                 },
                 Some(&Secret::new("super-secret-key")),
             )
@@ -2868,6 +2903,7 @@ mod tests {
             models: Vec::new(),
             thinking_level: AiThinkingLevel::Off,
             enabled: true,
+            proxy: AccountProxyMode::InheritGlobal,
         };
         let created = engine
             .save_ai_provider(&input, Some(&Secret::new("keep-me")))
@@ -2931,6 +2967,7 @@ mod tests {
                     models: Vec::new(),
                     thinking_level: AiThinkingLevel::Off,
                     enabled: true,
+                    proxy: AccountProxyMode::InheritGlobal,
                 },
                 Some(&Secret::new("stored-key")),
             )
@@ -2960,6 +2997,7 @@ mod tests {
                     models: Vec::new(),
                     thinking_level: AiThinkingLevel::Off,
                     enabled: true,
+                    proxy: AccountProxyMode::InheritGlobal,
                 },
                 Some(&Secret::new(exposed)),
             )
@@ -3116,6 +3154,7 @@ mod tests {
                     models: Vec::new(),
                     thinking_level: AiThinkingLevel::Off,
                     enabled: true,
+                    proxy: AccountProxyMode::InheritGlobal,
                 },
                 Some(&secret),
             )
@@ -3149,6 +3188,143 @@ mod tests {
         assert!(!ok.target_host.contains("绝密正文"));
     }
 
+    /// 造一个无认证的本地代理配置。
+    fn proxy_config(label: &str) -> mail_domain::proxy::ProxyConfig {
+        mail_domain::proxy::ProxyConfig {
+            id: None,
+            label: label.to_string(),
+            kind: mail_domain::proxy::ProxyKind::Socks5,
+            host: "127.0.0.1".to_string(),
+            port: 1080,
+            username: String::new(),
+        }
+    }
+
+    /// 造一个带指定代理策略的本机站点。
+    fn add_local_provider_with_proxy(engine: &MailEngine, proxy: AccountProxyMode) -> i64 {
+        engine
+            .save_ai_provider(
+                &AiProviderInput {
+                    id: None,
+                    label: "本机".to_string(),
+                    kind: AiProviderKind::Ollama,
+                    base_url: "http://127.0.0.1:11434/v1".to_string(),
+                    default_model: "qwen".to_string(),
+                    models: vec!["qwen".to_string()],
+                    thinking_level: AiThinkingLevel::Off,
+                    enabled: true,
+                    proxy,
+                },
+                None,
+            )
+            .expect("保存站点")
+            .id
+    }
+
+    #[test]
+    fn 站点跟随全局时AI外发走全局代理() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let stored = engine.save_proxy(&proxy_config("全局"), None).expect("保存代理");
+        let proxy_id = stored.config.id.expect("代理编号");
+        engine
+            .set_global_proxy_mode(mail_domain::proxy::GlobalProxyMode::Custom(proxy_id))
+            .expect("设为全局");
+
+        let provider_id = add_local_provider_with_proxy(&engine, AccountProxyMode::InheritGlobal);
+        engine
+            .set_ai_feature(AiFunction::Translate, provider_id, "qwen", None)
+            .expect("配置翻译");
+
+        let target = engine.resolve_ai_target(AiFunction::Translate).expect("解析目标");
+        assert_eq!(target.proxy, AccountProxyMode::InheritGlobal);
+        let route = engine
+            .resolve_route(target.proxy)
+            .expect("决议应成功")
+            .expect("跟随全局应走全局代理");
+        assert_eq!(route.config.id, Some(proxy_id));
+    }
+
+    #[test]
+    fn 站点直连时AI外发不走代理() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let stored = engine.save_proxy(&proxy_config("全局"), None).expect("保存代理");
+        engine
+            .set_global_proxy_mode(mail_domain::proxy::GlobalProxyMode::Custom(
+                stored.config.id.expect("代理编号"),
+            ))
+            .expect("设为全局");
+
+        let provider_id = add_local_provider_with_proxy(&engine, AccountProxyMode::Direct);
+        engine
+            .set_ai_feature(AiFunction::Translate, provider_id, "qwen", None)
+            .expect("配置翻译");
+
+        let target = engine.resolve_ai_target(AiFunction::Translate).expect("解析目标");
+        assert_eq!(target.proxy, AccountProxyMode::Direct);
+        assert!(
+            engine.resolve_route(target.proxy).expect("决议应成功").is_none(),
+            "站点选直连时不该走任何代理"
+        );
+    }
+
+    #[test]
+    fn 站点指定代理时AI外发走指定代理() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let global = engine.save_proxy(&proxy_config("全局"), None).expect("保存代理");
+        let chosen = engine.save_proxy(&proxy_config("专用"), None).expect("保存代理");
+        let chosen_id = chosen.config.id.expect("代理编号");
+        engine
+            .set_global_proxy_mode(mail_domain::proxy::GlobalProxyMode::Custom(
+                global.config.id.expect("代理编号"),
+            ))
+            .expect("设为全局");
+
+        let provider_id = add_local_provider_with_proxy(&engine, AccountProxyMode::Custom(chosen_id));
+        engine
+            .set_ai_feature(AiFunction::Translate, provider_id, "qwen", None)
+            .expect("配置翻译");
+
+        let target = engine.resolve_ai_target(AiFunction::Translate).expect("解析目标");
+        assert_eq!(target.proxy, AccountProxyMode::Custom(chosen_id));
+        let route = engine
+            .resolve_route(target.proxy)
+            .expect("决议应成功")
+            .expect("指定代理应生效");
+        assert_eq!(
+            route.config.id,
+            Some(chosen_id),
+            "应走站点指定的代理而不是全局代理"
+        );
+    }
+
+    #[test]
+    fn 保存站点时指定不存在的代理会被拦住() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let err = engine
+            .save_ai_provider(
+                &AiProviderInput {
+                    id: None,
+                    label: "本机".to_string(),
+                    kind: AiProviderKind::Ollama,
+                    base_url: "http://127.0.0.1:11434/v1".to_string(),
+                    default_model: "qwen".to_string(),
+                    models: Vec::new(),
+                    thinking_level: AiThinkingLevel::Off,
+                    enabled: true,
+                    proxy: AccountProxyMode::Custom(mail_domain::proxy::ProxyId(9999)),
+                },
+                None,
+            )
+            .expect_err("不存在的代理应被拦住");
+        assert!(
+            matches!(err, EngineError::ProxyNotFound(9999)),
+            "错误应是代理不存在：{err}"
+        );
+    }
     #[tokio::test]
     async fn 模型给出不属于该组的标签或越界分数时跳过该组() {
         let dir = tempfile::tempdir().expect("临时目录");

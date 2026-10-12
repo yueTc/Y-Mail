@@ -1005,6 +1005,7 @@ fn build_import_plan(snapshot: &SettingsSnapshot) -> SettingsImportPlan {
                 models: provider.models.clone(),
                 thinking_level: provider.thinking_level,
                 enabled: provider.enabled,
+                proxy: AccountProxyMode::InheritGlobal,
             },
         })
         .collect();
@@ -1399,6 +1400,7 @@ mod tests {
                         models: vec!["deepseek-chat".to_string()],
                         thinking_level: AiThinkingLevel::Off,
                         enabled: true,
+                        proxy: AccountProxyMode::InheritGlobal,
                     },
                     Some("ai/ref"),
                 )

@@ -1024,6 +1024,7 @@ async fn 验收_ai默认关闭逐次授权且译文只取一次() {
                 models: vec!["m1".to_string()],
                 thinking_level: AiThinkingLevel::Off,
                 enabled: true,
+                proxy: AccountProxyMode::InheritGlobal,
             },
             Some(&Secret::new(cdkey)),
         )
