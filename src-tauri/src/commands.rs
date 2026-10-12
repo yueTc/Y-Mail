@@ -4382,7 +4382,7 @@ pub async fn clear_message_group_value(
     Ok(())
 }
 
-/// 分类前的外发确认预览；只读本地正文，不发网络请求。
+/// 分类前的外发确认预览；正文本地没有就先联网下载一次，不发网络请求。
 #[tauri::command]
 pub async fn preview_classify_messages(
     state: tauri::State<'_, AppState>,
@@ -4392,7 +4392,7 @@ pub async fn preview_classify_messages(
         return Err(CommandError::input("请先选择要分类的邮件"));
     }
     let engine = state.engine().await;
-    let preview = engine.preview_classify_messages(&message_ids)?;
+    let preview = engine.preview_classify_messages(&message_ids).await?;
     Ok(ClassifyPreviewDto::from_preview(preview))
 }
 

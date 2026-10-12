@@ -871,13 +871,11 @@ impl MailEngine {
 
     /// 自动分类：对一封邮件跑一次多组分类，返回是否真的发了请求。
     ///
-    /// 一个组都没开就跳过，不当错误。自动分类不像读信那样等用户点开，所以这里先
-    /// 把正文备齐：本地没有就联网拉一次并落库（只有分类总开关打开时才会走到这）。
+    /// 一个组都没开就跳过，不当错误。正文的下载在 [`Self::classify_message_groups`] 里统一处理。
     pub async fn classify_message_if_untagged(&self, message_id: i64) -> Result<bool, EngineError> {
         if self.enabled_classify_groups()?.is_empty() {
             return Ok(false);
         }
-        self.ensure_message_body_cached(message_id).await?;
         self.classify_message_groups(message_id).await?;
         Ok(true)
     }
@@ -907,6 +905,9 @@ impl MailEngine {
         if groups.is_empty() {
             return Err(EngineError::BadRequest("没有开启任何标签组".to_string()));
         }
+        // 自动分类和手动「立即分类」都汇到这里：正文本地没有就先联网下载一次并落库，
+        // 不再要求用户先点开邮件。
+        self.ensure_message_body_cached(message_id).await?;
         let body = self
             .store()
             .get_message_body(message_id)?
@@ -984,10 +985,14 @@ impl MailEngine {
 
         Ok(self.store().list_message_group_results(message_id)?)
     }
-    /// 分类前的外发确认预览：读本地正文算哈希并回一次性令牌；不发网络请求。
+    /// 分类前的外发确认预览：备齐正文、算哈希并回一次性令牌；不发网络请求。
     ///
-    /// 传入的邮件编号会去重并保持顺序；任何一封没有正文都会整体拒绝。
-    pub fn preview_classify_messages(&self, message_ids: &[i64]) -> Result<ClassifyPreview, EngineError> {
+    /// 正文本地没有就先联网下载一次（跟用户点开邮件一样）；传入的邮件编号会去重并
+    /// 保持顺序；任何一封下载失败或没有可用正文都会整体拒绝。
+    pub async fn preview_classify_messages(
+        &self,
+        message_ids: &[i64],
+    ) -> Result<ClassifyPreview, EngineError> {
         if message_ids.is_empty() {
             return Err(EngineError::BadRequest("请先选择要分类的邮件".to_string()));
         }
@@ -1005,6 +1010,7 @@ impl MailEngine {
         let mut targets = Vec::with_capacity(unique.len());
         let mut hashes = Vec::with_capacity(unique.len());
         for id in &unique {
+            self.ensure_message_body_cached(*id).await?;
             let body = self.store().get_message_body(*id)?.ok_or_else(|| {
                 EngineError::BadRequest("邮件正文还没下载，请先打开一次这封邮件".to_string())
             })?;
@@ -2269,8 +2275,8 @@ mod tests {
         id
     }
 
-    #[test]
-    fn classify_authorization_is_one_time_and_bound_to_message_hashes() {
+    #[tokio::test]
+    async fn classify_authorization_is_one_time_and_bound_to_message_hashes() {
         let dir = tempfile::tempdir().expect("临时目录");
         let engine = engine(dir.path());
         let provider_id = add_typesafe(&engine);
@@ -2283,6 +2289,7 @@ mod tests {
 
         let preview = engine
             .preview_classify_messages(&[first, second])
+            .await
             .expect("分类预览");
         assert!(!preview.authorization_token.is_empty());
         assert_eq!(preview.targets.len(), 2);
@@ -2305,6 +2312,7 @@ mod tests {
         // 重新预览后第一次能消费，第二次必须拒绝（一次性）。
         let preview = engine
             .preview_classify_messages(&[first, second])
+            .await
             .expect("再预览");
         let ids = engine
             .consume_classify_authorization(&preview.authorization_token)
@@ -3140,6 +3148,7 @@ mod tests {
         // 若先去读正文就会报「正文」相关错误。
         let preview_error = engine
             .preview_classify_messages(&[999_999])
+            .await
             .expect_err("关闭后预览应被拒");
         assert!(
             !preview_error.to_string().contains("正文"),

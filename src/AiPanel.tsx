@@ -1110,7 +1110,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
 
       <h3>{t("通知智能识别（高级功能）")}</h3>
       <p className="hint">
-        {t("开启后，新邮件正文会自动发往所选 AI，用来识别验证码和验证链接；识别到就在系统通知里给出复制或打开按钮，不再逐封确认。默认关闭。")}</p>
+        {t("开启后，新邮件正文会自动发往所选 AI，用来识别验证码和验证链接；本地没有正文时会先自动下载到本机。识别到就在系统通知里给出复制或打开按钮，不再逐封确认。默认关闭。")}</p>
       <section className="ai-feature-card">
         <label className="checkbox">
           <input
@@ -1231,7 +1231,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       </section>
       <h3>{t("邮件自动分类 · 标签组管理")}</h3>
       <p className="hint">
-        {t("打开后，新邮件正文会发给所选 TypeSafe jev 站点；模型只返回标签名和把握程度，标签和颜色只存本机。默认关闭。")}
+        {t("打开后，新邮件正文会发给所选 TypeSafe jev 站点；本地没有正文时会先自动下载到本机。模型只返回标签名和把握程度，标签和颜色只存本机。默认关闭。")}
       </p>
       <p className="hint">
         {t("组就是判断维度，一封邮件每组各出一个结果；把握门槛按组设置。标签和颜色只存在本机，不发给模型、不参与账号同步。")}
@@ -1257,7 +1257,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
             <span>{t("手动分类免确认")}</span>
           </label>
           <p className="hint">
-            {t("勾选手动分类免确认后，右键「立即分类」会直接外发、不再逐封确认；随时可在这里关掉。默认关闭。")}
+            {t("勾选手动分类免确认后，右键「立即分类」会直接外发、不再逐封确认；本地没有正文时会先自动下载到本机。随时可在这里关掉。默认关闭。")}
           </p>
           {!classifyEnabled && (
             <p className="hint">{t("总开关没开，组开关打开也不外发。")}</p>
@@ -1570,7 +1570,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
             aria-label={t("确认开启邮件自动分类")}
           >
             <h3>{t("确认开启邮件自动分类")}</h3>
-            <p>{t("开启后，每一封新落地邮件的正文都会自动发往下面的目标做分类，不再逐封确认。")}</p>
+            <p>{t("开启后，每一封新落地邮件的正文都会自动发往下面的目标做分类，不再逐封确认。本地没有正文时会先自动下载到本机。")}</p>
             <dl className="ai-modal-targets">
               <dt>{t("站点")}</dt>
               <dd>{classifyRisk.providerLabel}</dd>
@@ -1603,7 +1603,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
             aria-label={t("确认开启通知智能识别")}
           >
             <h3>{t("确认开启通知智能识别")}</h3>
-            <p>{t("开启后，每一封新邮件正文都会自动发往下面的目标识别验证码和链接，不再逐封确认。")}</p>
+            <p>{t("开启后，每一封新邮件正文都会自动发往下面的目标识别验证码和链接，不再逐封确认。本地没有正文时会先自动下载到本机。")}</p>
             <dl className="ai-modal-targets">
               <dt>{t("站点")}</dt>
               <dd>{verifyRisk.providerLabel}</dd>

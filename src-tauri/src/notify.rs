@@ -278,7 +278,7 @@ fn main_window_focused(app: &AppHandle) -> Option<bool> {
 
 /// 尝试用 AI 识别这封新邮件里的验证码和验证链接。
 ///
-/// 任何一步失败（正文为空、还没下载、AI 报错、超时、没识别到）都返回 `None`，
+/// 正文本地没有就先联网下载一次（下载失败也算失败）；正文为空、AI 报错、超时、没识别到都返回 `None`，
 /// 调用方据此退回普通通知。正文、验证码和链接都不写日志。
 async fn identify_verification(app: &AppHandle, item: &NewMailEvent) -> Option<VerificationFinding> {
     let state = app.state::<AppState>();
