@@ -1265,4 +1265,25 @@ describe("标签组管理", () => {
     });
     expect(screen.getByRole("button", { name: "折叠内容分类" })).toBeTruthy();
   });
+
+  it("功能级模型卡片默认展开，可单独折叠再展开", async () => {
+    const { container } = prepare();
+    // 默认展开：翻译的站点下拉一开始就在。
+    expect(await screen.findByLabelText("翻译站点")).toBeTruthy();
+    const card = container.querySelector(".ai-feature-list .ai-feature-card") as HTMLElement;
+    expect(card.getAttribute("data-collapsed")).toBe("false");
+
+    fireEvent.click(screen.getByRole("button", { name: "折叠翻译" }));
+    await waitFor(() => {
+      expect(screen.queryByLabelText("翻译站点")).toBeNull();
+      expect(card.getAttribute("data-collapsed")).toBe("true");
+    });
+    expect(screen.getByRole("button", { name: "展开翻译" })).toBeTruthy();
+    // 只影响这一张卡片，别的功能不受影响。
+    expect(screen.getByLabelText("摘要站点")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "展开翻译" }));
+    expect(await screen.findByLabelText("翻译站点")).toBeTruthy();
+    expect(card.getAttribute("data-collapsed")).toBe("false");
+  });
 });

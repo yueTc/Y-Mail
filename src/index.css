@@ -3221,6 +3221,25 @@ body.screenshot-body {
 .ai-label-group-enable {
   white-space: nowrap;
 }
+/* 功能级模型与思考程度：每张卡片可单独折叠，折叠按钮与标签组保持一致的样式。 */
+.ai-feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ai-feature-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ai-feature-head h4 {
+  margin: 0;
+}
+.ai-feature-toggle {
+  flex: 0 0 auto;
+  min-width: 2rem;
+  padding-inline: 0.5rem;
+}
 .ai-label-add {
   display: flex;
   align-items: flex-end;

@@ -208,6 +208,8 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   const [thresholdDrafts, setThresholdDrafts] = useState<Record<number, string>>({});
   // 设置页里每一组可单独展开；默认全部收起，只影响界面，不写配置。
   const [expandedGroups, setExpandedGroups] = useState<Record<number, boolean>>({});
+  // 「功能级模型与思考程度」里每个功能一张卡片，可单独折叠；默认展开，只影响界面，不写配置。
+  const [collapsedFeatures, setCollapsedFeatures] = useState<Record<string, boolean>>({});
   // 打开「通知智能识别」开关前的风险确认：先记下要展示的目标，用户点确认才落盘。
   const [verifyRisk, setVerifyRisk] = useState<
     | { providerLabel: string; model: string; local: boolean }
@@ -576,6 +578,10 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   /** 单个标签组展开/收起：只影响设置界面，不改数据。 */
   const toggleGroupExpanded = useCallback((groupId: number) => {
     setExpandedGroups((old) => ({ ...old, [groupId]: !old[groupId] }));
+  }, []);
+  /** 单个功能卡片展开/收起：只影响设置界面，不改数据。 */
+  const toggleFeatureCollapsed = useCallback((fn: AiFunction) => {
+    setCollapsedFeatures((old) => ({ ...old, [fn]: !(old[fn] === true) }));
   }, []);
 
   /** 组门槛：失焦落盘，越界拉回 50–99。 */
@@ -1028,81 +1034,106 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
             provider.supportedFunctions.includes(fn),
           );
           const selected = candidates.find((provider) => String(provider.id) === draft.providerId);
+          const collapsed = collapsedFeatures[fn] === true;
           return (
-            <section key={fn} className="ai-feature-card">
-              <h4>{t(FUNCTION_LABEL[fn])}</h4>
-              <label className="secret-field">
-                {t("站点")}<select
-                  aria-label={t("{0}站点", [t(FUNCTION_LABEL[fn])])}
-                  value={draft.providerId}
-                  onChange={(event) =>
-                    setFeatureDrafts((old) => ({
-                      ...old,
-                      [fn]: { ...draft, providerId: event.target.value, model: "" },
-                    }))
+            <section
+              key={fn}
+              className="ai-feature-card"
+              data-collapsed={collapsed ? "true" : "false"}
+            >
+              <div className="ai-feature-head">
+                <button
+                  type="button"
+                  className="ai-feature-toggle"
+                  aria-expanded={!collapsed}
+                  aria-label={
+                    collapsed
+                      ? t("展开{0}", [t(FUNCTION_LABEL[fn])])
+                      : t("折叠{0}", [t(FUNCTION_LABEL[fn])])
                   }
+                  title={collapsed ? t("展开这一项") : t("折叠这一项")}
+                  onClick={() => toggleFeatureCollapsed(fn)}
                 >
-                  <option value="">
-                    {fn === "classify" ? t("请选择站点") : t("自动选择第一个启用站点")}
-                  </option>
-                  {candidates.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.label}{provider.enabled ? "" : t("（已停用）")}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {candidates.length === 0 && (
-                <p className="hint">
-                  {fn === "classify"
-                    ? t("还没有 TypeSafe jev 站点：请先到上面的「AI 站点」里新增一个，再回来选。")
-                    : t("还没有支持这个功能的站点。")}
-                </p>
-              )}
-              <label className="secret-field">
-                {t("模型")}<input
-                  aria-label={t("{0}模型", [t(FUNCTION_LABEL[fn])])}
-                  list={`ai-models-${fn}`}
-                  value={draft.model}
-                  placeholder={selected?.defaultModel || t("留空回退站点默认模型")}
-                  onChange={(event) =>
-                    setFeatureDrafts((old) => ({ ...old, [fn]: { ...draft, model: event.target.value } }))
-                  }
-                />
-              </label>
-              <datalist id={`ai-models-${fn}`}>
-                {(selected?.models ?? []).map((model) => (
-                  <option key={model} value={model} />
-                ))}
-              </datalist>
-              <label className="secret-field">
-                {t("思考程度")}<select
-                  aria-label={t("{0}思考程度", [t(FUNCTION_LABEL[fn])])}
-                  value={draft.thinkingLevel}
-                  onChange={(event) =>
-                    setFeatureDrafts((old) => ({
-                      ...old,
-                      [fn]: {
-                        ...draft,
-                        thinkingLevel: event.target.value as "" | AiThinkingLevel,
-                      },
-                    }))
-                  }
-                >
-                  <option value="">{t("回退站点默认")}</option>
-                  {THINKING_ORDER.map((level) => (
-                    <option key={level} value={level}>
-                      {t(THINKING_LABEL[level], undefined, "ai")}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="form-actions">
-                <button type="button" onClick={() => void saveFeature(fn)} disabled={busy}>
-                  {t("保存设置")}</button>
-                <button type="button" onClick={() => void clearFeature(fn)} disabled={busy}>
-                  {t("恢复默认")}</button>
+                  {collapsed ? "▸" : "▾"}
+                </button>
+                <h4>{t(FUNCTION_LABEL[fn])}</h4>
               </div>
+              {!collapsed && (
+                <>
+                <label className="secret-field">
+                  {t("站点")}<select
+                    aria-label={t("{0}站点", [t(FUNCTION_LABEL[fn])])}
+                    value={draft.providerId}
+                    onChange={(event) =>
+                      setFeatureDrafts((old) => ({
+                        ...old,
+                        [fn]: { ...draft, providerId: event.target.value, model: "" },
+                      }))
+                    }
+                  >
+                    <option value="">
+                      {fn === "classify" ? t("请选择站点") : t("自动选择第一个启用站点")}
+                    </option>
+                    {candidates.map((provider) => (
+                      <option key={provider.id} value={provider.id}>
+                        {provider.label}{provider.enabled ? "" : t("（已停用）")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {candidates.length === 0 && (
+                  <p className="hint">
+                    {fn === "classify"
+                      ? t("还没有 TypeSafe jev 站点：请先到上面的「AI 站点」里新增一个，再回来选。")
+                      : t("还没有支持这个功能的站点。")}
+                  </p>
+                )}
+                <label className="secret-field">
+                  {t("模型")}<input
+                    aria-label={t("{0}模型", [t(FUNCTION_LABEL[fn])])}
+                    list={`ai-models-${fn}`}
+                    value={draft.model}
+                    placeholder={selected?.defaultModel || t("留空回退站点默认模型")}
+                    onChange={(event) =>
+                      setFeatureDrafts((old) => ({ ...old, [fn]: { ...draft, model: event.target.value } }))
+                    }
+                  />
+                </label>
+                <datalist id={`ai-models-${fn}`}>
+                  {(selected?.models ?? []).map((model) => (
+                    <option key={model} value={model} />
+                  ))}
+                </datalist>
+                <label className="secret-field">
+                  {t("思考程度")}<select
+                    aria-label={t("{0}思考程度", [t(FUNCTION_LABEL[fn])])}
+                    value={draft.thinkingLevel}
+                    onChange={(event) =>
+                      setFeatureDrafts((old) => ({
+                        ...old,
+                        [fn]: {
+                          ...draft,
+                          thinkingLevel: event.target.value as "" | AiThinkingLevel,
+                        },
+                      }))
+                    }
+                  >
+                    <option value="">{t("回退站点默认")}</option>
+                    {THINKING_ORDER.map((level) => (
+                      <option key={level} value={level}>
+                        {t(THINKING_LABEL[level], undefined, "ai")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="form-actions">
+                  <button type="button" onClick={() => void saveFeature(fn)} disabled={busy}>
+                    {t("保存设置")}</button>
+                  <button type="button" onClick={() => void clearFeature(fn)} disabled={busy}>
+                    {t("恢复默认")}</button>
+                </div>
+                </>
+              )}
             </section>
           );
         })}
