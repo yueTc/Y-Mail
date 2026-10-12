@@ -1087,4 +1087,28 @@ describe("标签组管理", () => {
       expect(vi.mocked(api.setLabelGroupEnabled)).toHaveBeenCalledWith(2, true),
     );
   });
+
+  it("单个组可折叠，排序和删除排在开启这一组前面", async () => {
+    const { container } = prepare();
+    await screen.findByText("标签组管理");
+    await waitFor(() => expect(container.querySelector(".ai-label-group-head")).toBeTruthy());
+    const head = container.querySelector(".ai-label-group-head") as HTMLElement;
+    const controls = Array.from(
+      head.querySelectorAll("button[aria-label], input[type='checkbox'][aria-label]"),
+    ).map((element) => element.getAttribute("aria-label"));
+    expect(controls).toEqual([
+      "折叠内容分类",
+      "上移内容分类",
+      "下移内容分类",
+      "删除内容分类",
+      "开启内容分类",
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "折叠内容分类" }));
+    await waitFor(() => {
+      expect(screen.queryByLabelText("在内容分类里新增标签")).toBeNull();
+      expect(screen.queryByLabelText("内容分类门槛")).toBeNull();
+    });
+    expect(screen.getByRole("button", { name: "展开内容分类" })).toBeTruthy();
+  });
 });

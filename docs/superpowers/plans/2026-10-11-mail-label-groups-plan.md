@@ -8,7 +8,7 @@
 | 分支 | codex/mail-label-groups（从 codex/mail-auto-classification 拉出） |
 | 规格 | docs/superpowers/specs/2026-10-11-mail-label-groups-design.md v1.0 |
 | 前置 | 邮件自动分类贴标签已完成（迁移 0013、0014、0015 已在） |
-| 总退出验证 | R1–R34 逐条可复现；四关全过；正文只在授权后外发；组、标签、分数、门槛只写本地库 |
+| 总退出验证 | R1–R35 逐条可复现；四关全过；正文只在授权后外发；组、标签、分数、门槛只写本地库 |
 
 **Goal:** 把「一封邮件一个标签」升级成「一封邮件多个标签组各一条结果」，一次 jev 请求问完所有开启的组，新增「需要我回复」和「紧急程度」两个默认组，搜索统一改成 tag:组名:值。
 
@@ -490,7 +490,7 @@ Expected: PASS。
 
 - [ ] **Step 1: 先写失败测试**
 
-补四条：`label_group_manager_lists_groups_and_labels`（三个默认组都列出来）、`new_group_requires_kind_specific_fields`（打分题必须填上下限、是否题不用填标签）、`group_threshold_saved_per_group`、`fallback_label_cannot_be_deleted_or_recolored`。
+补五条：`label_group_manager_lists_groups_and_labels`（三个默认组都列出来）、`new_group_requires_kind_specific_fields`（打分题必须填上下限、是否题不用填标签）、`group_threshold_saved_per_group`、`fallback_label_cannot_be_deleted_or_recolored`、`group_can_collapse_and_header_action_order`（单组可折叠，上移/下移/删除在开启这一组前面，开启开关最后）。
 
 - [ ] **Step 2: 跑测试确认失败**
 
@@ -500,7 +500,7 @@ Expected: FAIL，界面上还是老的分类标签管理。
 - [ ] **Step 3: 实现**
 
 - 区块标题改「标签组管理」，说明文案改成「组就是判断维度，一封邮件每组各出一个结果」。
-- 组列表：组名、类型、开关、门槛、上下限（打分题）、组内标签与颜色胶囊、上移下移。
+- 组列表：每组可单独展开/收起；组头显示组名、类型，上移、下移、删除排在「开启这一组」前面，开关固定在组头最右端；展开后显示门槛、上下限（打分题）、组内标签与颜色胶囊。
 - 新建组：选类型；选择题填名字后加标签；是否题自动两条；打分题填上下限（2–10 档）。
 - 组内标签：增删改、改颜色、排序、指定兜底；兜底不能删、不能改色，可改名。
 - 保留总开关与免确认开关；总开关关闭时给一行说明「组开关打开也不外发」。
@@ -690,7 +690,7 @@ Expected: 只能看到记忆文件修改；没有 *.db、.env、构建产物。
 - B4 完成后：npm test 前端相关用例全绿。
 - B5 完成后：四关全绿，.ai-memory 更新。
 
-## 7. 总退出验证（R1–R34）
+## 7. 总退出验证（R1–R35）
 
 | 需求 | 验证任务 | 具体证据 |
 |---|---|---|
@@ -728,6 +728,7 @@ Expected: 只能看到记忆文件修改；没有 *.db、.env、构建产物。
 | R32 | Task 14 | 审计字段无正文无密钥 |
 | R33 | Task 9 | 一键关闭 AI 后停止外发、结果保留 |
 | R34 | Task 15 | 版本保持 0.3.0，7 个版本文件一致 |
+| R35 | Task 11 | 单组可折叠；排序操作在开启前，开启开关最右 |
 
 ## 8. 执行交接
 

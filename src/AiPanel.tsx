@@ -290,6 +290,8 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   const [newGroupScoreMax, setNewGroupScoreMax] = useState("");
   const [newLabelNames, setNewLabelNames] = useState<Record<number, string>>({});
   const [thresholdDrafts, setThresholdDrafts] = useState<Record<number, string>>({});
+  // 设置页里每一组可单独收起；只影响界面，不写配置。
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<number, boolean>>({});
   // 打开「通知智能识别」开关前的风险确认：先记下要展示的目标，用户点确认才落盘。
   const [verifyRisk, setVerifyRisk] = useState<
     | { providerLabel: string; model: string; local: boolean }
@@ -740,6 +742,11 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
     },
     [reloadGroups],
   );
+
+  /** 单个标签组折叠：只影响设置界面，不改数据。 */
+  const toggleGroupCollapsed = useCallback((groupId: number) => {
+    setCollapsedGroups((old) => ({ ...old, [groupId]: !old[groupId] }));
+  }, []);
 
   /** 组门槛：失焦落盘，越界拉回 50–99。 */
   const saveGroupThreshold = useCallback(
@@ -1610,9 +1617,28 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
         <ul className="ai-label-group-list">
           {groups.map((group, groupIndex) => {
             const blockReason = groupEnableBlockReason(group, classifyDraft, classifyProvider);
+            const collapsed = collapsedGroups[group.id] === true;
             return (
-              <li key={group.id} className="ai-label-group">
+              <li
+                key={group.id}
+                className="ai-label-group"
+                data-collapsed={collapsed ? "true" : "false"}
+              >
                 <div className="ai-label-group-head">
+                  <button
+                    type="button"
+                    className="ai-label-group-toggle"
+                    aria-expanded={!collapsed}
+                    aria-label={
+                      collapsed
+                        ? t("展开{0}", [group.name])
+                        : t("折叠{0}", [group.name])
+                    }
+                    title={collapsed ? t("展开这一组") : t("折叠这一组")}
+                    onClick={() => toggleGroupCollapsed(group.id)}
+                  >
+                    {collapsed ? "▸" : "▾"}
+                  </button>
                   <span className="tag">{t(GROUP_KIND_LABEL[group.kind] ?? group.kind)}</span>
                   <input
                     className="ai-label-name"
@@ -1622,165 +1648,173 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
                     onChange={(event) => setGroupNameDraft(group.id, event.target.value)}
                     onBlur={() => void saveGroupName(group)}
                   />
-                  <label className="checkbox">
-                    <input
-                      type="checkbox"
-                      aria-label={t("开启{0}", [group.name])}
-                      checked={group.enabled}
+                  <div className="ai-label-group-actions">
+                    <button
+                      type="button"
+                      aria-label={t("上移{0}", [group.name])}
+                      disabled={labelBusy || groupIndex === 0}
+                      onClick={() => void moveGroup(group.id, -1)}
+                    >
+                      {t("上移")}</button>
+                    <button
+                      type="button"
+                      aria-label={t("下移{0}", [group.name])}
+                      disabled={labelBusy || groupIndex === groups.length - 1}
+                      onClick={() => void moveGroup(group.id, 1)}
+                    >
+                      {t("下移")}</button>
+                    <button
+                      type="button"
+                      className="danger"
+                      aria-label={t("删除{0}", [group.name])}
                       disabled={labelBusy}
-                      onChange={(event) => void toggleGroup(group, event.target.checked)}
-                    />
-                    <span>{t("开启这一组")}</span>
-                  </label>
-                  <label className="secret-field">
-                    {t("门槛")}<input
-                      type="number"
-                      min={50}
-                      max={99}
-                      aria-label={t("{0}门槛", [group.name])}
-                      value={thresholdDrafts[group.id] ?? String(Math.round(group.confidenceThreshold * 100))}
-                      onChange={(event) =>
-                        setThresholdDrafts((old) => ({ ...old, [group.id]: event.target.value }))
-                      }
-                      onBlur={() => void saveGroupThreshold(group)}
-                    />
-                  </label>
-                  {group.kind === "score" && (
-                    <>
-                      <label className="secret-field">
-                        {t("下限")}<input
-                          type="number"
-                          aria-label={t("{0}下限", [group.name])}
-                          value={group.scoreMin ?? ""}
-                          readOnly
-                        />
-                      </label>
-                      <label className="secret-field">
-                        {t("上限")}<input
-                          type="number"
-                          aria-label={t("{0}上限", [group.name])}
-                          value={group.scoreMax ?? ""}
-                          readOnly
-                        />
-                      </label>
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    aria-label={t("上移{0}", [group.name])}
-                    disabled={labelBusy || groupIndex === 0}
-                    onClick={() => void moveGroup(group.id, -1)}
-                  >
-                    {t("上移")}</button>
-                  <button
-                    type="button"
-                    aria-label={t("下移{0}", [group.name])}
-                    disabled={labelBusy || groupIndex === groups.length - 1}
-                    onClick={() => void moveGroup(group.id, 1)}
-                  >
-                    {t("下移")}</button>
-                  <button
-                    type="button"
-                    className="danger"
-                    aria-label={t("删除{0}", [group.name])}
-                    disabled={labelBusy}
-                    onClick={() => void removeGroup(group)}
-                  >
-                    {t("删除")}</button>
-                </div>
-                {group.enabled && blockReason !== "" && <p className="hint">{blockReason}</p>}
-                {group.kind !== "score" && (
-                  <>
-                    <div className="ai-label-add">
-                      <label className="secret-field">
-                        {t("在{0}里新增标签", [group.name])}<input
-                          aria-label={t("在{0}里新增标签", [group.name])}
-                          value={newLabelNames[group.id] ?? ""}
-                          maxLength={64}
-                          onChange={(event) =>
-                            setNewLabelNames((old) => ({ ...old, [group.id]: event.target.value }))
-                          }
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        aria-label={t("在{0}里新增", [group.name])}
+                      onClick={() => void removeGroup(group)}
+                    >
+                      {t("删除")}</button>
+                    <label className="checkbox ai-label-group-enable">
+                      <input
+                        type="checkbox"
+                        aria-label={t("开启{0}", [group.name])}
+                        checked={group.enabled}
                         disabled={labelBusy}
-                        onClick={() => void addLabelToGroup(group.id)}
-                      >
-                        {t("新增")}</button>
+                        onChange={(event) => void toggleGroup(group, event.target.checked)}
+                      />
+                      <span>{t("开启这一组")}</span>
+                    </label>
+                  </div>
+                </div>
+                {!collapsed && (
+                  <div className="ai-label-group-body">
+                    <div className="ai-label-group-params">
+                      <label className="secret-field">
+                        {t("门槛")}<input
+                          type="number"
+                          min={50}
+                          max={99}
+                          aria-label={t("{0}门槛", [group.name])}
+                          value={thresholdDrafts[group.id] ?? String(Math.round(group.confidenceThreshold * 100))}
+                          onChange={(event) =>
+                            setThresholdDrafts((old) => ({ ...old, [group.id]: event.target.value }))
+                          }
+                          onBlur={() => void saveGroupThreshold(group)}
+                        />
+                      </label>
+                      {group.kind === "score" && (
+                        <>
+                          <label className="secret-field">
+                            {t("下限")}<input
+                              type="number"
+                              aria-label={t("{0}下限", [group.name])}
+                              value={group.scoreMin ?? ""}
+                              readOnly
+                            />
+                          </label>
+                          <label className="secret-field">
+                            {t("上限")}<input
+                              type="number"
+                              aria-label={t("{0}上限", [group.name])}
+                              value={group.scoreMax ?? ""}
+                              readOnly
+                            />
+                          </label>
+                        </>
+                      )}
                     </div>
-                    <ul className="ai-label-list">
-                      {group.labels.map((label, labelIndex) => (
-                        <li key={label.id} className="ai-label-row">
-                          <span
-                            className="inbox-row-label"
-                            data-label-preview={label.color}
-                            data-label-color={label.color}
-                          >
-                            {label.name}
-                          </span>
-                          {label.isFallback && <span className="tag">{t("兜底")}</span>}
-                          <input
-                            className="ai-label-name"
-                            aria-label={t("{0}标签名", [label.name])}
-                            value={label.name}
-                            maxLength={64}
-                            onChange={(event) =>
-                              setLabelNameDraft(group.id, label.id, event.target.value)
-                            }
-                            onBlur={() => void saveLabelName(label)}
-                          />
-                          <select
-                            aria-label={t("{0}颜色", [label.name])}
-                            value={label.color}
-                            disabled={label.isFallback || labelBusy}
-                            onChange={(event) => void changeLabelColor(label, event.target.value)}
-                          >
-                            {MAIL_LABEL_COLORS.map((color) => (
-                              <option key={color} value={color}>
-                                {t(LABEL_COLOR_LABEL[color] ?? color)}
-                              </option>
-                            ))}
-                          </select>
-                          {!label.isFallback && (
-                            <button
-                              type="button"
-                              aria-label={t("把{0}设为兜底", [label.name])}
-                              disabled={labelBusy}
-                              onClick={() => void toggleLabelFallback(label, true)}
-                            >
-                              {t("设为兜底")}</button>
-                          )}
+                    {group.enabled && blockReason !== "" && <p className="hint">{blockReason}</p>}
+                    {group.kind !== "score" && (
+                      <>
+                        <div className="ai-label-add">
+                          <label className="secret-field">
+                            {t("在{0}里新增标签", [group.name])}<input
+                              aria-label={t("在{0}里新增标签", [group.name])}
+                              value={newLabelNames[group.id] ?? ""}
+                              maxLength={64}
+                              onChange={(event) =>
+                                setNewLabelNames((old) => ({ ...old, [group.id]: event.target.value }))
+                              }
+                            />
+                          </label>
                           <button
                             type="button"
-                            aria-label={t("上移{0}", [label.name])}
-                            disabled={labelBusy || labelIndex === 0}
-                            onClick={() => void moveLabel(group, label.id, -1)}
+                            aria-label={t("在{0}里新增", [group.name])}
+                            disabled={labelBusy}
+                            onClick={() => void addLabelToGroup(group.id)}
                           >
-                            {t("上移")}</button>
-                          <button
-                            type="button"
-                            aria-label={t("下移{0}", [label.name])}
-                            disabled={labelBusy || labelIndex === group.labels.length - 1}
-                            onClick={() => void moveLabel(group, label.id, 1)}
-                          >
-                            {t("下移")}</button>
-                          <button
-                            type="button"
-                            className="danger"
-                            aria-label={t("删除{0}", [label.name])}
-                            disabled={label.isFallback || labelBusy}
-                            onClick={() => void removeLabel(label)}
-                          >
-                            {t("删除")}</button>
-                        </li>
-                      ))}
-                    </ul>
-                    <p className="hint">
-                      {t("兜底标签不能删除、颜色固定灰色，可以改名；每组最多一个。")}
-                    </p>
-                  </>
+                            {t("新增")}</button>
+                        </div>
+                        <ul className="ai-label-list">
+                          {group.labels.map((label, labelIndex) => (
+                            <li key={label.id} className="ai-label-row">
+                              <span
+                                className="inbox-row-label"
+                                data-label-preview={label.color}
+                                data-label-color={label.color}
+                              >
+                                {label.name}
+                              </span>
+                              {label.isFallback && <span className="tag">{t("兜底")}</span>}
+                              <input
+                                className="ai-label-name"
+                                aria-label={t("{0}标签名", [label.name])}
+                                value={label.name}
+                                maxLength={64}
+                                onChange={(event) =>
+                                  setLabelNameDraft(group.id, label.id, event.target.value)
+                                }
+                                onBlur={() => void saveLabelName(label)}
+                              />
+                              <select
+                                aria-label={t("{0}颜色", [label.name])}
+                                value={label.color}
+                                disabled={label.isFallback || labelBusy}
+                                onChange={(event) => void changeLabelColor(label, event.target.value)}
+                              >
+                                {MAIL_LABEL_COLORS.map((color) => (
+                                  <option key={color} value={color}>
+                                    {t(LABEL_COLOR_LABEL[color] ?? color)}
+                                  </option>
+                                ))}
+                              </select>
+                              {!label.isFallback && (
+                                <button
+                                  type="button"
+                                  aria-label={t("把{0}设为兜底", [label.name])}
+                                  disabled={labelBusy}
+                                  onClick={() => void toggleLabelFallback(label, true)}
+                                >
+                                  {t("设为兜底")}</button>
+                              )}
+                              <button
+                                type="button"
+                                aria-label={t("上移{0}", [label.name])}
+                                disabled={labelBusy || labelIndex === 0}
+                                onClick={() => void moveLabel(group, label.id, -1)}
+                              >
+                                {t("上移")}</button>
+                              <button
+                                type="button"
+                                aria-label={t("下移{0}", [label.name])}
+                                disabled={labelBusy || labelIndex === group.labels.length - 1}
+                                onClick={() => void moveLabel(group, label.id, 1)}
+                              >
+                                {t("下移")}</button>
+                              <button
+                                type="button"
+                                className="danger"
+                                aria-label={t("删除{0}", [label.name])}
+                                disabled={label.isFallback || labelBusy}
+                                onClick={() => void removeLabel(label)}
+                              >
+                                {t("删除")}</button>
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="hint">
+                          {t("兜底标签不能删除、颜色固定灰色，可以改名；每组最多一个。")}
+                        </p>
+                      </>
+                    )}
+                  </div>
                 )}
               </li>
             );

@@ -3161,6 +3161,56 @@ body.screenshot-body {
   flex-direction: column;
   gap: 8px;
 }
+.ai-label-group-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ai-label-group {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--panel-bg);
+}
+.ai-label-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ai-label-group-toggle {
+  flex: 0 0 auto;
+  min-width: 2rem;
+  padding-inline: 0.5rem;
+}
+.ai-label-group-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.ai-label-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+.ai-label-group-params {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ai-label-group-enable {
+  white-space: nowrap;
+}
 .ai-label-add {
   display: flex;
   align-items: flex-end;
