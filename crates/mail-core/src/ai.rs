@@ -3047,4 +3047,139 @@ mod tests {
         assert!(preview.from_cache);
         assert!(preview.authorization_token.is_empty());
     }
+    #[tokio::test]
+    async fn 一键关闭后不外发也不写结果且预览不读正文() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let group_id = enable_group(&engine, "内容分类", 0.75);
+        let payload = format!(
+            r#"{{"answers":{{"g{group_id}":{{"type":"choice","choice":"账单","confidence":0.90}}}}}}"#
+        );
+        let (port, captured) = fake_capture_server(&payload).await;
+        let provider_id = add_typesafe_at(&engine, format!("http://127.0.0.1:{port}/v1"));
+        engine
+            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
+            .expect("配置分类");
+        let message = seed_message_with_body(&engine, 41, "这封邮件的正文绝不该在关闭后被外发");
+
+        // 一键关闭：停掉所有站点，并让待授权令牌失效。
+        engine.disable_all_ai().expect("一键关闭");
+
+        // 预览阶段应先被外发开关拦住、不会去读正文：这里故意传一个不存在的邮件编号，
+        // 若先去读正文就会报「正文」相关错误。
+        let preview_error = engine
+            .preview_classify_messages(&[999_999])
+            .expect_err("关闭后预览应被拒");
+        assert!(
+            !preview_error.to_string().contains("正文"),
+            "关闭后预览不该去碰正文：{preview_error}"
+        );
+
+        // 直接分类也必须被拦：一个字节都不外发、一条结果都不写。
+        let error = engine
+            .classify_message_groups(message)
+            .await
+            .expect_err("关闭后分类应被拒");
+        assert!(
+            !error.to_string().contains("这封邮件的正文"),
+            "错误不能回显正文：{error}"
+        );
+        assert!(captured.try_recv().is_err(), "关闭总开关后不能有任何请求发出去");
+        assert!(
+            engine
+                .store()
+                .message_group_result(message, group_id)
+                .expect("读组结果")
+                .is_none(),
+            "关闭后不能写结果"
+        );
+    }
+
+    #[tokio::test]
+    async fn 成功分类的审计只记摘要不记正文密钥颜色门槛() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let group_id = enable_group(&engine, "内容分类", 0.75);
+        let payload = format!(
+            r#"{{"answers":{{"g{group_id}":{{"type":"choice","choice":"账单","confidence":0.90}}}}}}"#
+        );
+        let port = fake_chat_server(&payload).await;
+        let secret = Secret::new("sk-audit-should-not-appear");
+        let provider_id = engine
+            .save_ai_provider(
+                &AiProviderInput {
+                    id: None,
+                    label: "jev".to_string(),
+                    kind: AiProviderKind::TypeSafe,
+                    base_url: format!("http://127.0.0.1:{port}/v1"),
+                    default_model: "jev-latest".to_string(),
+                    models: Vec::new(),
+                    thinking_level: AiThinkingLevel::Off,
+                    enabled: true,
+                },
+                Some(&secret),
+            )
+            .expect("保存站点")
+            .id;
+        engine
+            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
+            .expect("配置分类");
+        let message = seed_message_with_body(&engine, 42, "正文里写着绝密正文，不该进审计");
+
+        engine.classify_message_groups(message).await.expect("分类应成功");
+
+        let audits = engine.list_ai_audit(10).expect("审计");
+        let ok = audits
+            .iter()
+            .find(|audit| audit.outcome == "ok")
+            .expect("应有成功审计");
+        // 摘要里要有组名和标签名，方便回溯。
+        assert!(ok.detail.contains("内容分类"), "审计要有组名：{}", ok.detail);
+        assert!(ok.detail.contains("账单"), "审计要有标签名：{}", ok.detail);
+        // 正文、密钥、颜色键、把握门槛都不能出现。
+        assert!(!ok.detail.contains("绝密正文"), "审计不能记正文：{}", ok.detail);
+        assert!(
+            !ok.detail.contains("sk-audit-should-not-appear"),
+            "审计不能记密钥"
+        );
+        assert!(!ok.detail.contains("orange"), "审计不能记颜色键：{}", ok.detail);
+        assert!(!ok.detail.contains("0.75"), "审计不能记把握门槛：{}", ok.detail);
+        assert!(!ok.provider_label.contains("绝密正文"));
+        assert!(!ok.model.contains("绝密正文"));
+        assert!(!ok.target_host.contains("绝密正文"));
+    }
+
+    #[tokio::test]
+    async fn 模型给出不属于该组的标签或越界分数时跳过该组() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let choice_id = enable_group(&engine, "内容分类", 0.75);
+        let score_id = enable_group(&engine, "紧急程度", 0.5);
+        // 一个给不存在的标签名，一个给越界的分数，两组都不该落库。
+        let payload = format!(
+            r#"{{"answers":{{"g{choice_id}":{{"type":"choice","choice":"不存在的标签","confidence":0.90}},"g{score_id}":{{"type":"score","level":9,"confidence":0.80}}}}}}"#
+        );
+        let port = fake_chat_server(&payload).await;
+        let provider_id = add_typesafe_at(&engine, format!("http://127.0.0.1:{port}/v1"));
+        engine
+            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
+            .expect("配置分类");
+        let message = seed_message_with_body(&engine, 43, "模型乱答也不能写脏数据");
+
+        let results = engine
+            .classify_message_groups(message)
+            .await
+            .expect("分类本身要成功");
+        assert!(results.is_empty(), "越界与跨组的答案都应被丢弃：{results:?}");
+        assert!(engine
+            .store()
+            .message_group_result(message, choice_id)
+            .expect("读")
+            .is_none());
+        assert!(engine
+            .store()
+            .message_group_result(message, score_id)
+            .expect("读")
+            .is_none());
+    }
 }

@@ -4567,4 +4567,48 @@ mod tests {
         assert_eq!(strip_verbatim_prefix(r"D:\File\mails"), r"D:\File\mails");
         assert_eq!(strip_verbatim_prefix(""), "");
     }
+    #[test]
+    fn 标签组与标签名的校验拒绝空白超长与冒号() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = test_engine(dir.path());
+
+        // 只有空白的组名（含换行）当空名拒掉。
+        let blank = create_label_group_snapshot(&engine, "  \n  ", "choice", None, None)
+            .expect_err("纯空白组名应被拒");
+        assert!(blank.message.contains("空"), "{}", blank.message);
+
+        // 含英文冒号拒掉，避免和 tag: 搜索解析打架。
+        let colon = create_label_group_snapshot(&engine, "项目:类型", "choice", None, None)
+            .expect_err("含冒号组名应被拒");
+        assert!(colon.message.contains("冒号"), "{}", colon.message);
+
+        // 超过 64 个字符拒掉。
+        let long_name = "很长".repeat(40);
+        let long = create_label_group_snapshot(&engine, &long_name, "choice", None, None)
+            .expect_err("超长组名应被拒");
+        assert!(
+            long.message.contains("64") || long.message.contains("字符"),
+            "{}",
+            long.message
+        );
+
+        // 首尾空白会被规整掉，正常名字照样能建。
+        let group = create_label_group_snapshot(&engine, "  主题分类\n", "choice", None, None)
+            .expect("首尾空白应被规整");
+        assert_eq!(group.name, "主题分类");
+
+        // 标签名同样：纯空白、超长都拒；正常名字能加。
+        assert!(
+            engine.create_group_label(group.id, " \n ").is_err(),
+            "纯空白标签名应被拒"
+        );
+        assert!(
+            engine.create_group_label(group.id, &"长".repeat(65)).is_err(),
+            "超长标签名应被拒"
+        );
+        let label = engine
+            .create_group_label(group.id, "  账单\n")
+            .expect("正常标签应能加");
+        assert_eq!(label.name, "账单");
+    }
 }
