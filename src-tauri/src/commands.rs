@@ -26,9 +26,8 @@ use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::settings::{
-    AppSettings, CLASSIFY_CONFIDENCE_MAX_PERCENT, CLASSIFY_CONFIDENCE_MIN_PERCENT,
-    SYNC_POLL_INTERVAL_MAX_SECONDS, SYNC_POLL_INTERVAL_MIN_SECONDS, UPDATE_CHECK_INTERVAL_MAX_HOURS,
-    UPDATE_CHECK_INTERVAL_MIN_HOURS,
+    AppSettings, SYNC_POLL_INTERVAL_MAX_SECONDS, SYNC_POLL_INTERVAL_MIN_SECONDS,
+    UPDATE_CHECK_INTERVAL_MAX_HOURS, UPDATE_CHECK_INTERVAL_MIN_HOURS,
 };
 use crate::state::AppState;
 use crate::storage_dir::{self, ChangeDataDirResult, MigrationStart};
@@ -582,7 +581,7 @@ pub struct AppSettingsDto {
     pub active_attachment_dir: String,
     /// 「邮件自动分类」开关；默认关，只存本机，不同步。
     pub classify_enabled: bool,
-    /// 分类把握程度门槛（百分数，50–99）；默认 75，只存本机，不同步。
+    /// 分类把握程度门槛（百分数，50–99）；只读兼容字段，分类不再使用，界面不展示。
     pub classify_confidence_percent: u8,
     /// 手动右键「立即分类」是否跳过每封外发确认；默认 false，只存本机，不同步。
     pub classify_skip_manual_confirm: bool,
@@ -671,21 +670,16 @@ pub async fn set_app_settings(
     Ok(build_settings_dto(state.inner()))
 }
 
-/// 保存「邮件自动分类」开关与把握程度门槛。
+/// 保存「邮件自动分类」总开关。
 ///
-/// 这两个字段只存本机，不参与账号同步；门槛越界直接报错、不写盘。
+/// 只存本机、不参与账号同步；把握门槛按标签组各存各的，全局门槛字段只读兼容、不再写入。
 #[tauri::command]
 pub async fn set_classify_settings(
     state: tauri::State<'_, AppState>,
     enabled: bool,
-    confidence_percent: u8,
 ) -> Result<AppSettingsDto, CommandError> {
-    if !(CLASSIFY_CONFIDENCE_MIN_PERCENT..=CLASSIFY_CONFIDENCE_MAX_PERCENT).contains(&confidence_percent) {
-        return Err(CommandError::input("把握程度门槛要在 50 到 99 之间"));
-    }
     let mut settings = state.settings_snapshot();
     settings.classify_enabled = enabled;
-    settings.classify_confidence_percent = confidence_percent;
     state
         .save_settings(settings)
         .map_err(|error| CommandError::new(format!("保存设置失败：{error}")))?;
