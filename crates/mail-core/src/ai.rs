@@ -3222,7 +3222,7 @@ mod tests {
     }
 
     #[test]
-    fn 站点跟随全局时AI外发走全局代理() {
+    fn 站点跟随全局时ai外发走全局代理() {
         let dir = tempfile::tempdir().expect("临时目录");
         let engine = engine(dir.path());
         let stored = engine.save_proxy(&proxy_config("全局"), None).expect("保存代理");
@@ -3246,7 +3246,7 @@ mod tests {
     }
 
     #[test]
-    fn 站点直连时AI外发不走代理() {
+    fn 站点直连时ai外发不走代理() {
         let dir = tempfile::tempdir().expect("临时目录");
         let engine = engine(dir.path());
         let stored = engine.save_proxy(&proxy_config("全局"), None).expect("保存代理");
@@ -3270,7 +3270,7 @@ mod tests {
     }
 
     #[test]
-    fn 站点指定代理时AI外发走指定代理() {
+    fn 站点指定代理时ai外发走指定代理() {
         let dir = tempfile::tempdir().expect("临时目录");
         let engine = engine(dir.path());
         let global = engine.save_proxy(&proxy_config("全局"), None).expect("保存代理");
