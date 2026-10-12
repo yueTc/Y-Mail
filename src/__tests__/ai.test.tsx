@@ -22,6 +22,7 @@ import type {
   LabelGroup,
   MailLabel,
   MessageBody,
+  Proxy,
   Signature,
 } from "../api";
 import { api } from "../api";
@@ -71,6 +72,7 @@ vi.mock("../api", () => {
     deleteOutbox: vi.fn(),
     saveSignature: vi.fn(),
     listAiProviders: vi.fn(),
+    listProxies: vi.fn(),
     saveAiProvider: vi.fn(),
     deleteAiProvider: vi.fn(),
     testAiProvider: vi.fn(),
@@ -205,6 +207,7 @@ beforeEach(() => {
   vi.mocked(api.getSignature).mockResolvedValue(EMPTY_SIGNATURE);
   vi.mocked(api.searchContacts).mockResolvedValue([]);
   vi.mocked(api.listAiProviders).mockResolvedValue([]);
+  vi.mocked(api.listProxies).mockResolvedValue([]);
   vi.mocked(api.listAiModelMaps).mockResolvedValue([]);
   vi.mocked(api.listAiAudit).mockResolvedValue([]);
   vi.mocked(api.listLabelGroups).mockResolvedValue([]);
@@ -615,6 +618,139 @@ describe("AI 设置页密钥", () => {
   });
 });
 
+describe("AI 站点设置弹窗", () => {
+  function provider(overrides: Partial<AiProvider> = {}): AiProvider {
+    return {
+      id: 1,
+      label: "本机 Ollama",
+      kind: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      defaultModel: "qwen",
+      models: ["qwen"],
+      thinkingLevel: "off",
+      enabled: true,
+      hasKey: false,
+      supportedFunctions: ["translate"],
+      proxy: { mode: "inherit" },
+      ...overrides,
+    };
+  }
+
+  const PROXY_ROW: Proxy = {
+    id: 5,
+    label: "公司代理",
+    kind: "socks5",
+    host: "10.0.0.1",
+    port: 1080,
+    username: "",
+    hasPassword: false,
+  };
+
+  it("点「新增 AI 站点」弹出独立弹窗，Esc 能关掉", async () => {
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={async () => {}} />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    fireEvent.click(await screen.findByRole("button", { name: "新增 AI 站点" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "新增 AI 站点" })).toBeTruthy();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("点遮罩空白关掉弹窗", async () => {
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={async () => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "新增 AI 站点" }));
+    const dialog = await screen.findByRole("dialog");
+    const backdrop = dialog.parentElement as HTMLElement;
+    fireEvent.mouseDown(backdrop);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("默认「跟随全局」；选「指定代理」才出现代理下拉并列出已存代理", async () => {
+    vi.mocked(api.listProxies).mockResolvedValue([PROXY_ROW]);
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={async () => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "新增 AI 站点" }));
+    const dialog = await screen.findByRole("dialog");
+
+    const modeSelect = within(dialog).getByLabelText("AI 站点代理策略") as HTMLSelectElement;
+    expect(modeSelect.value).toBe("inherit");
+    expect(within(dialog).queryByLabelText("AI 站点指定代理")).toBeNull();
+
+    fireEvent.change(modeSelect, { target: { value: "custom" } });
+    const proxySelect = within(dialog).getByLabelText("AI 站点指定代理");
+    expect(within(proxySelect).getByRole("option", { name: /公司代理/ })).toBeTruthy();
+  });
+
+  it("保存新建站点时把站点级代理策略传给后端", async () => {
+    vi.mocked(api.listProxies).mockResolvedValue([PROXY_ROW]);
+    vi.mocked(api.saveAiProvider).mockResolvedValue(
+      provider({ label: "公司站点", proxy: { mode: "custom", proxyId: 5 } }),
+    );
+
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={async () => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "新增 AI 站点" }));
+    const dialog = await screen.findByRole("dialog");
+
+    fireEvent.change(within(dialog).getByLabelText("AI 站点名称"), {
+      target: { value: "公司站点" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("AI 站点代理策略"), {
+      target: { value: "custom" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("AI 站点指定代理"), {
+      target: { value: "5" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(api.saveAiProvider).toHaveBeenCalled());
+    const draft = vi.mocked(api.saveAiProvider).mock.calls[0][0];
+    expect(draft.label).toBe("公司站点");
+    expect(draft.proxy).toEqual({ mode: "custom", proxyId: 5 });
+    // 保存成功后弹窗自动关掉。
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("选了「指定代理」却没挑代理时拦下保存并给中文提示", async () => {
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={async () => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "新增 AI 站点" }));
+    const dialog = await screen.findByRole("dialog");
+
+    fireEvent.change(within(dialog).getByLabelText("AI 站点名称"), {
+      target: { value: "半成品" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("AI 站点代理策略"), {
+      target: { value: "custom" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent ?? "").toContain("选了「指定代理」就要挑一个具体代理");
+    expect(api.saveAiProvider).not.toHaveBeenCalled();
+  });
+
+  it("编辑站点回填它自己的代理策略，卡片显示代理名", async () => {
+    vi.mocked(api.listAiProviders).mockResolvedValue([
+      provider({ label: "公司站点", proxy: { mode: "custom", proxyId: 5 } }),
+    ]);
+    vi.mocked(api.listProxies).mockResolvedValue([PROXY_ROW]);
+
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={async () => {}} />);
+
+    const cardLine = await screen.findByText(/代理策略：/);
+    expect(cardLine.textContent).toBe("代理策略：指定代理（公司代理）");
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "编辑 AI 站点" })).toBeTruthy();
+    expect((within(dialog).getByLabelText("AI 站点代理策略") as HTMLSelectElement).value).toBe(
+      "custom",
+    );
+    expect((within(dialog).getByLabelText("AI 站点指定代理") as HTMLSelectElement).value).toBe("5");
+  });
+});
+
 describe("通知智能识别开关", () => {
   const PROVIDER: AiProvider = {
     id: 1,
@@ -627,6 +763,7 @@ describe("通知智能识别开关", () => {
     enabled: true,
     hasKey: false,
     supportedFunctions: ["translate", "summary", "polish", "draft", "notification_verify"],
+    proxy: { mode: "inherit" },
   };
 
   const VERIFY_MAP: AiModelMap = {
@@ -805,6 +942,7 @@ describe("邮件自动分类设置", () => {
     enabled: true,
     hasKey: true,
     supportedFunctions: ["translate", "summary", "polish", "draft", "notification_verify"],
+    proxy: { mode: "inherit" },
   };
   const typeSafeProvider: AiProvider = {
     id: 2,
@@ -817,6 +955,7 @@ describe("邮件自动分类设置", () => {
     enabled: true,
     hasKey: true,
     supportedFunctions: ["classify"],
+    proxy: { mode: "inherit" },
   };
 
   function prepare() {

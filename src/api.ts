@@ -607,6 +607,8 @@ export interface AiProviderDraft {
   models: string[];
   thinkingLevel: AiThinkingLevel;
   enabled: boolean;
+  /** 站点级代理策略；默认跟随全局。 */
+  proxy: AccountProxy;
 }
 
 /** 已保存的 AI 站点；只回 `hasKey`，不回密钥。 */
@@ -1171,10 +1173,17 @@ export const api = {
 
   deleteAiProvider: (id: number) => call<void>("delete_ai_provider", { id }),
 
-  testAiProvider: (kind: AiProviderKind, baseUrl: string, apiKey?: string, id?: number) => {
+  testAiProvider: (
+    kind: AiProviderKind,
+    baseUrl: string,
+    apiKey?: string,
+    id?: number,
+    proxy?: AccountProxy,
+  ) => {
     const args: Record<string, unknown> = { kind, baseUrl };
     if (apiKey !== undefined) args.apiKey = apiKey;
     if (id !== undefined) args.id = id;
+    if (proxy !== undefined) args.proxy = proxy;
     return call<string[]>("test_ai_provider", args);
   },
 

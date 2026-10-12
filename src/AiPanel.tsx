@@ -7,59 +7,37 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { PROXY_MODE_LABELS } from "./AccountForm";
 import {
   api,
   describeError,
+  type AccountProxy,
   type AiAudit,
   type AiFunction,
   type AiModelMap,
   type AiProvider,
-  type AiProviderDraft,
-  type AiProviderKind,
   type AiThinkingLevel,
   type LabelGroup,
   type LabelGroupKind,
   type MailLabel,
   type NotificationLatency,
+  type Proxy,
 } from "./api";
+import AiProviderDialog, {
+  KIND_LABEL,
+  THINKING_LABEL,
+  THINKING_ORDER,
+} from "./AiProviderDialog";
 import { t } from "./i18n";
 
-/** 显示密钥图标：一只睁开的眼睛。 */
-function EyeIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
-      <g
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
-        <circle cx="12" cy="12" r="3" />
-      </g>
-    </svg>
-  );
-}
-
-/** 隐藏密钥图标：一只眼睛加斜杠。 */
-function EyeOffIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
-      <g
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <path d="M10.6 5.8A9.8 9.8 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16.4 16.4 0 0 1-3.2 4.2" />
-        <path d="M6.2 6.9A16 16 0 0 0 2.5 12S6 18.5 12 18.5c1.6 0 3-.5 4.2-1.2" />
-        <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
-        <path d="M4.5 4.5 19.5 19.5" />
-      </g>
-    </svg>
-  );
+/** 卡片上显示站点代理策略；选了具体代理时补上代理名。 */
+function proxyText(proxy: AccountProxy, proxies: Proxy[]): string {
+  const base = t(PROXY_MODE_LABELS[proxy.mode]);
+  if (proxy.mode !== "custom" || proxy.proxyId === undefined) return base;
+  const found = proxies.find((item) => item.id === proxy.proxyId);
+  if (!found) return base;
+  const name = found.label.trim() === "" ? `${found.host}:${found.port}` : found.label;
+  return `${base}（${name}）`;
 }
 
 const FUNCTION_LABEL: Record<AiFunction, string> = {
@@ -80,32 +58,6 @@ const VERIFY_FUNCTION: AiFunction = "notification_verify";
 /** 「检查延迟」连测几次，用来抵消网络抖动。 */
 const LATENCY_ROUNDS = 3;
 
-const KIND_LABEL: Record<AiProviderKind, string> = {
-  openai_compatible: "OpenAI 兼容站点",
-  deepl: "DeepL",
-  ollama: "本机 Ollama",
-  typesafe: "TypeSafe jev",
-};
-
-const THINKING_LABEL: Record<AiThinkingLevel, string> = {
-  off: "关闭",
-  low: "低",
-  medium: "中",
-  high: "高",
-};
-
-const THINKING_ORDER: AiThinkingLevel[] = ["off", "low", "medium", "high"];
-
-interface ProviderDraftState {
-  id?: number;
-  label: string;
-  kind: AiProviderKind;
-  baseUrl: string;
-  defaultModel: string;
-  modelsText: string;
-  thinkingLevel: AiThinkingLevel;
-  enabled: boolean;
-}
 
 interface FeatureDraftState {
   providerId: string;
@@ -113,42 +65,6 @@ interface FeatureDraftState {
   thinkingLevel: "" | AiThinkingLevel;
 }
 
-function emptyProvider(): ProviderDraftState {
-  return {
-    label: "",
-    kind: "openai_compatible",
-    baseUrl: "",
-    defaultModel: "",
-    modelsText: "",
-    thinkingLevel: "off",
-    enabled: false,
-  };
-}
-
-function providerToDraft(provider: AiProvider): ProviderDraftState {
-  return {
-    id: provider.id,
-    label: provider.label,
-    kind: provider.kind,
-    baseUrl: provider.baseUrl,
-    defaultModel: provider.defaultModel,
-    modelsText: provider.models.join("\n"),
-    thinkingLevel: provider.thinkingLevel,
-    enabled: provider.enabled,
-  };
-}
-
-function parseModels(text: string): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    const model = line.trim();
-    if (model === "" || seen.has(model)) continue;
-    seen.add(model);
-    result.push(model);
-  }
-  return result;
-}
 
 function featureMapFor(maps: AiModelMap[], fn: AiFunction): AiModelMap | undefined {
   return maps.find((item) => item.function === fn);
@@ -264,10 +180,11 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [editing, setEditing] = useState<ProviderDraftState>();
-  const [apiKey, setApiKey] = useState("");
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [modelsHint, setModelsHint] = useState("");
+  // 站点弹窗：新增时 editingProvider 为 null，编辑时指向要改的那个站点。
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingProvider, setEditingProvider] = useState<AiProvider | null>(null);
+  // 卡片上「指定代理」要显示代理名，这里存一份代理清单。
+  const [proxies, setProxies] = useState<Proxy[]>([]);
   const [featureDrafts, setFeatureDrafts] = useState<Record<string, FeatureDraftState>>({});
   // 「邮件自动分类」总开关与手动分类免确认；只存本机，不参与账号同步。
   const [classifyEnabled, setClassifyEnabled] = useState(false);
@@ -312,14 +229,17 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
     setLoading(true);
     setError("");
     try {
-      const [nextProviders, nextMaps, nextAudits, nextSettings, nextLabels] = await Promise.all([
-        api.listAiProviders(),
-        api.listAiModelMaps(),
-        api.listAiAudit(50),
-        api.getAppSettings(),
-        api.listLabelGroups(),
-      ]);
+      const [nextProviders, nextMaps, nextAudits, nextSettings, nextLabels, nextProxies] =
+        await Promise.all([
+          api.listAiProviders(),
+          api.listAiModelMaps(),
+          api.listAiAudit(50),
+          api.getAppSettings(),
+          api.listLabelGroups(),
+          api.listProxies(),
+        ]);
       setProviders(nextProviders);
+      setProxies(nextProxies);
       setAudits(nextAudits);
       setGroups(nextLabels);
       setClassifyEnabled(nextSettings.classifyEnabled);
@@ -348,82 +268,6 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
     void refresh();
   }, [refresh]);
 
-  const startCreate = useCallback(() => {
-    setEditing(emptyProvider());
-    setApiKey("");
-    setShowApiKey(false);
-    setModelsHint("");
-    setNotice("");
-    setError("");
-  }, []);
-
-  const startEdit = useCallback((provider: AiProvider) => {
-    setEditing(providerToDraft(provider));
-    setApiKey("");
-    setShowApiKey(false);
-    setModelsHint("");
-    setNotice("");
-    setError("");
-  }, []);
-
-  const saveProvider = useCallback(async () => {
-    if (!editing) return;
-    if (editing.label.trim() === "") {
-      setError(t("请填写站点名称"));
-      return;
-    }
-    setBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      const draft: AiProviderDraft = {
-        ...(editing.id === undefined ? {} : { id: editing.id }),
-        label: editing.label,
-        kind: editing.kind,
-        baseUrl: editing.baseUrl,
-        defaultModel: editing.defaultModel,
-        models: parseModels(editing.modelsText),
-        thinkingLevel: editing.thinkingLevel,
-        enabled: editing.enabled,
-      };
-      const saved = await api.saveAiProvider(
-        draft,
-        editing.id === undefined ? apiKey : apiKey === "" ? undefined : apiKey,
-      );
-      setApiKey("");
-      setEditing(undefined);
-      setNotice(t("已保存「{0}」", [saved.label]));
-      await refresh();
-    } catch (caught) {
-      setError(describeError(caught));
-    } finally {
-      setBusy(false);
-    }
-  }, [apiKey, editing, refresh]);
-
-  const testDraft = useCallback(async () => {
-    if (!editing) return;
-    setBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      const models = await api.testAiProvider(
-        editing.kind,
-        editing.baseUrl,
-        apiKey === "" ? undefined : apiKey,
-        editing.id,
-      );
-      setModelsHint(t("连接成功，拉到 {0} 个模型。", [models.length]));
-      if (models.length > 0) {
-        setEditing((old) => (old ? { ...old, modelsText: models.join("\n") } : old));
-      }
-    } catch (caught) {
-      setError(describeError(caught));
-    } finally {
-      setBusy(false);
-    }
-  }, [apiKey, editing]);
-
   const refreshModels = useCallback(
     async (id: number) => {
       setBusy(true);
@@ -451,7 +295,6 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       try {
         await api.deleteAiProvider(provider.id);
         setNotice(t("已删除「{0}」", [provider.label]));
-        if (editing?.id === provider.id) setEditing(undefined);
         await refresh();
       } catch (caught) {
         setError(describeError(caught));
@@ -459,7 +302,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
         setBusy(false);
       }
     },
-    [editing?.id, refresh],
+    [refresh],
   );
 
   const saveFeature = useCallback(
@@ -523,6 +366,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
         provider.baseUrl,
         undefined,
         provider.id,
+        provider.proxy,
       );
       setNotice(
         models.length > 0
@@ -1127,9 +971,17 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
               <div className="card-sub">
                 {t("模型：")}{provider.models.length > 0 ? provider.models.join(t("、")) : t("未拉取，可手工填写")}
               </div>
+              <div className="card-sub">{t("代理策略：")}{proxyText(provider.proxy, proxies)}</div>
             </div>
             <div className="card-actions">
-              <button type="button" onClick={() => startEdit(provider)} disabled={busy}>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingProvider(provider);
+                  setDialogOpen(true);
+                }}
+                disabled={busy}
+              >
                 {t("编辑")}</button>
               {provider.kind === "typesafe" ? (
                 <button type="button" onClick={() => void testProvider(provider)} disabled={busy}>
@@ -1145,155 +997,27 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
         ))}
       </div>
 
-      {!editing && (
-        <button type="button" className="ai-add-provider" onClick={startCreate} disabled={busy}>
-          {t("新增 AI 站点")}</button>
-      )}
+      <button
+        type="button"
+        className="ai-add-provider"
+        onClick={() => {
+          setEditingProvider(null);
+          setDialogOpen(true);
+        }}
+        disabled={busy}
+      >
+        {t("新增 AI 站点")}</button>
 
-      {editing && (
-        <div className="form ai-provider-form">
-          <h3>{editing.id === undefined ? t("新增 AI 站点") : t("编辑 AI 站点")}</h3>
-          <div className="field-row">
-            <label>
-              {t("站点名称")}<input
-                aria-label={t("AI 站点名称")}
-                value={editing.label}
-                onChange={(event) =>
-                  setEditing((old) => (old ? { ...old, label: event.target.value } : old))
-                }
-              />
-            </label>
-            <label>
-              {t("站点类型")}<select
-                aria-label={t("AI 站点类型")}
-                value={editing.kind}
-                onChange={(event) => {
-                  const kind = event.target.value as AiProviderKind;
-                  setEditing((old) => {
-                    if (!old) return old;
-                    // TypeSafe jev 只有分类接口：地址与模型都有官方默认值，空着就预填。
-                    const preset =
-                      kind === "typesafe"
-                        ? { baseUrl: "https://api.typesafe.ai/v1", defaultModel: "jev-latest" }
-                        : undefined;
-                    return {
-                      ...old,
-                      kind,
-                      baseUrl:
-                        preset && old.baseUrl.trim() === "" ? preset.baseUrl : old.baseUrl,
-                      defaultModel:
-                        preset && old.defaultModel.trim() === ""
-                          ? preset.defaultModel
-                          : old.defaultModel,
-                    };
-                  });
-                }}
-              >
-                <option value="openai_compatible">{t("OpenAI 兼容站点")}</option>
-                <option value="deepl">DeepL</option>
-                <option value="ollama">{t("本机 Ollama")}</option>
-                <option value="typesafe">{t("TypeSafe jev")}</option>
-              </select>
-            </label>
-          </div>
-          <label className="secret-field">
-            {t("站点地址")}<input
-              aria-label={t("AI 站点地址")}
-              value={editing.baseUrl}
-              placeholder={
-                editing.kind === "typesafe"
-                  ? t("填到 /v1 为止，例如 https://api.typesafe.ai/v1，不要带 /systemone")
-                  : t("例如 https://api.example.com/v1，本机 Ollama 可填 http://127.0.0.1:11434")
-              }
-              onChange={(event) =>
-                setEditing((old) => (old ? { ...old, baseUrl: event.target.value } : old))
-              }
-            />
-          </label>
-          <label className="secret-field">
-            CDKey / API Key
-            <span className="secret-input-row">
-              <input
-                className="secret-input"
-                type={showApiKey ? "text" : "password"}
-                aria-label="CDKey / API Key"
-                autoComplete="off"
-                value={apiKey}
-                placeholder={editing.id === undefined ? t("新建时填写") : t("留空沿用已存密钥，输入后替换")}
-                onChange={(event) => setApiKey(event.target.value)}
-              />
-              <button
-                type="button"
-                className="secret-toggle"
-                aria-label={showApiKey ? t("隐藏密钥") : t("显示密钥")}
-                title={showApiKey ? t("隐藏密钥") : t("显示密钥")}
-                aria-pressed={showApiKey}
-                onClick={() => setShowApiKey((old) => !old)}
-              >
-                {showApiKey ? <EyeOffIcon /> : <EyeIcon />}
-              </button>
-            </span>
-          </label>
-          <div className="field-row">
-            <label>
-              {t("默认模型")}<input
-                aria-label={t("默认模型")}
-                value={editing.defaultModel}
-                placeholder={t("不填写就使用功能级模型")}
-                onChange={(event) =>
-                  setEditing((old) => (old ? { ...old, defaultModel: event.target.value } : old))
-                }
-              />
-            </label>
-            <label>
-              {t("默认思考程度")}<select
-                aria-label={t("默认思考程度")}
-                value={editing.thinkingLevel}
-                onChange={(event) =>
-                  setEditing((old) =>
-                    old ? { ...old, thinkingLevel: event.target.value as AiThinkingLevel } : old,
-                  )
-                }
-              >
-                {THINKING_ORDER.map((level) => (
-                  <option key={level} value={level}>
-                    {t(THINKING_LABEL[level], undefined, "ai")}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <label className="secret-field">
-            {t("模型列表（每行一个，也可手工填写）")}<textarea
-              aria-label={t("模型列表")}
-              rows={4}
-              value={editing.modelsText}
-              onChange={(event) =>
-                setEditing((old) => (old ? { ...old, modelsText: event.target.value } : old))
-              }
-            />
-          </label>
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              checked={editing.enabled}
-              onChange={(event) =>
-                setEditing((old) => (old ? { ...old, enabled: event.target.checked } : old))
-              }
-            />
-            {t("启用这个站点")}</label>
-          {modelsHint && <p className="hint" role="status">{modelsHint}</p>}
-          <div className="form-actions">
-            <button type="button" className="primary" onClick={() => void saveProvider()} disabled={busy}>
-              {t("保存")}</button>
-            <button type="button" onClick={() => void testDraft()} disabled={busy}>
-              {editing.kind === "typesafe" ? t("测试连接") : t("测试连接并拉取模型")}</button>
-            <button type="button" onClick={() => setEditing(undefined)} disabled={busy}>
-              {t("取消")}</button>
-          </div>
-        </div>
-      )}
-
+      <AiProviderDialog
+        open={dialogOpen}
+        provider={editingProvider}
+        onClose={() => setDialogOpen(false)}
+        onSaved={(saved) => {
+          setDialogOpen(false);
+          setNotice(t("已保存「{0}」", [saved.label]));
+          void refresh();
+        }}
+      />
       <h3>{t("功能级模型与思考程度")}</h3>
       <p className="hint">{t("没有单独指定时回退到站点默认模型；思考程度不支持时后端会自动降级并在结果里标注。")}</p>
       <div className="ai-feature-list">
