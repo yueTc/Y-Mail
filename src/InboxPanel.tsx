@@ -29,13 +29,14 @@ import {
   type InboxQuery,
   type InboxSummary,
   type InboxThread,
+  type LabelGroup,
   type SearchHit,
   type SnippetSegment,
   type SyncStatus,
 } from "./api";
 import ComposePanel, { type ComposeRequest } from "./ComposePanel";
 import MessageReader from "./MessageReader";
-import { GroupPills } from "./labelPill";
+import { GroupPills, scoreOptions } from "./labelPill";
 import FlagButton from "./FlagButton";
 import AccountDialog from "./AccountDialog";
 import PaneResizer from "./PaneResizer";
@@ -52,7 +53,12 @@ const PAGE_SIZE = 200;
 
 /** 搜索框下方的语法提示。 */
 export const SEARCH_SYNTAX_HINT =
-  "支持 from: 发件人、has:attachment、is:unread、before:2026-01-01";
+  "支持 tag:组名:值、from: 发件人、has:attachment、is:unread、before:2026-01-01";
+
+/** 搜索框的占位提示；和上面的语法提示用同一套写法。 */
+export const SEARCH_PLACEHOLDER =
+  "按 Ctrl+K 聚焦；支持 tag: / from: / has: / is: / before:，例如：发票 tag:内容分类:账单 from:alice";
+
 
 /** 列表里的一行：线程、平铺邮件、展开出来的子邮件，或一条搜索命中。 */
 export type InboxRow =
@@ -571,6 +577,8 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
     x: number;
     y: number;
   }>();
+  // 邮件右键菜单按组列可选值；开菜单时拉一次组与标签。
+  const [menuGroups, setMenuGroups] = useState<LabelGroup[]>([]);
   const [classifyConfirm, setClassifyConfirm] = useState<{
     preview: ClassifyPreview;
     subject: string;
@@ -885,7 +893,12 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   const openMessageMenu = useCallback((event: ReactMouseEvent, message: InboxMessage) => {
     event.preventDefault();
     event.stopPropagation();
+    setMenuGroups([]);
     setMessageMenu({ message, x: event.clientX, y: event.clientY });
+    void api
+      .listLabelGroups()
+      .then((groups) => setMenuGroups(groups))
+      .catch(() => setMenuGroups([]));
   }, []);
 
   /**
@@ -937,6 +950,38 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
       setClassifyBusy(false);
     }
   }, [classifyConfirm, classifySkipNext, load]);
+
+  /** 右键菜单里点某组的某个值：写入手动结果（该组从此锁定），再刷新列表。 */
+  const setGroupValue = useCallback(
+    async (groupId: number, labelId: number | null, scoreValue: number | null) => {
+      if (!messageMenu) return;
+      const messageId = messageMenu.message.id;
+      setMessageMenu(undefined);
+      try {
+        await api.setMessageGroupValue(messageId, groupId, labelId, scoreValue);
+        await load(true);
+      } catch (caught) {
+        setError(describeError(caught));
+      }
+    },
+    [messageMenu, load],
+  );
+
+  /** 右键菜单里点「清除本组结果」：删掉该组结果并解锁，再刷新列表。 */
+  const clearGroupValue = useCallback(
+    async (groupId: number) => {
+      if (!messageMenu) return;
+      const messageId = messageMenu.message.id;
+      setMessageMenu(undefined);
+      try {
+        await api.clearMessageGroupValue(messageId, groupId);
+        await load(true);
+      } catch (caught) {
+        setError(describeError(caught));
+      }
+    },
+    [messageMenu, load],
+  );
 
   /**
    * 搜索：默认只查本地，绝不自动联网。
@@ -1000,12 +1045,12 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  /** 点列表里的胶囊：等于按这个结果搜一次。Task 13 会把前缀换成 tag:组名:值。 */
+  /** 点列表里的胶囊：按 tag:组名:值 搜一次。 */
   const filterByLabel = useCallback(
     (result: GroupResult) => {
       const value =
         result.kind === "score" ? String(result.scoreValue ?? "") : (result.labelName ?? "");
-      const raw = `label:${value}`;
+      const raw = `tag:${result.groupName}:${value}`;
       setSearchInput(raw);
       void runSearch({ raw });
     },
@@ -1549,7 +1594,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
             ref={searchBoxRef}
             aria-label={t("搜索邮件")}
             value={searchInput}
-            placeholder={t("按 Ctrl+K 聚焦；支持 from: / has: / is: / before: / label:，例如：发票 label:账单 from:alice")}
+            placeholder={t(SEARCH_PLACEHOLDER)}
             onChange={(event) => setSearchInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") void runSearch();
@@ -1803,6 +1848,39 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
           disabled={classifyBusy}
         >
           {t("立即分类")}</button>
+        {menuGroups.map((group) => (
+          <div key={group.id} className="context-menu-group">
+            <div className="context-menu-heading">{group.name}</div>
+            {group.kind === "score"
+              ? scoreOptions(group.scoreMin, group.scoreMax).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="menuitem"
+                    className="context-menu-item"
+                    onClick={() => void setGroupValue(group.id, null, value)}
+                  >
+                    {value}</button>
+                ))
+              : group.labels.map((label) => (
+                  <button
+                    key={label.id}
+                    type="button"
+                    role="menuitem"
+                    className="context-menu-item"
+                    onClick={() => void setGroupValue(group.id, label.id, null)}
+                  >
+                    {label.name}</button>
+                ))}
+            <button
+              type="button"
+              role="menuitem"
+              className="context-menu-item"
+              onClick={() => void clearGroupValue(group.id)}
+            >
+              {t("清除本组结果")}</button>
+          </div>
+        ))}
         <button
           type="button"
           role="menuitem"

@@ -1991,6 +1991,25 @@ textarea:focus {
   color: var(--danger);
 }
 
+/* 邮件右键菜单里的组可能很多，超过高度就滚动，别顶出屏幕。 */
+.context-menu {
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+}
+
+/* 右键菜单里按组列可选值：每组用细线隔开，组名是小号灰字。 */
+.context-menu-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.context-menu-heading {
+  padding: 2px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .contacts-menu-parent {
   position: relative;
   cursor: default;

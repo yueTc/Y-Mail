@@ -11,7 +11,7 @@ import MessageReader, {
   externalReaderLink,
   isExecutableAttachment,
 } from "../MessageReader";
-import type { InboxMessage, MailLabel, MessageAttachment, MessageBody } from "../api";
+import type { InboxMessage, LabelGroup, MessageAttachment, MessageBody } from "../api";
 import { api } from "../api";
 
 vi.mock("../api", () => ({
@@ -26,8 +26,9 @@ vi.mock("../api", () => ({
     rememberRemoteSender: vi.fn(),
     listTrustedRemoteSenders: vi.fn(),
     forgetRemoteSender: vi.fn(),
-    listMailLabels: vi.fn(),
-    setMessageLabel: vi.fn(),
+    listLabelGroups: vi.fn(),
+    setMessageGroupValue: vi.fn(),
+    clearMessageGroupValue: vi.fn(),
   },
 }));
 
@@ -103,7 +104,7 @@ beforeEach(() => {
   vi.mocked(api.getMessageBody).mockResolvedValue(body());
   vi.mocked(api.downloadAttachment).mockResolvedValue("D:/downloads/报告.pdf");
   vi.mocked(api.rememberRemoteSender).mockResolvedValue(["z@example.com"]);
-  vi.mocked(api.listMailLabels).mockResolvedValue([]);
+  vi.mocked(api.listLabelGroups).mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -311,50 +312,81 @@ describe("读信窗格的附件与深色模式", () => {
   });
 });
 describe("读信页手动改标签", () => {
-  const LABELS: MailLabel[] = [
-    { id: 1, groupId: 1, name: "客户", color: "blue", sortOrder: 10, isFallback: false },
-    { id: 2, groupId: 1, name: "账单", color: "orange", sortOrder: 20, isFallback: false },
-    { id: 3, groupId: 1, name: "通知", color: "teal", sortOrder: 30, isFallback: false },
-    { id: 4, groupId: 1, name: "推广", color: "purple", sortOrder: 40, isFallback: false },
-    { id: 5, groupId: 1, name: "招聘", color: "green", sortOrder: 50, isFallback: false },
-    { id: 6, groupId: 1, name: "同事", color: "indigo", sortOrder: 60, isFallback: false },
-    { id: 7, groupId: 1, name: "家人", color: "pink", sortOrder: 70, isFallback: false },
-    { id: 8, groupId: 1, name: "其他", color: "gray", sortOrder: 1000, isFallback: true },
+  const GROUPS: LabelGroup[] = [
+    {
+      id: 1,
+      name: "内容分类",
+      kind: "choice",
+      enabled: true,
+      confidenceThreshold: 0.75,
+      scoreMin: null,
+      scoreMax: null,
+      sortOrder: 10,
+      labels: [
+        { id: 1, groupId: 1, name: "客户", color: "blue", sortOrder: 10, isFallback: false },
+        { id: 2, groupId: 1, name: "账单", color: "orange", sortOrder: 20, isFallback: false },
+        { id: 3, groupId: 1, name: "通知", color: "teal", sortOrder: 30, isFallback: false },
+      ],
+    },
   ];
 
-  it("下拉列出八条标签，能选账单也能清除，并通知外层刷新", async () => {
-    vi.mocked(api.listMailLabels).mockResolvedValue(LABELS);
-    vi.mocked(api.setMessageLabel).mockResolvedValue(undefined);
-    const onLabelChanged = vi.fn();
-    render(<MessageReader message={MESSAGE} onLabelChanged={onLabelChanged} />);
+  const MESSAGE_WITH_BILL: InboxMessage = {
+    ...MESSAGE,
+    groupResults: [
+      {
+        groupId: 1,
+        groupName: "内容分类",
+        kind: "choice",
+        labelId: 2,
+        labelName: "账单",
+        labelColor: "orange",
+        scoreMin: null,
+        scoreMax: null,
+        scoreValue: null,
+      },
+    ],
+  };
 
+  it("点胶囊才展开入口，能选账单也能清除，并通知外层刷新", async () => {
+    vi.mocked(api.listLabelGroups).mockResolvedValue(GROUPS);
+    vi.mocked(api.setMessageGroupValue).mockResolvedValue(undefined);
+    vi.mocked(api.clearMessageGroupValue).mockResolvedValue(undefined);
+    const onLabelChanged = vi.fn();
+    render(<MessageReader message={MESSAGE_WITH_BILL} onLabelChanged={onLabelChanged} />);
+
+    // 没点胶囊之前不显示手动修改入口。
+    expect(screen.queryByLabelText("邮件标签")).toBeNull();
+
+    fireEvent.click(await screen.findByRole("button", { name: "账单" }));
     const select = (await screen.findByLabelText("邮件标签")) as HTMLSelectElement;
     const options = within(select).getAllByRole("option");
-    expect(options.length).toBe(9);
+    expect(options.length).toBe(4);
+    expect(options[0].textContent).toBe("未设置");
     expect(options.some((option) => option.textContent === "账单")).toBe(true);
-    expect(options.some((option) => option.textContent === "清除标签")).toBe(true);
 
     fireEvent.change(select, { target: { value: "2" } });
     await waitFor(() =>
-      expect(vi.mocked(api.setMessageLabel)).toHaveBeenCalledWith(42, 2),
+      expect(vi.mocked(api.setMessageGroupValue)).toHaveBeenCalledWith(42, 1, 2, null),
     );
     await waitFor(() => expect(onLabelChanged).toHaveBeenCalled());
 
     fireEvent.change(select, { target: { value: "" } });
     await waitFor(() =>
-      expect(vi.mocked(api.setMessageLabel)).toHaveBeenCalledWith(42, null),
+      expect(vi.mocked(api.clearMessageGroupValue)).toHaveBeenCalledWith(42, 1),
     );
   });
 
   it("保存失败给中文提示，不改界面选择", async () => {
-    vi.mocked(api.listMailLabels).mockResolvedValue(LABELS);
-    vi.mocked(api.setMessageLabel).mockRejectedValue(new Error("后端拒绝"));
-    render(<MessageReader message={MESSAGE} />);
+    vi.mocked(api.listLabelGroups).mockResolvedValue(GROUPS);
+    vi.mocked(api.setMessageGroupValue).mockRejectedValue(new Error("后端拒绝"));
+    render(<MessageReader message={MESSAGE_WITH_BILL} />);
 
+    fireEvent.click(await screen.findByRole("button", { name: "账单" }));
     const select = (await screen.findByLabelText("邮件标签")) as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "2" } });
+    fireEvent.change(select, { target: { value: "1" } });
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("后端拒绝"));
-    expect(select.value).toBe("");
+    // 保存失败不乐观改界面：选择还停在原来的账单。
+    expect(select.value).toBe("2");
   });
 });
 
@@ -393,5 +425,30 @@ describe("读信页的标签组胶囊", () => {
     expect(await screen.findByText("账单")).toBeTruthy();
     const score = screen.getByText("5");
     expect(score.getAttribute("data-score-band")).toBe("5");
+  });
+
+  it("点打分胶囊能改分数，提交的是分数不是标签", async () => {
+    vi.mocked(api.listLabelGroups).mockResolvedValue([
+      {
+        id: 3,
+        name: "紧急程度",
+        kind: "score",
+        enabled: true,
+        confidenceThreshold: 0.75,
+        scoreMin: 1,
+        scoreMax: 5,
+        sortOrder: 30,
+        labels: [],
+      },
+    ]);
+    vi.mocked(api.setMessageGroupValue).mockResolvedValue(undefined);
+    render(<MessageReader message={MESSAGE_WITH_RESULTS} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "5" }));
+    const select = (await screen.findByLabelText("邮件标签")) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "3" } });
+    await waitFor(() =>
+      expect(vi.mocked(api.setMessageGroupValue)).toHaveBeenCalledWith(42, 3, null, 3),
+    );
   });
 });

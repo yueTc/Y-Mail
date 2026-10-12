@@ -3,8 +3,15 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import InboxPanel from "../InboxPanel";
-import type { Account, AppSettings, GroupResult, InboxFolder, InboxMessage } from "../api";
+import InboxPanel, { SEARCH_PLACEHOLDER, SEARCH_SYNTAX_HINT } from "../InboxPanel";
+import type {
+  Account,
+  AppSettings,
+  GroupResult,
+  InboxFolder,
+  InboxMessage,
+  LabelGroup,
+} from "../api";
 import { api } from "../api";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -44,6 +51,9 @@ vi.mock("../api", () => ({
     classifyMessages: vi.fn(),
     getAppSettings: vi.fn(),
     setClassifySkipManualConfirm: vi.fn(),
+    listLabelGroups: vi.fn(),
+    setMessageGroupValue: vi.fn(),
+    clearMessageGroupValue: vi.fn(),
     syncStatus: vi.fn(),
     startSync: vi.fn(),
     stopSync: vi.fn(),
@@ -151,6 +161,7 @@ beforeEach(() => {
   vi.mocked(api.syncStatus).mockResolvedValue([]);
   vi.mocked(api.listAccounts).mockResolvedValue([ACCOUNT]);
   vi.mocked(api.listProxies).mockResolvedValue([]);
+  vi.mocked(api.listLabelGroups).mockResolvedValue([]);
 });
 
 afterEach(cleanup);
@@ -441,7 +452,7 @@ describe("列表标签胶囊", () => {
     };
   }
 
-  it("平铺行把胶囊放在时间前面，点一下按标签搜索", async () => {
+  it("平铺行把胶囊放在时间前面，点一下按 tag 搜索", async () => {
     vi.mocked(api.listInboxMessages).mockResolvedValue({
       items: [labelledMessage()],
       total: 1,
@@ -466,11 +477,11 @@ describe("列表标签胶囊", () => {
     fireEvent.click(chip);
     await waitFor(() => {
       const searchBox = screen.getByLabelText("搜索邮件") as HTMLInputElement;
-      expect(searchBox.value).toBe("label:账单");
+      expect(searchBox.value).toBe("tag:内容分类:账单");
     });
     await waitFor(() =>
       expect(vi.mocked(api.searchMessages)).toHaveBeenCalledWith(
-        expect.objectContaining({ raw: "label:账单" }),
+        expect.objectContaining({ raw: "tag:内容分类:账单" }),
       ),
     );
   });
@@ -663,5 +674,138 @@ describe("收件箱右键立即分类", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "立即分类" }));
     await waitFor(() => expect(vi.mocked(api.classifyMessages)).toHaveBeenCalledWith("tok-1"));
     expect(screen.queryByRole("dialog", { name: "确认立即分类" })).toBeNull();
+  });
+});
+
+describe("收件箱右键按组修改", () => {
+  const GROUPS: LabelGroup[] = [
+    {
+      id: 1,
+      name: "内容分类",
+      kind: "choice",
+      enabled: true,
+      confidenceThreshold: 0.75,
+      scoreMin: null,
+      scoreMax: null,
+      sortOrder: 10,
+      labels: [
+        { id: 1, groupId: 1, name: "客户", color: "blue", sortOrder: 10, isFallback: false },
+        { id: 2, groupId: 1, name: "账单", color: "orange", sortOrder: 20, isFallback: false },
+        { id: 3, groupId: 1, name: "通知", color: "teal", sortOrder: 30, isFallback: false },
+      ],
+    },
+    {
+      id: 2,
+      name: "需要我回复",
+      kind: "boolean",
+      enabled: true,
+      confidenceThreshold: 0.75,
+      scoreMin: null,
+      scoreMax: null,
+      sortOrder: 20,
+      labels: [
+        { id: 4, groupId: 2, name: "需要回复", color: "red", sortOrder: 10, isFallback: false },
+        { id: 5, groupId: 2, name: "不用回复", color: "gray", sortOrder: 20, isFallback: false },
+      ],
+    },
+    {
+      id: 3,
+      name: "紧急程度",
+      kind: "score",
+      enabled: true,
+      confidenceThreshold: 0.75,
+      scoreMin: 1,
+      scoreMax: 5,
+      sortOrder: 30,
+      labels: [],
+    },
+  ];
+
+  function menuMessage(overrides: Partial<InboxMessage> = {}): InboxMessage {
+    return {
+      id: 42,
+      accountId: 1,
+      folderId: 10,
+      uid: 42,
+      threadKey: "t42",
+      subject: "账单邮件",
+      fromName: "张三",
+      fromAddr: "z@example.com",
+      dateUtc: "2026-10-04T02:00:00Z",
+      size: 1000,
+      hasAttachments: false,
+      isRead: false,
+      isFlagged: false,
+      snippet: "",
+      accountEmail: "a@example.com",
+      accountName: "测试账号",
+      accountColor: "#3366ff",
+      folderPath: "INBOX",
+      groupResults: [],
+      ...overrides,
+    };
+  }
+
+  function prepareMenu() {
+    vi.mocked(api.listLabelGroups).mockResolvedValue(GROUPS);
+    vi.mocked(api.listInboxMessages).mockResolvedValue({
+      items: [menuMessage()],
+      total: 1,
+      offset: 0,
+      limit: 200,
+    });
+    render(<InboxPanel />);
+  }
+
+  it("右键菜单按组列出可选值：选择题列标签、是否题列两条、打分题列 1–5", async () => {
+    prepareMenu();
+    fireEvent.contextMenu(await screen.findByText("账单邮件"));
+    const menu = await screen.findByRole("menu", { name: "邮件菜单" });
+
+    expect(within(menu).getByRole("menuitem", { name: "客户" })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: "账单" })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: "需要回复" })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: "不用回复" })).toBeTruthy();
+    for (const value of ["1", "2", "3", "4", "5"]) {
+      expect(within(menu).getByRole("menuitem", { name: value })).toBeTruthy();
+    }
+    expect(within(menu).getAllByRole("menuitem", { name: "清除本组结果" })).toHaveLength(3);
+  });
+
+  it("点某个值：写入手动结果并刷新列表", async () => {
+    vi.mocked(api.setMessageGroupValue).mockResolvedValue(undefined);
+    prepareMenu();
+    fireEvent.contextMenu(await screen.findByText("账单邮件"));
+    const menu = await screen.findByRole("menu", { name: "邮件菜单" });
+
+    const loadsBefore = vi.mocked(api.listInboxMessages).mock.calls.length;
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "账单" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(api.setMessageGroupValue)).toHaveBeenCalledWith(42, 1, 2, null),
+    );
+    await waitFor(() =>
+      expect(vi.mocked(api.listInboxMessages).mock.calls.length).toBeGreaterThan(loadsBefore),
+    );
+  });
+
+  it("点「清除本组结果」：清掉这一组并刷新列表", async () => {
+    vi.mocked(api.clearMessageGroupValue).mockResolvedValue(undefined);
+    prepareMenu();
+    fireEvent.contextMenu(await screen.findByText("账单邮件"));
+    const menu = await screen.findByRole("menu", { name: "邮件菜单" });
+
+    fireEvent.click(within(menu).getAllByRole("menuitem", { name: "清除本组结果" })[0]);
+
+    await waitFor(() =>
+      expect(vi.mocked(api.clearMessageGroupValue)).toHaveBeenCalledWith(42, 1),
+    );
+  });
+
+  it("搜索提示里不再出现 label:，统一用 tag:", () => {
+    expect(SEARCH_SYNTAX_HINT).not.toContain("label:");
+    expect(SEARCH_SYNTAX_HINT).toContain("tag:");
+    expect(SEARCH_PLACEHOLDER).not.toContain("label:");
+    expect(SEARCH_PLACEHOLDER).toContain("tag:");
   });
 });

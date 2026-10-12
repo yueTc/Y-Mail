@@ -14,15 +14,16 @@ import {
   describeError,
   type AiAuthorization,
   type AiTranslation,
+  type GroupResult,
   type InboxMessage,
   type InlineImage,
-  type MailLabel,
+  type LabelGroup,
   type MessageAttachment,
   type MessageBody,
 } from "./api";
 import AiAuthorizationDialog from "./AiAuthorizationDialog";
 import FlagButton from "./FlagButton";
-import { GroupPills } from "./labelPill";
+import { GroupPills, scoreOptions } from "./labelPill";
 import ReaderResizer from "./ReaderResizer";
 import { isDarkTheme, useReaderTheme, useSystemDark } from "./readerTheme";
 import { UI_FONT_FAMILY_STACKS, useUiScale } from "./uiScale";
@@ -651,10 +652,12 @@ export default function MessageReader({
   const [summaryAuth, setSummaryAuth] = useState<AiAuthorization>();
   const [summaryAuthBusy, setSummaryAuthBusy] = useState(false);
   const [aiDowngraded, setAiDowngraded] = useState(false);
-  // 本地标签：下拉只列固定标签；保存失败不乐观改界面。
-  const [labels, setLabels] = useState<MailLabel[]>([]);
+  // 本地标签组：读信页手动改标签用；保存失败不乐观改界面。
+  const [groups, setGroups] = useState<LabelGroup[]>([]);
   const [labelBusy, setLabelBusy] = useState(false);
   const [labelError, setLabelError] = useState("");
+  /** 展开手动修改入口的那个组；空表示没展开。 */
+  const [editingGroupId, setEditingGroupId] = useState<number>();
 
   const messageId = message?.id;
   /** 用户本封点过放行（请求参数用它，避免后端已经自动放行时重复请求）。 */
@@ -689,16 +692,16 @@ export default function MessageReader({
     };
   }, [messageId, userAllowedRemote, reloadKey]);
 
-  /** 标签列表只读一次；读取失败按没有标签处理，不打断读信。 */
+  /** 标签组只读一次；读取失败按没有可选值处理，不打断读信。 */
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const list = await api.listMailLabels();
-        if (!cancelled) setLabels(list);
+        const list = await api.listLabelGroups();
+        if (!cancelled) setGroups(list);
       } catch {
-        // 读不到标签不影响读信；界面上就没有可选项。
-        if (!cancelled) setLabels([]);
+        // 读不到标签组不影响读信；界面上就没有可选项。
+        if (!cancelled) setGroups([]);
       }
     };
     void load();
@@ -707,14 +710,25 @@ export default function MessageReader({
     };
   }, []);
 
-  /** 保存标签：空值表示清除；成功后才通知外层刷新。 */
-  const saveLabel = useCallback(
-    async (value: string) => {
+  /** 换一封邮件就收起上一封展开的手动修改入口。 */
+  useEffect(() => {
+    setEditingGroupId(undefined);
+  }, [messageId]);
+
+  /** 保存某组的手动结果：空值表示清除本组；成功后才通知外层刷新。 */
+  const saveGroupValue = useCallback(
+    async (result: GroupResult, raw: string) => {
       if (message === undefined) return;
       setLabelBusy(true);
       setLabelError("");
       try {
-        await api.setMessageLabel(message.id, value === "" ? null : Number(value));
+        if (raw === "") {
+          await api.clearMessageGroupValue(message.id, result.groupId);
+        } else if (result.kind === "score") {
+          await api.setMessageGroupValue(message.id, result.groupId, null, Number(raw));
+        } else {
+          await api.setMessageGroupValue(message.id, result.groupId, Number(raw), null);
+        }
         onLabelChanged?.();
       } catch (caught) {
         setLabelError(describeError(caught));
@@ -1051,6 +1065,12 @@ export default function MessageReader({
 
   const blocked = body?.blockedRemoteImages ?? 0;
 
+  /** 当前展开手动修改的组结果；没展开或该组没结果时为 undefined。 */
+  const editingResult = message.groupResults.find((result) => result.groupId === editingGroupId);
+  const editingGroup = editingResult
+    ? groups.find((group) => group.id === editingResult.groupId)
+    : undefined;
+
   return (
     <div className={dark ? "reader-pane reader-dark" : "reader-pane"}>
       {translationAuth && (
@@ -1090,33 +1110,49 @@ export default function MessageReader({
         </div>
         {message.groupResults.length > 0 && (
           <div className="reader-group-pills">
-            <GroupPills results={message.groupResults} />
+            <GroupPills
+              results={message.groupResults}
+              onClick={(result) =>
+                setEditingGroupId((old) => (old === result.groupId ? undefined : result.groupId))
+              }
+            />
           </div>
         )}
-        <div className="reader-label-row">
-          <label>
-            {t("标签")}<select
-              aria-label={t("邮件标签")}
-              value={String(
-                message.groupResults.find((result) => result.labelId !== null)?.labelId ?? "",
-              )}
-              disabled={labelBusy}
-              onChange={(event) => void saveLabel(event.target.value)}
-            >
-              <option value="">{t("清除标签")}</option>
-              {labels.map((label) => (
-                <option key={label.id} value={label.id}>
-                  {label.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {labelError && (
-            <span className="error" role="alert">
-              {labelError}
-            </span>
-          )}
-        </div>
+        {editingResult && (
+          <div className="reader-label-row">
+            <label>
+              {editingResult.groupName}
+              <select
+                aria-label={t("邮件标签")}
+                value={
+                  editingResult.kind === "score"
+                    ? String(editingResult.scoreValue ?? "")
+                    : String(editingResult.labelId ?? "")
+                }
+                disabled={labelBusy}
+                onChange={(event) => void saveGroupValue(editingResult, event.target.value)}
+              >
+                <option value="">{t("未设置")}</option>
+                {editingResult.kind === "score"
+                  ? scoreOptions(editingResult.scoreMin, editingResult.scoreMax).map((value) => (
+                      <option key={value} value={value}>
+                        {value}
+                      </option>
+                    ))
+                  : (editingGroup?.labels ?? []).map((label) => (
+                      <option key={label.id} value={label.id}>
+                        {label.name}
+                      </option>
+                    ))}
+              </select>
+            </label>
+            {labelError && (
+              <span className="error" role="alert">
+                {labelError}
+              </span>
+            )}
+          </div>
+        )}
         <div className="reader-ai-tools">
           <button
             type="button"

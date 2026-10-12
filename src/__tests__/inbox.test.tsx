@@ -19,7 +19,7 @@ import {
   syncJustSettled,
   worstSyncStatus,
 } from "../InboxPanel";
-import { scoreBand, scoreBandColorKey } from "../labelPill";
+import { scoreBand, scoreBandColorKey, scoreOptions } from "../labelPill";
 
 function message(id: number, overrides: Partial<InboxMessage> = {}): InboxMessage {
   return {
@@ -274,5 +274,11 @@ describe("打分胶囊颜色分档", () => {
     expect(scoreBand(10, 1, 10)).toBe(5);
     expect(scoreBand(0, 1, 5)).toBe(1);
     expect(scoreBand(9, 1, 5)).toBe(5);
+  });
+
+  it("打分可选值按下限到上限逐个列出，缺省时按 1–5", () => {
+    expect(scoreOptions(1, 5)).toEqual([1, 2, 3, 4, 5]);
+    expect(scoreOptions(0, 10)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(scoreOptions(null, null)).toEqual([1, 2, 3, 4, 5]);
   });
 });

@@ -26,6 +26,15 @@ export function scoreBandColorKey(band: number): string {
   return SCORE_BAND_COLORS[index];
 }
 
+/** 打分题的可选数字：下限到上限逐个列出来；缺上下限时按默认 1–5。 */
+export function scoreOptions(min: number | null, max: number | null): number[] {
+  const low = min ?? 1;
+  const high = max ?? 5;
+  const out: number[] = [];
+  for (let value = low; value <= high; value += 1) out.push(value);
+  return out;
+}
+
 /** 组结果的胶囊文字：选择题/是否题是标签名，打分题是数字。 */
 export function pillText(result: GroupResult): string {
   if (result.kind === "score") {
