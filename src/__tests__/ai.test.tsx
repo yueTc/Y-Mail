@@ -100,13 +100,10 @@ vi.mock("../api", () => {
     previewClassifyMessages: vi.fn(),
     classifyMessages: vi.fn(),
     getAppSettings: vi.fn(async () => ({ ...baseSettings })),
-    setClassifySettings: vi.fn(
-      async (enabled: boolean, confidencePercent: number) => ({
-        ...baseSettings,
-        classifyEnabled: enabled,
-        classifyConfidencePercent: confidencePercent,
-      }),
-    ),
+    setClassifySettings: vi.fn(async (enabled: boolean) => ({
+      ...baseSettings,
+      classifyEnabled: enabled,
+    })),
     setClassifySkipManualConfirm: vi.fn(async (skip: boolean) => ({
       ...baseSettings,
       classifySkipManualConfirm: skip,
@@ -853,12 +850,12 @@ describe("邮件自动分类设置", () => {
     ).toBeTruthy();
   });
 
-  it("自动分类开关默认关闭，门槛默认 75", async () => {
+  it("自动分类开关默认关闭，全局门槛不再显示且仍有一张合并卡片", async () => {
     prepare();
     const toggle = await screen.findByLabelText("开启邮件自动分类");
     expect((toggle as HTMLInputElement).checked).toBe(false);
-    const threshold = screen.getByLabelText("把握程度门槛") as HTMLInputElement;
-    expect(threshold.value).toBe("75");
+    expect(screen.queryByLabelText("把握程度门槛")).toBeNull();
+    expect(await screen.findByText("邮件自动分类 · 标签组管理")).toBeTruthy();
   });
 
   it("「手动分类免确认」默认关闭，勾选后写本机设置并提示", async () => {
@@ -949,7 +946,7 @@ describe("标签组管理", () => {
 
   it("三个默认组和组内标签都列出来", async () => {
     prepare();
-    expect(await screen.findByText("标签组管理")).toBeTruthy();
+    expect(await screen.findByText("邮件自动分类 · 标签组管理")).toBeTruthy();
     expect(await screen.findByDisplayValue("内容分类")).toBeTruthy();
     expect(screen.getByDisplayValue("需要我回复")).toBeTruthy();
     expect(screen.getByDisplayValue("紧急程度")).toBeTruthy();
@@ -970,7 +967,7 @@ describe("标签组管理", () => {
 
   it("新建打分题组必须填上下限", async () => {
     prepare();
-    await screen.findByText("标签组管理");
+    await screen.findByText("邮件自动分类 · 标签组管理");
     fireEvent.change(screen.getByLabelText("新建组名"), { target: { value: "心情" } });
     fireEvent.change(screen.getByLabelText("新建组类型"), { target: { value: "score" } });
     fireEvent.click(screen.getByRole("button", { name: "新建组" }));
@@ -986,7 +983,7 @@ describe("标签组管理", () => {
 
   it("新建是否题组自动配两条标签", async () => {
     prepare();
-    await screen.findByText("标签组管理");
+    await screen.findByText("邮件自动分类 · 标签组管理");
     fireEvent.change(screen.getByLabelText("新建组名"), { target: { value: "要归档吗" } });
     fireEvent.change(screen.getByLabelText("新建组类型"), { target: { value: "boolean" } });
     vi.mocked(api.createLabelGroup).mockResolvedValue({
@@ -1090,7 +1087,7 @@ describe("标签组管理", () => {
 
   it("单个组可折叠，排序和删除排在开启这一组前面", async () => {
     const { container } = prepare();
-    await screen.findByText("标签组管理");
+    await screen.findByText("邮件自动分类 · 标签组管理");
     await waitFor(() => expect(container.querySelector(".ai-label-group-head")).toBeTruthy());
     const head = container.querySelector(".ai-label-group-head") as HTMLElement;
     const controls = Array.from(

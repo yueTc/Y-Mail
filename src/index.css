@@ -3161,6 +3161,16 @@ body.screenshot-body {
   flex-direction: column;
   gap: 8px;
 }
+.ai-label-manager-merged {
+  gap: 12px;
+}
+.ai-classify-global {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
 .ai-label-group-list {
   list-style: none;
   margin: 0;

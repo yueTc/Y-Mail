@@ -269,9 +269,8 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   const [showApiKey, setShowApiKey] = useState(false);
   const [modelsHint, setModelsHint] = useState("");
   const [featureDrafts, setFeatureDrafts] = useState<Record<string, FeatureDraftState>>({});
-  // 「邮件自动分类」开关与把握程度门槛；只存本机，不参与账号同步。
+  // 「邮件自动分类」总开关与手动分类免确认；只存本机，不参与账号同步。
   const [classifyEnabled, setClassifyEnabled] = useState(false);
-  const [classifyPercent, setClassifyPercent] = useState(75);
   const [classifySkipConfirm, setClassifySkipConfirm] = useState(false);
   // 打开自动分类开关前的风险确认：先把要展示的目标记下来，点确认才落盘。
   const [classifyRisk, setClassifyRisk] = useState<
@@ -324,7 +323,6 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       setAudits(nextAudits);
       setGroups(nextLabels);
       setClassifyEnabled(nextSettings.classifyEnabled);
-      setClassifyPercent(nextSettings.classifyConfidencePercent);
       setClassifySkipConfirm(nextSettings.classifySkipManualConfirm);
       setFeatureDrafts((old) => {
         const next: Record<string, FeatureDraftState> = {};
@@ -570,7 +568,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       setClassifyError("");
       if (!next) {
         try {
-          const saved = await api.setClassifySettings(false, classifyPercent);
+          const saved = await api.setClassifySettings(false);
           setClassifyEnabled(saved.classifyEnabled);
           setClassifyNotice(t("已关闭邮件自动分类，后续新邮件不再自动发给 AI。"));
         } catch (caught) {
@@ -602,7 +600,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
         local: providerIsLocal(classifyProvider),
       });
     },
-    [classifyDraft.model, classifyDraft.providerId, classifyPercent, classifyProvider],
+    [classifyDraft.model, classifyDraft.providerId, classifyProvider],
   );
 
   /** 确认弹窗里点「确认开启」：先把分类功能存到站点上，再打开开关。 */
@@ -614,7 +612,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
         classifyDraft.model,
         classifyDraft.thinkingLevel === "" ? undefined : classifyDraft.thinkingLevel,
       );
-      const saved = await api.setClassifySettings(true, classifyPercent);
+      const saved = await api.setClassifySettings(true);
       setClassifyEnabled(saved.classifyEnabled);
       setClassifyRisk(null);
       setClassifyNotice(t("已开启邮件自动分类：新邮件正文会自动发给所选 AI，不再逐封确认。"));
@@ -622,19 +620,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       setClassifyRisk(null);
       setClassifyError(describeError(caught));
     }
-  }, [classifyDraft.model, classifyDraft.providerId, classifyDraft.thinkingLevel, classifyPercent]);
-
-  /** 门槛输入失焦时落盘；越界的整数会被拉回 50–99。 */
-  const saveClassifyPercent = useCallback(async () => {
-    const clamped = Math.min(99, Math.max(50, Math.round(classifyPercent)));
-    setClassifyError("");
-    try {
-      const saved = await api.setClassifySettings(classifyEnabled, clamped);
-      setClassifyPercent(saved.classifyConfidencePercent);
-    } catch (caught) {
-      setClassifyError(describeError(caught));
-    }
-  }, [classifyEnabled, classifyPercent]);
+  }, [classifyDraft.model, classifyDraft.providerId, classifyDraft.thinkingLevel]);
 
   /**
    * 点「手动分类免确认」：开 → 右键「立即分类」直接外发、不再弹每封确认；
@@ -1398,50 +1384,6 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
         })}
       </div>
 
-      <h3>{t("邮件自动分类")}</h3>
-      <p className="hint">
-        {t("打开后，新邮件正文会自动发给所选 TypeSafe jev 站点做分类；模型只返回标签名和把握程度，标签与颜色只存本机。默认关闭。")}
-      </p>
-      <section className="ai-feature-card">
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            aria-label={t("开启邮件自动分类")}
-            checked={classifyEnabled}
-            onChange={(event) => void toggleClassify(event.target.checked)}
-          />
-          <span>{t("开启邮件自动分类")}</span>
-        </label>
-        <label className="secret-field">
-          {t("把握程度门槛")}<input
-            type="number"
-            min={50}
-            max={99}
-            aria-label={t("把握程度门槛")}
-            value={classifyPercent}
-            onChange={(event) => setClassifyPercent(Number(event.target.value))}
-            onBlur={() => void saveClassifyPercent()}
-          />
-        </label>
-        <p className="hint">{t("允许 50–99，默认 75；低于门槛的邮件归到「其他」。")}</p>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            aria-label={t("手动分类免确认")}
-            checked={classifySkipConfirm}
-            onChange={(event) => void toggleClassifySkipConfirm(event.target.checked)}
-          />
-          <span>{t("手动分类免确认")}</span>
-        </label>
-        <p className="hint">{t("勾选后，右键「立即分类」会直接外发、不再逐封确认；随时可在这里关掉。默认关闭。")}</p>
-        {classifyNotice && <p className="notice" role="status">{classifyNotice}</p>}
-        {classifyError && (
-          <p className="error" role="alert">
-            {t("操作失败：")}{classifyError}
-          </p>
-        )}
-      </section>
-
       <h3>{t("通知智能识别（高级功能）")}</h3>
       <p className="hint">
         {t("开启后，新邮件正文会自动发往所选 AI，用来识别验证码和验证链接；识别到就在系统通知里给出复制或打开按钮，不再逐封确认。默认关闭。")}</p>
@@ -1563,11 +1505,46 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
           </p>
         )}
       </section>
-      <h3>{t("标签组管理")}</h3>
+      <h3>{t("邮件自动分类 · 标签组管理")}</h3>
       <p className="hint">
-        {t("组就是判断维度，一封邮件每组各出一个结果。标签和颜色只存在本机，不发给模型、不参与账号同步；颜色只能从固定色板里选。")}
+        {t("打开后，新邮件正文会发给所选 TypeSafe jev 站点；模型只返回标签名和把握程度，标签和颜色只存本机。默认关闭。")}
       </p>
-      <section className="ai-feature-card ai-label-manager">
+      <p className="hint">
+        {t("组就是判断维度，一封邮件每组各出一个结果；把握门槛按组设置。标签和颜色只存在本机，不发给模型、不参与账号同步。")}
+      </p>
+      <section className="ai-feature-card ai-label-manager ai-label-manager-merged">
+        <div className="ai-classify-global">
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              aria-label={t("开启邮件自动分类")}
+              checked={classifyEnabled}
+              onChange={(event) => void toggleClassify(event.target.checked)}
+            />
+            <span>{t("开启邮件自动分类")}</span>
+          </label>
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              aria-label={t("手动分类免确认")}
+              checked={classifySkipConfirm}
+              onChange={(event) => void toggleClassifySkipConfirm(event.target.checked)}
+            />
+            <span>{t("手动分类免确认")}</span>
+          </label>
+          <p className="hint">
+            {t("勾选手动分类免确认后，右键「立即分类」会直接外发、不再逐封确认；随时可在这里关掉。默认关闭。")}
+          </p>
+          {!classifyEnabled && (
+            <p className="hint">{t("总开关没开，组开关打开也不外发。")}</p>
+          )}
+          {classifyNotice && <p className="notice" role="status">{classifyNotice}</p>}
+          {classifyError && (
+            <p className="error" role="alert">
+              {t("操作失败：")}{classifyError}
+            </p>
+          )}
+        </div>
         <div className="ai-label-add">
           <label className="secret-field">
             {t("新建组名")}<input
@@ -1611,9 +1588,6 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
           <button type="button" onClick={() => void addGroup()} disabled={labelBusy}>
             {t("新建组")}</button>
         </div>
-        {!classifyEnabled && (
-          <p className="hint">{t("总开关没开，组开关打开也不外发。")}</p>
-        )}
         <ul className="ai-label-group-list">
           {groups.map((group, groupIndex) => {
             const blockReason = groupEnableBlockReason(group, classifyDraft, classifyProvider);

@@ -863,9 +863,9 @@ export const api = {
   saveAppSettings: (input: AppSettingsInput) =>
     call<AppSettings>("set_app_settings", { input }),
 
-  /** 保存「邮件自动分类」开关与把握程度门槛；只写本机设置。 */
-  setClassifySettings: (enabled: boolean, confidencePercent: number) =>
-    call<AppSettings>("set_classify_settings", { enabled, confidencePercent }),
+  /** 保存「邮件自动分类」总开关；只写本机设置。 */
+  setClassifySettings: (enabled: boolean) =>
+    call<AppSettings>("set_classify_settings", { enabled }),
 
   /** 保存「手动右键分类是否跳过每封外发确认」；只写本机设置。 */
   setClassifySkipManualConfirm: (skip: boolean) =>
