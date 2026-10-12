@@ -5,6 +5,7 @@
 //! - 审计只保存调用元数据，不保存邮件正文；
 //! - 邮件正文与模型输出都只作为不可信字符串存取，绝不在这里解释或执行。
 
+use mail_domain::account::AccountProxyMode;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
@@ -152,6 +153,8 @@ pub struct StoredAiProvider {
     pub enabled: bool,
     /// 系统凭据库引用键；不含密钥明文。
     pub api_key_ref: Option<String>,
+    /// 站点级代理策略。
+    pub proxy: AccountProxyMode,
     /// 创建时间。
     pub created_at: String,
     /// 更新时间。
@@ -175,6 +178,8 @@ pub struct NewAiProvider {
     pub thinking_level: AiThinkingLevel,
     /// 是否启用。
     pub enabled: bool,
+    /// 站点级代理策略。
+    pub proxy: AccountProxyMode,
 }
 
 /// 功能级模型映射；`thinking_level` 为空时回退站点默认。
@@ -268,13 +273,20 @@ pub struct StoredAiAudit {
 }
 
 const SELECT_PROVIDER: &str = "SELECT id, label, kind, base_url, default_model, models_json, \
-    thinking_level, enabled, api_key_ref, created_at, updated_at FROM ai_provider";
+    thinking_level, enabled, api_key_ref, created_at, updated_at, proxy_mode, proxy_id FROM ai_provider";
 const SELECT_MODEL_MAP: &str = "SELECT function, provider_id, model, thinking_level, updated_at \
     FROM ai_model_map";
 const SELECT_CACHE: &str = "SELECT cache_key, message_id, function, model, target_lang, source_hash, \
     segments_json, thinking_downgraded, created_at, updated_at FROM ai_cache";
 const SELECT_AUDIT: &str = "SELECT id, created_at, function, provider_id, provider_label, model, \
     target_host, local, outbound, outcome, detail FROM ai_audit";
+
+fn proxy_id_of(proxy: AccountProxyMode) -> Option<i64> {
+    match proxy {
+        AccountProxyMode::Custom(id) => Some(id.0),
+        AccountProxyMode::InheritGlobal | AccountProxyMode::Direct => None,
+    }
+}
 
 fn parse_models(raw: &str) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
@@ -284,6 +296,8 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredAiProvider
     let kind: String = row.get(2)?;
     let models_json: String = row.get(5)?;
     let thinking: String = row.get(6)?;
+    let proxy_mode: String = row.get(11)?;
+    let proxy_id: Option<i64> = row.get(12)?;
     Ok(StoredAiProvider {
         id: row.get(0)?,
         label: row.get(1)?,
@@ -294,6 +308,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredAiProvider
         thinking_level: AiThinkingLevel::parse(&thinking),
         enabled: row.get::<_, i64>(7)? != 0,
         api_key_ref: row.get(8)?,
+        proxy: AccountProxyMode::parse(&proxy_mode, proxy_id).unwrap_or(AccountProxyMode::InheritGlobal),
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
     })
@@ -374,8 +389,9 @@ impl Store {
             .map_err(|_| StoreError::InvalidData("AI 模型列表无法序列化".to_string()))?;
         self.conn().execute(
             "INSERT INTO ai_provider
-                 (label, kind, base_url, default_model, models_json, thinking_level, enabled, api_key_ref)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 (label, kind, base_url, default_model, models_json, thinking_level, enabled, api_key_ref,
+                  proxy_mode, proxy_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 provider.label,
                 provider.kind.as_str(),
@@ -385,6 +401,8 @@ impl Store {
                 provider.thinking_level.as_str(),
                 i64::from(provider.enabled),
                 api_key_ref,
+                provider.proxy.as_str(),
+                proxy_id_of(provider.proxy),
             ],
         )?;
         Ok(self.conn().last_insert_rowid())
@@ -403,6 +421,7 @@ impl Store {
             "UPDATE ai_provider
              SET label = ?2, kind = ?3, base_url = ?4, default_model = ?5,
                  models_json = ?6, thinking_level = ?7, enabled = ?8, api_key_ref = ?9,
+                 proxy_mode = ?10, proxy_id = ?11,
                  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
              WHERE id = ?1",
             rusqlite::params![
@@ -415,6 +434,8 @@ impl Store {
                 provider.thinking_level.as_str(),
                 i64::from(provider.enabled),
                 api_key_ref,
+                provider.proxy.as_str(),
+                proxy_id_of(provider.proxy),
             ],
         )?;
         Ok(changed > 0)
@@ -611,6 +632,8 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    use mail_domain::{ProxyConfig, ProxyKind};
+
     use super::*;
 
     fn store() -> Store {
@@ -628,6 +651,7 @@ mod tests {
             models: vec!["qwen".to_string()],
             thinking_level: AiThinkingLevel::Low,
             enabled: true,
+            proxy: AccountProxyMode::InheritGlobal,
         }
     }
 
@@ -654,6 +678,64 @@ mod tests {
         );
         assert!(store.delete_ai_provider(id).expect("删除"));
         assert!(store.get_ai_provider(id).expect("查询").is_none());
+    }
+
+    #[test]
+    fn 站点默认跟随全局且自定义代理可往返() {
+        let store = store();
+        let id = store.insert_ai_provider(&provider(), None).expect("新建");
+        assert_eq!(
+            store.get_ai_provider(id).expect("查询").expect("存在").proxy,
+            AccountProxyMode::InheritGlobal
+        );
+
+        let proxy_id = store
+            .insert_proxy(
+                &ProxyConfig {
+                    id: None,
+                    label: "站点代理".to_string(),
+                    kind: ProxyKind::Http,
+                    host: "127.0.0.1".to_string(),
+                    port: 8080,
+                    username: String::new(),
+                },
+                None,
+            )
+            .expect("插入代理");
+        let mut custom = provider();
+        custom.proxy = AccountProxyMode::Custom(proxy_id);
+        assert!(store.update_ai_provider(id, &custom, None).expect("更新"));
+        assert_eq!(
+            store.get_ai_provider(id).expect("查询").expect("存在").proxy,
+            AccountProxyMode::Custom(proxy_id)
+        );
+    }
+
+    #[test]
+    fn 站点指定代理被删后退回跟随全局() {
+        let store = store();
+        let proxy_id = store
+            .insert_proxy(
+                &ProxyConfig {
+                    id: None,
+                    label: "站点代理".to_string(),
+                    kind: ProxyKind::Http,
+                    host: "127.0.0.1".to_string(),
+                    port: 8080,
+                    username: String::new(),
+                },
+                None,
+            )
+            .expect("插入代理");
+        let mut custom = provider();
+        custom.proxy = AccountProxyMode::Custom(proxy_id);
+        let id = store.insert_ai_provider(&custom, None).expect("新建");
+
+        assert!(store.delete_proxy(proxy_id).expect("删除代理"));
+        assert_eq!(
+            store.get_ai_provider(id).expect("查询").expect("存在").proxy,
+            AccountProxyMode::InheritGlobal
+        );
     }
 
     #[test]

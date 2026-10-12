@@ -409,6 +409,7 @@ impl Store {
         match existing {
             Some(found) => {
                 let key = api_key_ref.or(found.api_key_ref.as_deref());
+                // 站点代理是本地策略，不随设置包覆盖，升级导入时保留本机选择。
                 tx.execute(
                     "UPDATE ai_provider
                      SET label = ?2, kind = ?3, base_url = ?4, default_model = ?5,
@@ -432,8 +433,9 @@ impl Store {
             None => {
                 tx.execute(
                     "INSERT INTO ai_provider
-                        (label, kind, base_url, default_model, models_json, thinking_level, enabled, api_key_ref)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                        (label, kind, base_url, default_model, models_json, thinking_level, enabled, api_key_ref,
+                         proxy_mode, proxy_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                     rusqlite::params![
                         provider.label,
                         provider.kind.as_str(),
@@ -443,6 +445,8 @@ impl Store {
                         provider.thinking_level.as_str(),
                         i64::from(provider.enabled),
                         api_key_ref,
+                        provider.proxy.as_str(),
+                        proxy_id_of(provider.proxy),
                     ],
                 )?;
                 Ok(tx.last_insert_rowid())
@@ -690,6 +694,7 @@ mod tests {
                     models: vec!["deepseek-chat".to_string()],
                     thinking_level: AiThinkingLevel::Off,
                     enabled: true,
+                    proxy: mail_domain::account::AccountProxyMode::InheritGlobal,
                 },
             }],
             ai_model_map: vec![AiModelMapImport {

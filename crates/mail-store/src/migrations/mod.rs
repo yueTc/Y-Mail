@@ -105,6 +105,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "0016_mail_label_groups",
         sql: include_str!("sql/0016_mail_label_groups.sql"),
     },
+    Migration {
+        version: 17,
+        name: "0017_ai_provider_proxy",
+        sql: include_str!("sql/0017_ai_provider_proxy.sql"),
+    },
 ];
 
 /// 单条迁移的执行结果。
@@ -315,8 +320,8 @@ mod tests {
         let mut store = Store::open_in_memory().expect("打开内存库");
 
         let first = store.run_migrations().expect("首次迁移");
-        assert_eq!(first.applied_count(), 16, "首次应应用 16 条迁移");
-        assert_eq!(first.current_version, 16);
+        assert_eq!(first.applied_count(), 17, "首次应应用 17 条迁移");
+        assert_eq!(first.current_version, 17);
         assert_eq!(first.applied[0].name, "0001_core_bootstrap");
         assert!(!first.applied[0].applied_at.is_empty(), "登记时间不应为空");
 
@@ -325,7 +330,7 @@ mod tests {
 
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
         );
     }
 
@@ -392,7 +397,7 @@ mod tests {
         store.run_migrations().expect("升级到三号库");
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
         );
 
         // 升级到七号库后，旧账号的授权字段应为空（NULL / 空串），不影响既有数据。
@@ -446,7 +451,7 @@ mod tests {
         store.run_migrations().expect("升级到十二号库");
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
         );
 
         // 旧 translate 映射要保留；新增 notification_verify 要能写；非法值仍被拒。
@@ -550,7 +555,7 @@ mod tests {
         store.run_migrations().expect("升级到十三号库");
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
         );
 
         let conn = store.raw_connection_for_test();
@@ -750,8 +755,8 @@ mod tests {
     }
     #[test]
     fn 迁移清单与校验和的基本性质() {
-        assert_eq!(MIGRATIONS.len(), 16);
-        assert_eq!(supported_version(), 16);
+        assert_eq!(MIGRATIONS.len(), 17);
+        assert_eq!(supported_version(), 17);
         assert_eq!(checksum("abc"), checksum("abc"));
         assert_ne!(checksum("abc"), checksum("abd"));
     }
