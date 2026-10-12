@@ -211,6 +211,8 @@ cargo test --workspace                                  # 全部 Rust 测试（�
 - **提交 PR** —— 从 `main` 拉分支，把 PR 提到 `main`
 - 涉及安全问题的报告，请先看[安全审计报告](docs/security-audit.md)里已列出的结论与未验部分，避免重复
 
+欢迎到 [LinuxDO](https://linux.do/) 社区交流 AI 工具与提示词使用心得。
+
 ## 许可证
 
 基于 [MIT License](LICENSE) 分发。Copyright (c) 2026 yueTc。

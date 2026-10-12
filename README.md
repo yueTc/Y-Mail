@@ -213,6 +213,8 @@ Issues and pull requests are welcome.
 - **Pull requests** — branch off `main` and target `main`
 - For security reports, please read the conclusions and unverified areas already listed in the [security audit report](docs/security-audit.md) first, to avoid duplicates
 
+Join the [LinuxDO](https://linux.do/) community to share tips on using AI tools and prompts.
+
 ## License
 
 Distributed under the [MIT License](LICENSE). Copyright (c) 2026 yueTc.
