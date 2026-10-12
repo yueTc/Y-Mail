@@ -4317,6 +4317,20 @@ pub async fn reorder_mail_labels(
     Ok(())
 }
 
+/// 指定或取消某个组内标签的兜底；同组最多一个，兜底颜色固定灰色。
+#[tauri::command]
+pub async fn set_mail_label_fallback(
+    state: tauri::State<'_, AppState>,
+    group_id: i64,
+    label_id: i64,
+    is_fallback: bool,
+) -> Result<(), CommandError> {
+    ensure_group_id(group_id)?;
+    ensure_label_id(label_id)?;
+    let engine = state.engine().await;
+    engine.set_group_label_fallback(group_id, label_id, is_fallback)?;
+    Ok(())
+}
 /// 手动设置某封邮件某组的结果；来源记 `manual`，该组从此锁定。
 #[tauri::command]
 pub async fn set_message_group_value(

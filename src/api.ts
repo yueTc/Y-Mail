@@ -1271,6 +1271,8 @@ export const api = {
 
   setMailLabelColor: (groupId: number, labelId: number, color: string) =>
     call<void>("set_mail_label_color", { groupId, labelId, color }),
+  setMailLabelFallback: (groupId: number, labelId: number, isFallback: boolean) =>
+    call<void>("set_mail_label_fallback", { groupId, labelId, isFallback }),
 
   deleteMailLabel: (groupId: number, labelId: number) =>
     call<void>("delete_mail_label", { groupId, labelId }),

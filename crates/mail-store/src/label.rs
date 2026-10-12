@@ -502,6 +502,47 @@ impl Store {
         Ok(())
     }
 
+    /// 指定或取消某个组内标签的兜底。
+    ///
+    /// 同一组最多一个兜底：设为兜底时先把该组原有兜底清掉，颜色固定灰色；可改名。
+    pub fn set_group_label_fallback(
+        &self,
+        group_id: i64,
+        id: i64,
+        is_fallback: bool,
+    ) -> Result<(), StoreError> {
+        let label = self
+            .get_mail_label(id)?
+            .ok_or_else(|| StoreError::InvalidData("标签不存在".to_string()))?;
+        if label.group_id != group_id {
+            return Err(StoreError::InvalidData("标签不存在或不属于该组".to_string()));
+        }
+        let tx = self.conn().unchecked_transaction()?;
+        if is_fallback {
+            tx.execute(
+                "UPDATE mail_label
+                 SET is_fallback = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE group_id = ?1 AND is_fallback = 1",
+                [group_id],
+            )?;
+            tx.execute(
+                "UPDATE mail_label
+                 SET is_fallback = 1, color = 'gray',
+                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE id = ?1 AND group_id = ?2",
+                rusqlite::params![id, group_id],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE mail_label
+                 SET is_fallback = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE id = ?1 AND group_id = ?2",
+                rusqlite::params![id, group_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
     /// 过渡兼容：重排内容分类组里的全部标签。
     pub fn reorder_mail_labels(&self, ids: &[i64]) -> Result<(), StoreError> {
         self.reorder_group_labels(self.legacy_content_group_id()?, ids)
@@ -1059,6 +1100,42 @@ mod tests {
         assert_eq!(renamed.color, "gray");
     }
 
+    #[test]
+    fn fallback_can_be_assigned_moved_and_cleared() {
+        let store = store();
+        let original = store.fallback_mail_label().expect("查兜底").expect("初始兜底");
+        let group_id = original.group_id;
+        let candidate = store
+            .list_group_labels(group_id)
+            .expect("组内标签")
+            .into_iter()
+            .find(|label| !label.is_fallback)
+            .expect("非兜底标签")
+            .id;
+
+        // 换兜底：新标签顶上，旧兜底让位，颜色固定灰色，组内只有一个兜底。
+        store
+            .set_group_label_fallback(group_id, candidate, true)
+            .expect("设为兜底");
+        let moved = store.get_mail_label(candidate).expect("查新兜底").expect("在");
+        assert!(moved.is_fallback);
+        assert_eq!(moved.color, "gray");
+        let previous = store.get_mail_label(original.id).expect("查旧兜底").expect("在");
+        assert!(!previous.is_fallback);
+        let fallback_count = store
+            .list_group_labels(group_id)
+            .expect("组内标签")
+            .iter()
+            .filter(|label| label.is_fallback)
+            .count();
+        assert_eq!(fallback_count, 1);
+
+        // 取消兜底：该组不再有兜底。
+        store
+            .set_group_label_fallback(group_id, candidate, false)
+            .expect("取消兜底");
+        assert!(store.fallback_group_label(group_id).expect("查兜底").is_none());
+    }
     #[test]
     fn set_color_rejects_unknown_palette_key() {
         let store = store();

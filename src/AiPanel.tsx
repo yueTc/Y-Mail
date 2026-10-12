@@ -17,6 +17,8 @@ import {
   type AiProviderDraft,
   type AiProviderKind,
   type AiThinkingLevel,
+  type LabelGroup,
+  type LabelGroupKind,
   type MailLabel,
   type NotificationLatency,
 } from "./api";
@@ -184,6 +186,48 @@ function hostOf(baseUrl: string): string {
   }
 }
 
+/** 标签组类型在界面上的中文名。 */
+const GROUP_KIND_LABEL: Record<LabelGroupKind, string> = {
+  choice: "选择题",
+  boolean: "是否题",
+  score: "打分题",
+};
+
+/** 开启一个组之前的检查；返回空串表示可以开，否则返回中文原因。 */
+function groupEnableBlockReason(
+  group: LabelGroup,
+  draft: { model: string; providerId: string },
+  provider: AiProvider | undefined,
+): string {
+  if (!draft.providerId || !provider) {
+    return t("请先在「邮件分类」里选择 TypeSafe jev 站点，再打开组开关。");
+  }
+  if (!provider.enabled) {
+    return t("所选站点已停用，请先启用或换一个站点。");
+  }
+  if (provider.kind !== "typesafe") {
+    return t("邮件分类只支持 TypeSafe jev 站点。");
+  }
+  const model = draft.model.trim() || provider.defaultModel.trim();
+  if (model === "") {
+    return t("请先给邮件分类填写模型，再打开组开关。");
+  }
+  if (group.kind === "choice" && group.labels.length === 0) {
+    return t("这个选择题组还没有标签，先加一个标签再打开。");
+  }
+  if (group.kind === "boolean" && group.labels.length !== 2) {
+    return t("是否题组要有两条标签才能打开。");
+  }
+  if (
+    group.kind === "score" &&
+    (group.scoreMin === null ||
+      group.scoreMax === null ||
+      group.scoreMax - group.scoreMin + 1 < 2)
+  ) {
+    return t("这个打分题组的下限和上限不合法。");
+  }
+  return "";
+}
 /** 固定色板：与后端和数据库约束保持一致；界面只允许从这里选。 */
 const MAIL_LABEL_COLORS = [
   "gray",
@@ -236,11 +280,16 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   >(null);
   const [classifyNotice, setClassifyNotice] = useState("");
   const [classifyError, setClassifyError] = useState("");
-  // 「分类标签管理」：全部标签、新增输入与独立错误；成功操作后一律重新拉取。
-  const [labels, setLabels] = useState<MailLabel[]>([]);
+  // 「标签组管理」：全部标签组、新建组输入、按组的新标签输入与独立错误；成功操作后一律重新拉取。
+  const [groups, setGroups] = useState<LabelGroup[]>([]);
   const [labelBusy, setLabelBusy] = useState(false);
   const [labelError, setLabelError] = useState("");
-  const [newLabelName, setNewLabelName] = useState("");
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupKind, setNewGroupKind] = useState<LabelGroupKind>("choice");
+  const [newGroupScoreMin, setNewGroupScoreMin] = useState("");
+  const [newGroupScoreMax, setNewGroupScoreMax] = useState("");
+  const [newLabelNames, setNewLabelNames] = useState<Record<number, string>>({});
+  const [thresholdDrafts, setThresholdDrafts] = useState<Record<number, string>>({});
   // 打开「通知智能识别」开关前的风险确认：先记下要展示的目标，用户点确认才落盘。
   const [verifyRisk, setVerifyRisk] = useState<
     | { providerLabel: string; model: string; local: boolean }
@@ -267,11 +316,11 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
         api.listAiModelMaps(),
         api.listAiAudit(50),
         api.getAppSettings(),
-        api.listMailLabels(),
+        api.listLabelGroups(),
       ]);
       setProviders(nextProviders);
       setAudits(nextAudits);
-      setLabels(nextLabels);
+      setGroups(nextLabels);
       setClassifyEnabled(nextSettings.classifyEnabled);
       setClassifyPercent(nextSettings.classifyConfidencePercent);
       setClassifySkipConfirm(nextSettings.classifySkipManualConfirm);
@@ -506,6 +555,8 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   const classifyProvider = providers.find(
     (provider) => String(provider.id) === classifyDraft.providerId,
   );
+  /** 打开总开关时，确认框里要写清这次会一起开哪些组。 */
+  const enabledGroupNames = groups.filter((group) => group.enabled).map((group) => group.name);
 
   /**
    * 点「邮件自动分类」开关：开 → 先检查站点与模型，再弹一次性确认；
@@ -603,59 +654,201 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
     }
   }, []);
 
-  /** 重新拉一遍标签；所有标签操作成功后都走它，不靠本地猜顺序或颜色。 */
-  const reloadLabels = useCallback(async () => {
-    setLabels(await api.listMailLabels());
+  /** 重新拉一遍标签组；所有标签组和组内标签操作成功后都走它，不靠本地猜顺序或颜色。 */
+  const reloadGroups = useCallback(async () => {
+    setGroups(await api.listLabelGroups());
   }, []);
 
-  /** 新增标签；颜色由后端按固定色板自动分配。 */
-  const addLabel = useCallback(async () => {
-    const name = newLabelName.trim();
+  /** 新建组：打分题要填上下限；是否题建好后自动配两条标签。 */
+  const addGroup = useCallback(async () => {
+    const name = newGroupName.trim();
     if (name === "") {
-      setLabelError(t("标签名不能为空"));
+      setLabelError(t("标签组名不能为空"));
       return;
+    }
+    let scoreMin: number | undefined;
+    let scoreMax: number | undefined;
+    if (newGroupKind === "score") {
+      scoreMin = Number(newGroupScoreMin);
+      scoreMax = Number(newGroupScoreMax);
+      if (
+        newGroupScoreMin.trim() === "" ||
+        newGroupScoreMax.trim() === "" ||
+        !Number.isFinite(scoreMin) ||
+        !Number.isFinite(scoreMax) ||
+        scoreMax - scoreMin + 1 < 2
+      ) {
+        setLabelError(t("打分题要填下限和上限，而且上限至少要比下限大 1。"));
+        return;
+      }
     }
     setLabelBusy(true);
     setLabelError("");
     try {
-      // TODO(Task 11)：标签组管理界面做完后，新标签直接加在用户选中的组里。
-      const groups = await api.listLabelGroups();
-      const group = groups[0];
-      if (!group) {
-        setLabelError(t("还没有标签组，请先新建一个标签组"));
-        return;
+      const created = await api.createLabelGroup(name, newGroupKind, scoreMin, scoreMax);
+      if (newGroupKind === "boolean") {
+        await api.createMailLabel(created.id, t("需要回复"));
+        await api.createMailLabel(created.id, t("无需回复"));
       }
-      await api.createMailLabel(group.id, name);
-      setNewLabelName("");
-      await reloadLabels();
+      setNewGroupName("");
+      setNewGroupScoreMin("");
+      setNewGroupScoreMax("");
+      await reloadGroups();
     } catch (caught) {
       setLabelError(describeError(caught));
     } finally {
       setLabelBusy(false);
     }
-  }, [newLabelName, reloadLabels]);
+  }, [newGroupKind, newGroupName, newGroupScoreMax, newGroupScoreMin, reloadGroups]);
 
-  /** 改名：失焦时提交；空名字直接退回重新拉取的名称。 */
-  const saveLabelName = useCallback(
-    async (label: MailLabel) => {
-      const name = label.name.trim();
+  /** 组改名：失焦提交；空名字退回重新拉取的名称。 */
+  const saveGroupName = useCallback(
+    async (group: LabelGroup) => {
+      const name = group.name.trim();
       if (name === "") {
-        setLabelError(t("标签名不能为空"));
-        await reloadLabels();
+        setLabelError(t("标签组名不能为空"));
+        await reloadGroups();
         return;
       }
       setLabelBusy(true);
       setLabelError("");
       try {
-        await api.renameMailLabel(label.groupId, label.id, name);
-        await reloadLabels();
+        await api.renameLabelGroup(group.id, name);
+        await reloadGroups();
       } catch (caught) {
         setLabelError(describeError(caught));
       } finally {
         setLabelBusy(false);
       }
     },
-    [reloadLabels],
+    [reloadGroups],
+  );
+
+  /** 组开关：只记「这一组参不参与」；真正外发仍由总开关拦着。 */
+  const toggleGroup = useCallback(
+    async (group: LabelGroup, next: boolean) => {
+      setLabelBusy(true);
+      setLabelError("");
+      try {
+        await api.setLabelGroupEnabled(group.id, next);
+        await reloadGroups();
+      } catch (caught) {
+        setLabelError(describeError(caught));
+      } finally {
+        setLabelBusy(false);
+      }
+    },
+    [reloadGroups],
+  );
+
+  /** 组门槛：失焦落盘，越界拉回 50–99。 */
+  const saveGroupThreshold = useCallback(
+    async (group: LabelGroup) => {
+      const raw =
+        thresholdDrafts[group.id] ?? String(Math.round(group.confidenceThreshold * 100));
+      const percent = Math.min(99, Math.max(50, Math.round(Number(raw))));
+      setLabelError("");
+      setThresholdDrafts((old) => ({ ...old, [group.id]: String(percent) }));
+      try {
+        await api.setLabelGroupThreshold(group.id, percent / 100);
+        await reloadGroups();
+      } catch (caught) {
+        setLabelError(describeError(caught));
+      }
+    },
+    [reloadGroups, thresholdDrafts],
+  );
+
+  /** 删除组：连带组内标签和该组结果，先确认。 */
+  const removeGroup = useCallback(
+    async (group: LabelGroup) => {
+      if (
+        !window.confirm(
+          t("删除「{0}」会连带删掉组内标签和这些组的分类结果，确定吗？", [group.name]),
+        )
+      ) {
+        return;
+      }
+      setLabelBusy(true);
+      setLabelError("");
+      try {
+        await api.deleteLabelGroup(group.id);
+        await reloadGroups();
+      } catch (caught) {
+        setLabelError(describeError(caught));
+      } finally {
+        setLabelBusy(false);
+      }
+    },
+    [reloadGroups],
+  );
+
+  /** 组上下调序：把当前顺序整体提交，成功后再重新拉取。 */
+  const moveGroup = useCallback(
+    async (groupId: number, delta: number) => {
+      const index = groups.findIndex((item) => item.id === groupId);
+      const target = index + delta;
+      if (index < 0 || target < 0 || target >= groups.length) return;
+      const next = groups.map((item) => item.id);
+      [next[index], next[target]] = [next[target], next[index]];
+      setLabelBusy(true);
+      setLabelError("");
+      try {
+        await api.reorderLabelGroups(next);
+        await reloadGroups();
+      } catch (caught) {
+        setLabelError(describeError(caught));
+      } finally {
+        setLabelBusy(false);
+      }
+    },
+    [groups, reloadGroups],
+  );
+
+  /** 组内新增标签；颜色由后端按固定色板自动分配。 */
+  const addLabelToGroup = useCallback(
+    async (groupId: number) => {
+      const name = (newLabelNames[groupId] ?? "").trim();
+      if (name === "") {
+        setLabelError(t("标签名不能为空"));
+        return;
+      }
+      setLabelBusy(true);
+      setLabelError("");
+      try {
+        await api.createMailLabel(groupId, name);
+        setNewLabelNames((old) => ({ ...old, [groupId]: "" }));
+        await reloadGroups();
+      } catch (caught) {
+        setLabelError(describeError(caught));
+      } finally {
+        setLabelBusy(false);
+      }
+    },
+    [newLabelNames, reloadGroups],
+  );
+
+  /** 标签改名：失焦提交；空名字直接退回重新拉取的名称。 */
+  const saveLabelName = useCallback(
+    async (label: MailLabel) => {
+      const name = label.name.trim();
+      if (name === "") {
+        setLabelError(t("标签名不能为空"));
+        await reloadGroups();
+        return;
+      }
+      setLabelBusy(true);
+      setLabelError("");
+      try {
+        await api.renameMailLabel(label.groupId, label.id, name);
+        await reloadGroups();
+      } catch (caught) {
+        setLabelError(describeError(caught));
+      } finally {
+        setLabelBusy(false);
+      }
+    },
+    [reloadGroups],
   );
 
   /** 改颜色：只接受固定色板键；兜底标签在界面上禁用。 */
@@ -665,17 +858,34 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       setLabelError("");
       try {
         await api.setMailLabelColor(label.groupId, label.id, color);
-        await reloadLabels();
+        await reloadGroups();
       } catch (caught) {
         setLabelError(describeError(caught));
       } finally {
         setLabelBusy(false);
       }
     },
-    [reloadLabels],
+    [reloadGroups],
   );
 
-  /** 删除：先确认；兜底标签在界面上禁用。 */
+  /** 指定或换掉兜底标签：同一组最多一个，改完重新拉取。 */
+  const toggleLabelFallback = useCallback(
+    async (label: MailLabel, isFallback: boolean) => {
+      setLabelBusy(true);
+      setLabelError("");
+      try {
+        await api.setMailLabelFallback(label.groupId, label.id, isFallback);
+        await reloadGroups();
+      } catch (caught) {
+        setLabelError(describeError(caught));
+      } finally {
+        setLabelBusy(false);
+      }
+    },
+    [reloadGroups],
+  );
+
+  /** 删除标签：先确认；兜底标签在界面上禁用。 */
   const removeLabel = useCallback(
     async (label: MailLabel) => {
       if (
@@ -689,41 +899,56 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       setLabelError("");
       try {
         await api.deleteMailLabel(label.groupId, label.id);
-        await reloadLabels();
+        await reloadGroups();
       } catch (caught) {
         setLabelError(describeError(caught));
       } finally {
         setLabelBusy(false);
       }
     },
-    [reloadLabels],
+    [reloadGroups],
   );
 
-  /** 上下调序：把当前顺序整体提交，成功后再重新拉取。 */
+  /** 组内标签上下调序：把该组当前顺序整体提交，成功后再重新拉取。 */
   const moveLabel = useCallback(
-    async (labelId: number, delta: number) => {
-      const label = labels.find((item) => item.id === labelId);
-      if (!label) return;
-      // 排序只在同一个组里调整；跨组排序属于 Task 11 的活。
-      const groupLabels = labels.filter((item) => item.groupId === label.groupId);
-      const index = groupLabels.findIndex((item) => item.id === labelId);
+    async (group: LabelGroup, labelId: number, delta: number) => {
+      const index = group.labels.findIndex((item) => item.id === labelId);
       const target = index + delta;
-      if (index < 0 || target < 0 || target >= groupLabels.length) return;
-      const next = groupLabels.map((item) => item.id);
+      if (index < 0 || target < 0 || target >= group.labels.length) return;
+      const next = group.labels.map((item) => item.id);
       [next[index], next[target]] = [next[target], next[index]];
       setLabelBusy(true);
       setLabelError("");
       try {
-        await api.reorderMailLabels(label.groupId, next);
-        await reloadLabels();
+        await api.reorderMailLabels(group.id, next);
+        await reloadGroups();
       } catch (caught) {
         setLabelError(describeError(caught));
       } finally {
         setLabelBusy(false);
       }
     },
-    [labels, reloadLabels],
+    [reloadGroups],
   );
+
+  /** 组名输入先写本地草稿，失焦再提交。 */
+  const setGroupNameDraft = useCallback((groupId: number, name: string) => {
+    setGroups((old) => old.map((group) => (group.id === groupId ? { ...group, name } : group)));
+  }, []);
+
+  /** 组内标签改名输入先写本地草稿，失焦再提交。 */
+  const setLabelNameDraft = useCallback((groupId: number, labelId: number, name: string) => {
+    setGroups((old) =>
+      old.map((group) =>
+        group.id === groupId
+          ? {
+              ...group,
+              labels: group.labels.map((item) => (item.id === labelId ? { ...item, name } : item)),
+            }
+          : group,
+      ),
+    );
+  }, []);
 
   /**
    * 点开关时的入口：开 → 先检查站点模型，再弹风险确认；关 → 立即落盘。
@@ -1331,85 +1556,236 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
           </p>
         )}
       </section>
-      <h3>{t("分类标签管理")}</h3>
+      <h3>{t("标签组管理")}</h3>
       <p className="hint">
-        {t("标签和颜色只存在本机，不发给模型、不参与账号同步；颜色只能从固定色板里选。")}
+        {t("组就是判断维度，一封邮件每组各出一个结果。标签和颜色只存在本机，不发给模型、不参与账号同步；颜色只能从固定色板里选。")}
       </p>
       <section className="ai-feature-card ai-label-manager">
         <div className="ai-label-add">
           <label className="secret-field">
-            {t("新增标签")}<input
-              aria-label={t("新增标签")}
-              value={newLabelName}
+            {t("新建组名")}<input
+              aria-label={t("新建组名")}
+              value={newGroupName}
               maxLength={64}
-              onChange={(event) => setNewLabelName(event.target.value)}
+              onChange={(event) => setNewGroupName(event.target.value)}
             />
           </label>
-          <button type="button" onClick={() => void addLabel()} disabled={labelBusy}>
-            {t("新增")}</button>
+          <label className="secret-field">
+            {t("新建组类型")}<select
+              aria-label={t("新建组类型")}
+              value={newGroupKind}
+              onChange={(event) => setNewGroupKind(event.target.value as LabelGroupKind)}
+            >
+              <option value="choice">{t("选择题")}</option>
+              <option value="boolean">{t("是否题")}</option>
+              <option value="score">{t("打分题")}</option>
+            </select>
+          </label>
+          {newGroupKind === "score" && (
+            <>
+              <label className="secret-field">
+                {t("新建组下限")}<input
+                  type="number"
+                  aria-label={t("新建组下限")}
+                  value={newGroupScoreMin}
+                  onChange={(event) => setNewGroupScoreMin(event.target.value)}
+                />
+              </label>
+              <label className="secret-field">
+                {t("新建组上限")}<input
+                  type="number"
+                  aria-label={t("新建组上限")}
+                  value={newGroupScoreMax}
+                  onChange={(event) => setNewGroupScoreMax(event.target.value)}
+                />
+              </label>
+            </>
+          )}
+          <button type="button" onClick={() => void addGroup()} disabled={labelBusy}>
+            {t("新建组")}</button>
         </div>
-        <ul className="ai-label-list">
-          {labels.map((label, index) => (
-            <li key={label.id} className="ai-label-row">
-              <span
-                className="inbox-row-label"
-                data-label-preview={label.color}
-                data-label-color={label.color}
-              >
-                {label.name}
-              </span>
-              <input
-                className="ai-label-name"
-                aria-label={t("{0}标签名", [label.name])}
-                value={label.name}
-                maxLength={64}
-                onChange={(event) =>
-                  setLabels((old) =>
-                    old.map((item) =>
-                      item.id === label.id ? { ...item, name: event.target.value } : item,
-                    ),
-                  )
-                }
-                onBlur={() => void saveLabelName(label)}
-              />
-              <select
-                aria-label={t("{0}颜色", [label.name])}
-                value={label.color}
-                disabled={label.isFallback || labelBusy}
-                onChange={(event) => void changeLabelColor(label, event.target.value)}
-              >
-                {MAIL_LABEL_COLORS.map((color) => (
-                  <option key={color} value={color}>
-                    {t(LABEL_COLOR_LABEL[color] ?? color)}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                aria-label={t("上移{0}", [label.name])}
-                disabled={labelBusy || index === 0}
-                onClick={() => void moveLabel(label.id, -1)}
-              >
-                {t("上移")}</button>
-              <button
-                type="button"
-                aria-label={t("下移{0}", [label.name])}
-                disabled={labelBusy || index === labels.length - 1}
-                onClick={() => void moveLabel(label.id, 1)}
-              >
-                {t("下移")}</button>
-              <button
-                type="button"
-                className="danger"
-                aria-label={t("删除{0}", [label.name])}
-                disabled={label.isFallback || labelBusy}
-                onClick={() => void removeLabel(label)}
-              >
-                {t("删除")}</button>
-            </li>
-          ))}
+        {!classifyEnabled && (
+          <p className="hint">{t("总开关没开，组开关打开也不外发。")}</p>
+        )}
+        <ul className="ai-label-group-list">
+          {groups.map((group, groupIndex) => {
+            const blockReason = groupEnableBlockReason(group, classifyDraft, classifyProvider);
+            return (
+              <li key={group.id} className="ai-label-group">
+                <div className="ai-label-group-head">
+                  <span className="tag">{t(GROUP_KIND_LABEL[group.kind] ?? group.kind)}</span>
+                  <input
+                    className="ai-label-name"
+                    aria-label={t("{0}组名", [group.name])}
+                    value={group.name}
+                    maxLength={64}
+                    onChange={(event) => setGroupNameDraft(group.id, event.target.value)}
+                    onBlur={() => void saveGroupName(group)}
+                  />
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      aria-label={t("开启{0}", [group.name])}
+                      checked={group.enabled}
+                      disabled={labelBusy}
+                      onChange={(event) => void toggleGroup(group, event.target.checked)}
+                    />
+                    <span>{t("开启这一组")}</span>
+                  </label>
+                  <label className="secret-field">
+                    {t("门槛")}<input
+                      type="number"
+                      min={50}
+                      max={99}
+                      aria-label={t("{0}门槛", [group.name])}
+                      value={thresholdDrafts[group.id] ?? String(Math.round(group.confidenceThreshold * 100))}
+                      onChange={(event) =>
+                        setThresholdDrafts((old) => ({ ...old, [group.id]: event.target.value }))
+                      }
+                      onBlur={() => void saveGroupThreshold(group)}
+                    />
+                  </label>
+                  {group.kind === "score" && (
+                    <>
+                      <label className="secret-field">
+                        {t("下限")}<input
+                          type="number"
+                          aria-label={t("{0}下限", [group.name])}
+                          value={group.scoreMin ?? ""}
+                          readOnly
+                        />
+                      </label>
+                      <label className="secret-field">
+                        {t("上限")}<input
+                          type="number"
+                          aria-label={t("{0}上限", [group.name])}
+                          value={group.scoreMax ?? ""}
+                          readOnly
+                        />
+                      </label>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    aria-label={t("上移{0}", [group.name])}
+                    disabled={labelBusy || groupIndex === 0}
+                    onClick={() => void moveGroup(group.id, -1)}
+                  >
+                    {t("上移")}</button>
+                  <button
+                    type="button"
+                    aria-label={t("下移{0}", [group.name])}
+                    disabled={labelBusy || groupIndex === groups.length - 1}
+                    onClick={() => void moveGroup(group.id, 1)}
+                  >
+                    {t("下移")}</button>
+                  <button
+                    type="button"
+                    className="danger"
+                    aria-label={t("删除{0}", [group.name])}
+                    disabled={labelBusy}
+                    onClick={() => void removeGroup(group)}
+                  >
+                    {t("删除")}</button>
+                </div>
+                {group.enabled && blockReason !== "" && <p className="hint">{blockReason}</p>}
+                {group.kind !== "score" && (
+                  <>
+                    <div className="ai-label-add">
+                      <label className="secret-field">
+                        {t("在{0}里新增标签", [group.name])}<input
+                          aria-label={t("在{0}里新增标签", [group.name])}
+                          value={newLabelNames[group.id] ?? ""}
+                          maxLength={64}
+                          onChange={(event) =>
+                            setNewLabelNames((old) => ({ ...old, [group.id]: event.target.value }))
+                          }
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        aria-label={t("在{0}里新增", [group.name])}
+                        disabled={labelBusy}
+                        onClick={() => void addLabelToGroup(group.id)}
+                      >
+                        {t("新增")}</button>
+                    </div>
+                    <ul className="ai-label-list">
+                      {group.labels.map((label, labelIndex) => (
+                        <li key={label.id} className="ai-label-row">
+                          <span
+                            className="inbox-row-label"
+                            data-label-preview={label.color}
+                            data-label-color={label.color}
+                          >
+                            {label.name}
+                          </span>
+                          {label.isFallback && <span className="tag">{t("兜底")}</span>}
+                          <input
+                            className="ai-label-name"
+                            aria-label={t("{0}标签名", [label.name])}
+                            value={label.name}
+                            maxLength={64}
+                            onChange={(event) =>
+                              setLabelNameDraft(group.id, label.id, event.target.value)
+                            }
+                            onBlur={() => void saveLabelName(label)}
+                          />
+                          <select
+                            aria-label={t("{0}颜色", [label.name])}
+                            value={label.color}
+                            disabled={label.isFallback || labelBusy}
+                            onChange={(event) => void changeLabelColor(label, event.target.value)}
+                          >
+                            {MAIL_LABEL_COLORS.map((color) => (
+                              <option key={color} value={color}>
+                                {t(LABEL_COLOR_LABEL[color] ?? color)}
+                              </option>
+                            ))}
+                          </select>
+                          {!label.isFallback && (
+                            <button
+                              type="button"
+                              aria-label={t("把{0}设为兜底", [label.name])}
+                              disabled={labelBusy}
+                              onClick={() => void toggleLabelFallback(label, true)}
+                            >
+                              {t("设为兜底")}</button>
+                          )}
+                          <button
+                            type="button"
+                            aria-label={t("上移{0}", [label.name])}
+                            disabled={labelBusy || labelIndex === 0}
+                            onClick={() => void moveLabel(group, label.id, -1)}
+                          >
+                            {t("上移")}</button>
+                          <button
+                            type="button"
+                            aria-label={t("下移{0}", [label.name])}
+                            disabled={labelBusy || labelIndex === group.labels.length - 1}
+                            onClick={() => void moveLabel(group, label.id, 1)}
+                          >
+                            {t("下移")}</button>
+                          <button
+                            type="button"
+                            className="danger"
+                            aria-label={t("删除{0}", [label.name])}
+                            disabled={label.isFallback || labelBusy}
+                            onClick={() => void removeLabel(label)}
+                          >
+                            {t("删除")}</button>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="hint">
+                      {t("兜底标签不能删除、颜色固定灰色，可以改名；每组最多一个。")}
+                    </p>
+                  </>
+                )}
+              </li>
+            );
+          })}
         </ul>
-        <p className="hint">{t("「其他」是兜底标签：不能删除，颜色固定灰色，可以改名。")}</p>
         {labelError && (
           <p className="error" role="alert">
             {t("操作失败：")}{labelError}
@@ -1471,6 +1847,8 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
               <dd>{classifyRisk.model}</dd>
               <dt>{t("是不是本地服务")}</dt>
               <dd>{classifyRisk.local ? t("是，本地服务，内容不离开这台电脑") : t("不是，内容会发送到远程站点")}</dd>
+              <dt>{t("将开启哪些组")}</dt>
+              <dd>{enabledGroupNames.length > 0 ? enabledGroupNames.join(t("、")) : t("（当前没有开启的组）")}</dd>
             </dl>
             <p className="hint">{t("关掉这个开关会立刻停止自动外发；已经贴好的本地标签会保留。")}</p>
             <div className="form-actions">

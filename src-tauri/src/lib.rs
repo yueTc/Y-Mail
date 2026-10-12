@@ -174,6 +174,7 @@ pub fn run() {
             commands::set_mail_label_color,
             commands::delete_mail_label,
             commands::reorder_mail_labels,
+            commands::set_mail_label_fallback,
             commands::set_message_group_value,
             commands::clear_message_group_value,
             commands::preview_classify_messages,

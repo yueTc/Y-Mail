@@ -747,6 +747,17 @@ impl MailEngine {
         Ok(self.store().set_group_label_color(group_id, label_id, color)?)
     }
 
+    /// 指定或取消某个组内标签的兜底；同组最多一个，兜底颜色固定灰色。
+    pub fn set_group_label_fallback(
+        &self,
+        group_id: i64,
+        label_id: i64,
+        is_fallback: bool,
+    ) -> Result<(), EngineError> {
+        Ok(self
+            .store()
+            .set_group_label_fallback(group_id, label_id, is_fallback)?)
+    }
     /// 删除某个组内标签；兜底标签会被拒绝。
     pub fn delete_group_label(&self, group_id: i64, label_id: i64) -> Result<(), EngineError> {
         Ok(self.store().delete_group_label(group_id, label_id)?)
