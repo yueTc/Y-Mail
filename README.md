@@ -30,14 +30,34 @@ _163, QQ, WeCom, Gmail, Outlook — all in one inbox_
 
 ## Highlights
 
-- **Local-first** — syncing, searching, reading and attachments all happen on your machine; the app has no telemetry and reports nothing
-- **Many accounts, one inbox** — 163 / QQ / WeCom sign in with an app password, Gmail / Outlook use OAuth2 (PKCE + loopback callback), and everything merges into a single view
-- **A layered Rust engine** — ten crates with one-way, acyclic dependencies; `mail-domain` sits at the bottom and the protocol and storage layers never see each other
-- **Full-text search** — a local SQLite FTS5 index with substring matching for Chinese, plus `from:` / `has:attachment` / `is:unread` / `before:`
-- **Safe by default** — HTML is allowlist-sanitized and rendered in a sandbox, remote images are blocked, and secrets only ever go to Windows Credential Manager
-- **AI and MCP are off by default** — AI asks for confirmation before every outbound call and can be disabled in one click; MCP is read-only by default and speaks local stdio only, listening on no port; both leave a local audit trail
-- **Desktop integration** — tray residency, single instance, silent launch at startup, and a mail data directory you choose yourself
-- **Signed in-app updates** — **Settings → About** shows the version you are running, links to the project page and the release page, and can check for, download and install a signed update in place, then restart into the new build
+- **Local-first, no Y-Mail cloud** — syncing, searching, reading and attachments all happen on your machine; mail is fetched from your existing provider straight to your machine, with no server of ours in between; no account to create, no telemetry, nothing reported
+- **Free and open source, no paywall** — MIT licensed, no subscription, no feature limits meant to push you into an upgrade
+- **Chinese and Western mailboxes in one place** — 163 / QQ / WeCom sign in with an app password, Gmail / Outlook use OAuth2 (PKCE + loopback callback), and everything merges into a single view
+- **Proxies you can set per account** — account-level > global custom > follow system > direct, and an AI provider can point at its own proxy on top of that
+- **Search that handles Chinese properly** — a local SQLite FTS5 index with substring matching for Chinese, plus `from:` / `has:attachment` / `is:unread` / `before:`
+- **Safe reading by default** — HTML is allowlist-sanitized and rendered in a sandbox, remote images are blocked, and secrets only ever go to Windows Credential Manager
+- **AI and MCP are off by default** — every AI call first names the target domain / model / whether it is local and only sends once you confirm, with a one-click kill switch; MCP is read-only by default over local stdio and listens on no port; both leave a local audit trail
+- **Multi-dimensional classification** — label groups: one group per judgement dimension, and a message gets one result in every enabled group without them overwriting each other
+- **Desktop integration and signed updates** — tray residency, single instance, silent launch at startup, a data directory you choose; **Settings → About** checks for updates and installs a signed package in place, then restarts into the new build
+
+## Why Y-Mail
+
+Most mail clients make you trade these things off. Y-Mail answers them differently:
+
+| Concern | The usual trade-off | Y-Mail |
+|---|---|---|
+| Where your mail lives | Many clients sync through a third-party cloud service; another device means signing into that service | Mail comes straight from your own provider to your machine, with no Y-Mail cloud in between; secrets only ever go to Windows Credential Manager, no account to create, no telemetry |
+| What it costs | Many clients are subscription-based, or cap features and accounts in the free tier | MIT licensed; features are not put behind a paywall |
+| Chinese mailboxes | App-password quirks and folder oddities at 163 / QQ / WeCom are often basic or need extra setup | 163 / QQ / WeCom use app passwords, Gmail / Outlook use OAuth2 — one UI, one inbox |
+| Networks | Many clients offer only a single global proxy switch | Proxies are per account: account-level > global custom > follow system > direct, and an AI provider can point at its own proxy too |
+| Reading safely | Many clients load remote images by default, or route them through a vendor proxy; body links jump straight out | HTML allowlist sanitization + sandboxed rendering, remote images blocked until you allow one message, body links handed to your system browser |
+| Searching Chinese | Limited by tokenization or whole-word matching, so results come up short | Local FTS5 index with substring matching for Chinese, plus `from:` / `has:attachment` / `is:unread` / `before:` |
+| Auto-classification | Often one fixed rule set, where multiple dimensions overwrite each other | Label groups: one group per judgement dimension, and a message gets one result in every enabled group without overwriting |
+| Using AI | Many clients switch it on by default or push you hard to enable it, message content goes straight to the cloud, and which model is used is unclear | Off by default; every outbound call first names the target domain / model / whether it is local, and only sends once you confirm — with one-click disable and cache clearing |
+| Letting an AI assistant read mail | Either not possible, or the permission, audit and write boundaries are unclear | MCP speaks local stdin/stdout only, listens on no port and is read-only by default; message content is marked untrusted; the only write tool creates a draft and is disabled by default, no send tools exist, and every call is audited locally |
+| Updating | Download and overwrite manually, or rely on the vendor's update channel | Signed in-app updates: check → download and install in place → restart into the new build, verified against a public key baked into the app |
+
+> This table describes differences in design direction — it is not a claim that others cannot do these things, nor that Y-Mail has finished everything. What has not been verified yet is listed in the [security audit](docs/security-audit.md) and the [manual acceptance checklist](docs/manual-acceptance-checklist.md).
 
 ## Features
 
@@ -61,9 +81,9 @@ Grab the latest version from [**GitHub Releases**](https://github.com/yueTc/Y-Ma
 
 | Platform | Installer |
 |---|---|
-| **Windows 10 / 11 (x64)** | [`Y-Mail_0.3.0_x64_en-US.msi`](https://github.com/yueTc/Y-Mail/releases/download/v0.3.0/Y-Mail_0.3.0_x64_en-US.msi) (MSI, ~12 MB) |
+| **Windows 10 / 11 (x64)** | [`Y-Mail_0.3.0_x64_en-US.msi`](https://github.com/yueTc/Y-Mail/releases/download/v0.3.0/Y-Mail_0.3.0_x64_en-US.msi) (MSI, recommended, ~14 MB)<br/>[`Y-Mail_0.3.0_x64-setup.exe`](https://github.com/yueTc/Y-Mail/releases/download/v0.3.0/Y-Mail_0.3.0_x64-setup.exe) (NSIS, ~10 MB) |
 
-So far only the Windows x64 MSI is published; an NSIS installer can be built locally with `npm run tauri build` (see [Build from source](#build-from-source) below).
+Only Windows x64 is published for now, in two flavours (MSI and NSIS — either one works); other platforms are not available yet.
 
 ### Requirements
 
