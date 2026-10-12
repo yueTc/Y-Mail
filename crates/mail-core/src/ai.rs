@@ -871,13 +871,27 @@ impl MailEngine {
 
     /// 自动分类：对一封邮件跑一次多组分类，返回是否真的发了请求。
     ///
-    /// 一个组都没开就跳过，不当错误。
+    /// 一个组都没开就跳过，不当错误。自动分类不像读信那样等用户点开，所以这里先
+    /// 把正文备齐：本地没有就联网拉一次并落库（只有分类总开关打开时才会走到这）。
     pub async fn classify_message_if_untagged(&self, message_id: i64) -> Result<bool, EngineError> {
         if self.enabled_classify_groups()?.is_empty() {
             return Ok(false);
         }
+        self.ensure_message_body_cached(message_id).await?;
         self.classify_message_groups(message_id).await?;
         Ok(true)
+    }
+
+    /// 分类前把正文备齐：本地已有直接返回，没有就联网拉一次并落库。
+    ///
+    /// 做法跟用户点开这封邮件时一样；拉不到就把错误往外抛，交给上层决定要不要重试。
+    async fn ensure_message_body_cached(&self, message_id: i64) -> Result<(), EngineError> {
+        let cached = { self.store().get_message_body(message_id)?.is_some() };
+        if cached {
+            return Ok(());
+        }
+        self.get_message_body(message_id, false).await?;
+        Ok(())
     }
 
     /// 一次请求问完所有开启的标签组，逐组按门槛落结果，返回该邮件最新的组结果。
@@ -1911,7 +1925,7 @@ fn score_range(group: &LabelGroup) -> Option<(i64, i64)> {
     ((2..=10).contains(&count) && min < max).then_some((min, max))
 }
 
-/// 按组类型和门槛把模型答案换算成落库值；该组不需要写就返回 `None`。
+/// 按组类型把模型答案换算成落库值；该组不需要写就返回 `None`。打分题把握低也照写。
 fn resolve_group_write(group: &LabelGroup, labels: &[MailLabel], answer: &GroupAnswer) -> Option<GroupWrite> {
     match (group.kind, answer) {
         (LabelGroupKind::Choice, GroupAnswer::Choice { label, confidence }) => {
@@ -1941,17 +1955,14 @@ fn resolve_group_write(group: &LabelGroup, labels: &[MailLabel], answer: &GroupA
                 summary: chosen.name.clone(),
             })
         }
-        (LabelGroupKind::Score, GroupAnswer::Score { level, confidence }) => {
-            if *confidence < group.confidence_threshold {
-                return None;
-            }
-            Some(GroupWrite {
-                label_id: None,
-                score_value: Some(*level),
-                confidence: Some(*confidence),
-                summary: level.to_string(),
-            })
-        }
+        // 打分题只要模型给出合法档位就落库（越界档位在解析阶段已经丢掉），
+        // 把握再低也留个数字，别让界面上这一组空着；把握值原样存进 confidence 列。
+        (LabelGroupKind::Score, GroupAnswer::Score { level, confidence }) => Some(GroupWrite {
+            label_id: None,
+            score_value: Some(*level),
+            confidence: Some(*confidence),
+            summary: level.to_string(),
+        }),
         _ => None,
     }
 }
@@ -2477,6 +2488,28 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].score_value, Some(3));
         assert!(results[0].label.is_none());
+        assert_eq!(results[0].source, MailLabelSource::Auto);
+    }
+
+    #[tokio::test]
+    async fn score_group_below_threshold_still_writes_a_number() {
+        // 门槛 0.9，模型只给 0.3 的把握：旧行为是整组留白，现在要照常落分数。
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let group_id = enable_group(&engine, "紧急程度", 0.9);
+        let payload =
+            format!(r#"{{"answers":{{"g{group_id}":{{"type":"score","level":4,"confidence":0.30}}}}}}"#);
+        let port = fake_chat_server(&payload).await;
+        let provider_id = add_typesafe_at(&engine, format!("http://127.0.0.1:{port}/v1"));
+        engine
+            .set_ai_feature(AiFunction::Classify, provider_id, "jev-latest", None)
+            .expect("配置分类");
+        let message = seed_message_with_body(&engine, 61, "说不准急不急的一封邮件");
+
+        let results = engine.classify_message_groups(message).await.expect("分类应成功");
+        assert_eq!(results.len(), 1, "低把握也要落分数：{results:?}");
+        assert_eq!(results[0].score_value, Some(4));
+        assert_eq!(results[0].confidence, Some(0.30));
         assert_eq!(results[0].source, MailLabelSource::Auto);
     }
 

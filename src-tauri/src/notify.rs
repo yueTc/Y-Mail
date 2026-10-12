@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mail_core::{InboxQuery, VerificationFinding};
 use serde::Serialize;
@@ -35,6 +35,8 @@ const SCAN_LIMIT: i64 = 20;
 const MAX_NOTIFICATIONS: usize = 3;
 /// 一轮最多处理几封分类；剩下的留到下一轮。
 const CLASSIFY_BATCH_LIMIT: usize = 20;
+/// 分类失败后隔多久再试；免得每轮都去碰同一封一时拉不到正文的邮件。
+const CLASSIFY_RETRY_DELAY: Duration = Duration::from_secs(60);
 /// 主窗口标签；判断前台只看这个窗口。
 const MAIN_WINDOW_LABEL: &str = "main";
 
@@ -84,6 +86,7 @@ pub fn spawn(
     tauri::async_runtime::spawn(async move {
         let mut seen: HashMap<i64, i64> = HashMap::new();
         let mut primed = false;
+        let mut classify_retry_at: HashMap<i64, Instant> = HashMap::new();
         loop {
             tokio::time::sleep(POLL_INTERVAL).await;
             let batch = match scan(&app).await {
@@ -96,7 +99,7 @@ pub fn spawn(
 
             // 分类消费跟通知开关无关，只看分类开关；开关关着时队列原样保留。
             // 每组的门槛在编排里逐组读，这里不再传全局百分比。
-            drain_classify_queue(&app, &classify_enabled).await;
+            drain_classify_queue(&app, &classify_enabled, &mut classify_retry_at).await;
 
             if !primed {
                 // 启动时先把已有邮件记下来，不补弹历史通知。
@@ -161,7 +164,8 @@ fn take_classify_batch(ids: Vec<i64>) -> Vec<i64> {
 ///
 /// 开关关着时原样保留队列、一次模型都不调；开着时每轮最多处理 20 封。
 /// 每封独立取一次引擎锁，避免长时间占住界面命令要用的锁；存储锁绝不跨 await。
-async fn drain_classify_queue(app: &AppHandle, enabled: &AtomicBool) {
+/// 失败的邮件不丢：原样放回队列，隔一会儿再试，别让一封邮件因为一时拉不到正文就永远不分类。
+async fn drain_classify_queue(app: &AppHandle, enabled: &AtomicBool, retry_at: &mut HashMap<i64, Instant>) {
     if !classify_drain_enabled(enabled) {
         return;
     }
@@ -173,14 +177,41 @@ async fn drain_classify_queue(app: &AppHandle, enabled: &AtomicBool) {
     if ids.is_empty() {
         return;
     }
+    let now = Instant::now();
+    // 这一轮要放回队列的：还没到重试时间的，加上本轮又失败的。
+    let mut deferred: Vec<i64> = Vec::new();
     for message_id in ids {
+        if !classify_retry_ready(retry_at.get(&message_id), now) {
+            deferred.push(message_id);
+            continue;
+        }
         let state = app.state::<AppState>();
         let engine = state.engine().await;
         // 每封按当前开启的标签组分类；门槛从各组的配置读，不看全局百分比。
         // 已有结果的组在编排层直接跳过，绝不覆盖用户手改的结果。
-        if let Err(error) = engine.classify_message_if_untagged(message_id).await {
-            tracing::debug!(message_id, error = %error, "自动分类失败，跳过这封");
+        match engine.classify_message_if_untagged(message_id).await {
+            Ok(_) => {
+                retry_at.remove(&message_id);
+            }
+            Err(error) => {
+                tracing::debug!(message_id, error = %error, "自动分类失败，稍后重试");
+                retry_at.insert(message_id, Instant::now() + CLASSIFY_RETRY_DELAY);
+                deferred.push(message_id);
+            }
         }
+    }
+    if !deferred.is_empty() {
+        let state = app.state::<AppState>();
+        let engine = state.engine().await;
+        engine.enqueue_classify_ids(&deferred);
+    }
+}
+
+/// 这封到点能再试了吗：没记录过、或者已经过了重试时间，都算到点。
+fn classify_retry_ready(retry_at: Option<&Instant>, now: Instant) -> bool {
+    match retry_at {
+        Some(at) => *at <= now,
+        None => true,
     }
 }
 
@@ -481,8 +512,8 @@ fn show_system_notification(app: &AppHandle, title: String, body: String, _messa
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_drain_enabled, safe_action_value, should_pop_system_notification, should_run_verification,
-        take_classify_batch, verification_lines, SafeAction,
+        classify_drain_enabled, classify_retry_ready, safe_action_value, should_pop_system_notification,
+        should_run_verification, take_classify_batch, verification_lines, SafeAction,
     };
     #[cfg(windows)]
     use super::{notification_display_name, DEFAULT_NOTIFICATION_NAME};
@@ -507,6 +538,20 @@ mod tests {
         // 总开关开着：走一次多次分类编排；门槛在编排里逐组读，不再看全局百分比。
         let on = std::sync::atomic::AtomicBool::new(true);
         assert!(classify_drain_enabled(&on));
+    }
+
+    #[test]
+    fn classify_retry_waits_until_due_then_fires() {
+        use std::time::{Duration, Instant};
+        let now = Instant::now();
+        // 没记录过：立刻可试。
+        assert!(classify_retry_ready(None, now));
+        // 还没到重试时间：这一轮先跳过。
+        let fut = now + Duration::from_secs(60);
+        assert!(!classify_retry_ready(Some(&fut), now));
+        // 已经过了重试时间：放行。
+        let past = now - Duration::from_secs(1);
+        assert!(classify_retry_ready(Some(&past), now));
     }
 
     #[test]
