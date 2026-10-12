@@ -924,6 +924,10 @@ describe("标签组管理", () => {
     },
   ];
 
+  async function expandGroup(name: string) {
+    fireEvent.click(await screen.findByRole("button", { name: `展开${name}` }));
+  }
+
   function prepare() {
     vi.mocked(api.listAiProviders).mockResolvedValue([]);
     vi.mocked(api.listAiModelMaps).mockResolvedValue([]);
@@ -947,6 +951,9 @@ describe("标签组管理", () => {
   it("三个默认组和组内标签都列出来", async () => {
     prepare();
     expect(await screen.findByText("邮件自动分类 · 标签组管理")).toBeTruthy();
+    await expandGroup("内容分类");
+    await expandGroup("需要我回复");
+    await expandGroup("紧急程度");
     expect(await screen.findByDisplayValue("内容分类")).toBeTruthy();
     expect(screen.getByDisplayValue("需要我回复")).toBeTruthy();
     expect(screen.getByDisplayValue("紧急程度")).toBeTruthy();
@@ -1016,6 +1023,8 @@ describe("标签组管理", () => {
 
   it("每组门槛分别保存", async () => {
     prepare();
+    await expandGroup("内容分类");
+    await expandGroup("需要我回复");
     const content = (await screen.findByLabelText("内容分类门槛")) as HTMLInputElement;
     expect(content.value).toBe("75");
     fireEvent.change(content, { target: { value: "80" } });
@@ -1034,6 +1043,7 @@ describe("标签组管理", () => {
 
   it("兜底标签不能删也不能改色，可以换兜底", async () => {
     prepare();
+    await expandGroup("内容分类");
     const remove = await screen.findByRole("button", { name: "删除其他" });
     expect((remove as HTMLButtonElement).disabled).toBe(true);
     const color = screen.getByLabelText("其他颜色") as HTMLSelectElement;
@@ -1046,6 +1056,7 @@ describe("标签组管理", () => {
 
   it("组内新增标签把名称交给后端", async () => {
     prepare();
+    await expandGroup("内容分类");
     const input = await screen.findByLabelText("在内容分类里新增标签");
     fireEvent.change(input, { target: { value: "项目" } });
     fireEvent.click(screen.getByRole("button", { name: "在内容分类里新增" }));
@@ -1054,6 +1065,7 @@ describe("标签组管理", () => {
 
   it("标签改名失焦提交、改色调用后端", async () => {
     prepare();
+    await expandGroup("内容分类");
     const name = await screen.findByLabelText("账单标签名");
     fireEvent.change(name, { target: { value: "账单邮件" } });
     fireEvent.blur(name);
@@ -1079,33 +1091,39 @@ describe("标签组管理", () => {
     await waitFor(() =>
       expect(vi.mocked(api.renameLabelGroup)).toHaveBeenCalledWith(2, "要不要回复"),
     );
-    fireEvent.click(screen.getByLabelText("开启需要我回复"));
+    fireEvent.click(screen.getByLabelText("开启或关闭需要我回复"));
     await waitFor(() =>
       expect(vi.mocked(api.setLabelGroupEnabled)).toHaveBeenCalledWith(2, true),
     );
   });
 
-  it("单个组可折叠，排序和删除排在开启这一组前面", async () => {
+  it("标签组默认收起，排序和删除排在开关前面且开关不带文字", async () => {
     const { container } = prepare();
     await screen.findByText("邮件自动分类 · 标签组管理");
     await waitFor(() => expect(container.querySelector(".ai-label-group-head")).toBeTruthy());
+
+    // 默认收起：门槛和组内标签一开始就看不到。
+    expect(screen.queryByLabelText("内容分类门槛")).toBeNull();
+    expect(container.querySelector(".ai-label-group-body")).toBeNull();
+
     const head = container.querySelector(".ai-label-group-head") as HTMLElement;
     const controls = Array.from(
       head.querySelectorAll("button[aria-label], input[type='checkbox'][aria-label]"),
     ).map((element) => element.getAttribute("aria-label"));
     expect(controls).toEqual([
-      "折叠内容分类",
+      "展开内容分类",
       "上移内容分类",
       "下移内容分类",
       "删除内容分类",
-      "开启内容分类",
+      "开启或关闭内容分类",
     ]);
+    // 开关不带可见文字。
+    expect(head.textContent).not.toContain("开启这一组");
 
-    fireEvent.click(screen.getByRole("button", { name: "折叠内容分类" }));
+    fireEvent.click(screen.getByRole("button", { name: "展开内容分类" }));
     await waitFor(() => {
-      expect(screen.queryByLabelText("在内容分类里新增标签")).toBeNull();
-      expect(screen.queryByLabelText("内容分类门槛")).toBeNull();
+      expect(screen.getByLabelText("内容分类门槛")).toBeTruthy();
     });
-    expect(screen.getByRole("button", { name: "展开内容分类" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "折叠内容分类" })).toBeTruthy();
   });
 });

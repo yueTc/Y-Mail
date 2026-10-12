@@ -289,8 +289,8 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   const [newGroupScoreMax, setNewGroupScoreMax] = useState("");
   const [newLabelNames, setNewLabelNames] = useState<Record<number, string>>({});
   const [thresholdDrafts, setThresholdDrafts] = useState<Record<number, string>>({});
-  // 设置页里每一组可单独收起；只影响界面，不写配置。
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<number, boolean>>({});
+  // 设置页里每一组可单独展开；默认全部收起，只影响界面，不写配置。
+  const [expandedGroups, setExpandedGroups] = useState<Record<number, boolean>>({});
   // 打开「通知智能识别」开关前的风险确认：先记下要展示的目标，用户点确认才落盘。
   const [verifyRisk, setVerifyRisk] = useState<
     | { providerLabel: string; model: string; local: boolean }
@@ -729,9 +729,9 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
     [reloadGroups],
   );
 
-  /** 单个标签组折叠：只影响设置界面，不改数据。 */
-  const toggleGroupCollapsed = useCallback((groupId: number) => {
-    setCollapsedGroups((old) => ({ ...old, [groupId]: !old[groupId] }));
+  /** 单个标签组展开/收起：只影响设置界面，不改数据。 */
+  const toggleGroupExpanded = useCallback((groupId: number) => {
+    setExpandedGroups((old) => ({ ...old, [groupId]: !old[groupId] }));
   }, []);
 
   /** 组门槛：失焦落盘，越界拉回 50–99。 */
@@ -1591,7 +1591,8 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
         <ul className="ai-label-group-list">
           {groups.map((group, groupIndex) => {
             const blockReason = groupEnableBlockReason(group, classifyDraft, classifyProvider);
-            const collapsed = collapsedGroups[group.id] === true;
+            const expanded = expandedGroups[group.id] === true;
+            const collapsed = !expanded;
             return (
               <li
                 key={group.id}
@@ -1609,7 +1610,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
                         : t("折叠{0}", [group.name])
                     }
                     title={collapsed ? t("展开这一组") : t("折叠这一组")}
-                    onClick={() => toggleGroupCollapsed(group.id)}
+                    onClick={() => toggleGroupExpanded(group.id)}
                   >
                     {collapsed ? "▸" : "▾"}
                   </button>
@@ -1648,12 +1649,12 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
                     <label className="checkbox ai-label-group-enable">
                       <input
                         type="checkbox"
-                        aria-label={t("开启{0}", [group.name])}
+                        aria-label={t("开启或关闭{0}", [group.name])}
+                        title={t("开启或关闭{0}", [group.name])}
                         checked={group.enabled}
                         disabled={labelBusy}
                         onChange={(event) => void toggleGroup(group, event.target.checked)}
                       />
-                      <span>{t("开启这一组")}</span>
                     </label>
                   </div>
                 </div>
