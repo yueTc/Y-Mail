@@ -2959,6 +2959,28 @@ body.screenshot-body {
   color: var(--label-fg, #343a40);
 }
 
+/* 打分胶囊：只显示数字，等宽数字居中；颜色仍走上面那套色板，按档位取键。 */
+.inbox-row-score {
+  min-width: 1.6em;
+  justify-content: center;
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 一行多胶囊：胶囊各自不收缩，挤不下时先压发件人，时间永远在最右。 */
+.inbox-row-top > .inbox-row-label {
+  flex: none;
+}
+
+/* 读信页的胶囊行：排在时间下方，浅深主题沿用面板配色。 */
+.reader-group-pills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
 .inbox-row-label[data-label-color="gray"] {
   --label-bg: #f1f3f5;
   --label-border: #adb5bd;

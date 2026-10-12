@@ -23,6 +23,7 @@ import {
   type AccountInboxSummary,
   type ClassifyPreview,
   type ComposeParticipant,
+  type GroupResult,
   type InboxFolder,
   type InboxMessage,
   type InboxQuery,
@@ -34,6 +35,7 @@ import {
 } from "./api";
 import ComposePanel, { type ComposeRequest } from "./ComposePanel";
 import MessageReader from "./MessageReader";
+import { GroupPills } from "./labelPill";
 import FlagButton from "./FlagButton";
 import AccountDialog from "./AccountDialog";
 import PaneResizer from "./PaneResizer";
@@ -51,43 +53,6 @@ const PAGE_SIZE = 200;
 /** 搜索框下方的语法提示。 */
 export const SEARCH_SYNTAX_HINT =
   "支持 from: 发件人、has:attachment、is:unread、before:2026-01-01";
-
-/**
- * 暂时只取第一条带标签的组结果做胶囊。
- *
- * 一个组一个胶囊属于 Task 12 的活；现在先把老的单标签显示接到新契约上，
- * 保证接口换完以后界面还能编译、能用。
- */
-function labelPill(message: InboxMessage): { name: string; color: string } | null {
-  const hit = message.groupResults.find(
-    (result) => result.labelName !== null && result.labelColor !== null,
-  );
-  if (!hit || hit.labelName === null || hit.labelColor === null) return null;
-  return { name: hit.labelName, color: hit.labelColor };
-}
-
-/** 列表里的标签胶囊；点一下触发按标签搜索。 */
-function LabelPill({
-  pill,
-  onClick,
-}: {
-  pill: { name: string; color: string };
-  onClick?: (labelName: string) => void;
-}) {
-  return (
-    <button
-      type="button"
-      className="inbox-row-label"
-      data-label-color={pill.color}
-      onClick={(event) => {
-        event.stopPropagation();
-        onClick?.(pill.name);
-      }}
-    >
-      {pill.name}
-    </button>
-  );
-}
 
 /** 列表里的一行：线程、平铺邮件、展开出来的子邮件，或一条搜索命中。 */
 export type InboxRow =
@@ -378,12 +343,11 @@ function MessageRow({
   selected?: boolean;
   onOpen?: () => void;
   onToggleFlag?: (message: InboxMessage) => void;
-  onLabelClick?: (labelName: string) => void;
+  onLabelClick?: (result: GroupResult) => void;
 }) {
   const className = ["inbox-row", child ? "inbox-row-child" : "", selected ? "inbox-row-selected" : ""]
     .filter(Boolean)
     .join(" ");
-  const pill = labelPill(message);
   return (
     <div
       className={className}
@@ -399,7 +363,7 @@ function MessageRow({
       <div className="inbox-row-main">
         <div className="inbox-row-top">
           <span className="inbox-row-sender">{senderText(message)}</span>
-          {pill ? <LabelPill pill={pill} onClick={onLabelClick} /> : null}
+          <GroupPills results={message.groupResults} onClick={onLabelClick} />
           <span className="inbox-row-time">{formatListTime(message.dateUtc)}</span>
         </div>
         <div className="inbox-row-bottom">
@@ -433,11 +397,10 @@ function SearchResultRow({
   selected?: boolean;
   onOpen: () => void;
   onToggleFlag?: (message: InboxMessage) => void;
-  onLabelClick?: (labelName: string) => void;
+  onLabelClick?: (result: GroupResult) => void;
 }) {
   const message = hit.message;
   const className = ["inbox-row", selected ? "inbox-row-selected" : ""].filter(Boolean).join(" ");
-  const pill = labelPill(message);
   return (
     <div
       className={className}
@@ -451,7 +414,7 @@ function SearchResultRow({
       <div className="inbox-row-main">
         <div className="inbox-row-top">
           <span className="inbox-row-sender">{senderText(message)}</span>
-          {pill ? <LabelPill pill={pill} onClick={onLabelClick} /> : null}
+          <GroupPills results={message.groupResults} onClick={onLabelClick} />
           <span className="inbox-row-time">{formatListTime(message.dateUtc)}</span>
         </div>
         <div className="inbox-row-bottom">
@@ -486,10 +449,9 @@ function ThreadRow({
   expanded: boolean;
   onToggle: () => void;
   onToggleFlag?: (message: InboxMessage) => void;
-  onLabelClick?: (labelName: string) => void;
+  onLabelClick?: (result: GroupResult) => void;
 }) {
   const latest = thread.latest;
-  const pill = labelPill(latest);
   return (
     <div
       className="inbox-row inbox-row-thread"
@@ -503,7 +465,7 @@ function ThreadRow({
       <div className="inbox-row-main">
         <div className="inbox-row-top">
           <span className="inbox-row-sender">{senderText(latest)}</span>
-          {pill ? <LabelPill pill={pill} onClick={onLabelClick} /> : null}
+          <GroupPills results={latest.groupResults} onClick={onLabelClick} />
           <span className="inbox-row-time">{formatListTime(latest.dateUtc)}</span>
         </div>
         <div className="inbox-row-bottom">
@@ -1038,10 +1000,12 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  /** 点列表里的标签胶囊：等于按 `label:标签名` 搜一次。 */
+  /** 点列表里的胶囊：等于按这个结果搜一次。Task 13 会把前缀换成 tag:组名:值。 */
   const filterByLabel = useCallback(
-    (labelName: string) => {
-      const raw = `label:${labelName}`;
+    (result: GroupResult) => {
+      const value =
+        result.kind === "score" ? String(result.scoreValue ?? "") : (result.labelName ?? "");
+      const raw = `label:${value}`;
       setSearchInput(raw);
       void runSearch({ raw });
     },

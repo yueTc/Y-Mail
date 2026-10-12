@@ -22,6 +22,7 @@ import {
 } from "./api";
 import AiAuthorizationDialog from "./AiAuthorizationDialog";
 import FlagButton from "./FlagButton";
+import { GroupPills } from "./labelPill";
 import ReaderResizer from "./ReaderResizer";
 import { isDarkTheme, useReaderTheme, useSystemDark } from "./readerTheme";
 import { UI_FONT_FAMILY_STACKS, useUiScale } from "./uiScale";
@@ -1087,6 +1088,11 @@ export default function MessageReader({
           )}
           <span>{formatReaderTime(message.dateUtc)}</span>
         </div>
+        {message.groupResults.length > 0 && (
+          <div className="reader-group-pills">
+            <GroupPills results={message.groupResults} />
+          </div>
+        )}
         <div className="reader-label-row">
           <label>
             {t("标签")}<select

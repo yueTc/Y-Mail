@@ -671,6 +671,10 @@ export interface GroupResult {
   labelName: string | null;
   /** 命中的标签颜色键；打分题为 null。 */
   labelColor: string | null;
+  /** 打分题的下限；选择题和是否题为 null。 */
+  scoreMin: number | null;
+  /** 打分题的上限；选择题和是否题为 null。 */
+  scoreMax: number | null;
   /** 打分题的数字；选择题和是否题为 null。 */
   scoreValue: number | null;
 }

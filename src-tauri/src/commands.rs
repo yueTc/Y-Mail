@@ -3510,6 +3510,10 @@ pub struct GroupResultDto {
     pub label_name: Option<String>,
     /// 命中的标签颜色；打分题为空。
     pub label_color: Option<String>,
+    /// 打分题的下限；选择题和是否题为空。
+    pub score_min: Option<i64>,
+    /// 打分题的上限；选择题和是否题为空。
+    pub score_max: Option<i64>,
     /// 打分题的数字；选择题和是否题为空。
     pub score_value: Option<i64>,
 }
@@ -3525,6 +3529,8 @@ impl GroupResultDto {
                 label_id: Some(label.id),
                 label_name: Some(label.name.clone()),
                 label_color: Some(label.color.clone()),
+                score_min: result.group.score_min,
+                score_max: result.group.score_max,
                 score_value: result.score_value,
             },
             None => Self {
@@ -3534,6 +3540,8 @@ impl GroupResultDto {
                 label_id: None,
                 label_name: None,
                 label_color: None,
+                score_min: result.group.score_min,
+                score_max: result.group.score_max,
                 score_value: result.score_value,
             },
         }

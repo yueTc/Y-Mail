@@ -357,3 +357,41 @@ describe("读信页手动改标签", () => {
     expect(select.value).toBe("");
   });
 });
+
+describe("读信页的标签组胶囊", () => {
+  const MESSAGE_WITH_RESULTS: InboxMessage = {
+    ...MESSAGE,
+    groupResults: [
+      {
+        groupId: 1,
+        groupName: "内容分类",
+        kind: "choice",
+        labelId: 5,
+        labelName: "账单",
+        labelColor: "orange",
+        scoreMin: null,
+        scoreMax: null,
+        scoreValue: null,
+      },
+      {
+        groupId: 3,
+        groupName: "紧急程度",
+        kind: "score",
+        labelId: null,
+        labelName: null,
+        labelColor: null,
+        scoreMin: 1,
+        scoreMax: 5,
+        scoreValue: 5,
+      },
+    ],
+  };
+
+  it("读信页显示各组胶囊，打分胶囊带颜色分档", async () => {
+    render(<MessageReader message={MESSAGE_WITH_RESULTS} />);
+
+    expect(await screen.findByText("账单")).toBeTruthy();
+    const score = screen.getByText("5");
+    expect(score.getAttribute("data-score-band")).toBe("5");
+  });
+});

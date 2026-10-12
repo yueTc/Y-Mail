@@ -323,6 +323,8 @@ describe("收件箱消息的标签组结果", () => {
         labelId: null,
         labelName: null,
         labelColor: null,
+        scoreMin: 1,
+        scoreMax: 5,
         scoreValue: 87,
       },
       {
@@ -332,6 +334,8 @@ describe("收件箱消息的标签组结果", () => {
         labelId: 5,
         labelName: "账单",
         labelColor: "orange",
+        scoreMin: null,
+        scoreMax: null,
         scoreValue: null,
       },
     ];

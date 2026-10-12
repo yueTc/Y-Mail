@@ -389,6 +389,8 @@ describe("列表标签胶囊", () => {
     labelId: 2,
     labelName: "账单",
     labelColor: "orange",
+    scoreMin: null,
+    scoreMax: null,
     scoreValue: null,
   };
   const notifyPill: GroupResult = {
@@ -398,7 +400,20 @@ describe("列表标签胶囊", () => {
     labelId: 3,
     labelName: "通知",
     labelColor: "teal",
+    scoreMin: null,
+    scoreMax: null,
     scoreValue: null,
+  };
+  const urgentPill: GroupResult = {
+    groupId: 3,
+    groupName: "紧急程度",
+    kind: "score",
+    labelId: null,
+    labelName: null,
+    labelColor: null,
+    scoreMin: 1,
+    scoreMax: 5,
+    scoreValue: 5,
   };
 
   function labelledMessage(overrides: Partial<InboxMessage> = {}): InboxMessage {
@@ -522,6 +537,46 @@ describe("列表标签胶囊", () => {
       const chips = document.querySelectorAll('[data-label-color="orange"]');
       expect(chips.length).toBeGreaterThan(0);
     });
+  });
+
+  it("平铺行把每组的胶囊都排在时间前面，顺序按组", async () => {
+    vi.mocked(api.listInboxMessages).mockResolvedValue({
+      items: [labelledMessage({ groupResults: [billPill, urgentPill] })],
+      total: 1,
+      offset: 0,
+      limit: 200,
+    });
+    render(<InboxPanel />);
+
+    const bill = await screen.findByRole("button", { name: "账单" });
+    const urgent = screen.getByRole("button", { name: "5" });
+    expect(urgent.getAttribute("data-score-band")).toBe("5");
+    const time = document.querySelector(".inbox-row-time") as HTMLElement;
+    expect(bill.compareDocumentPosition(time) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(urgent.compareDocumentPosition(time) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(bill.compareDocumentPosition(urgent) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("会话折叠行显示最新一封的全部组胶囊", async () => {
+    vi.mocked(api.listInboxThreads).mockResolvedValue({
+      items: [
+        {
+          accountId: 1,
+          threadKey: "t1",
+          messageCount: 2,
+          unreadCount: 1,
+          latest: labelledMessage({ groupResults: [billPill, urgentPill] }),
+        },
+      ],
+      total: 1,
+      offset: 0,
+      limit: 200,
+    });
+    render(<InboxPanel />);
+    fireEvent.click(await screen.findByLabelText("按会话聚合"));
+
+    expect(await screen.findByRole("button", { name: "账单" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "5" })).toBeTruthy();
   });
 });
 describe("收件箱右键立即分类", () => {

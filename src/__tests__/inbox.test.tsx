@@ -19,6 +19,7 @@ import {
   syncJustSettled,
   worstSyncStatus,
 } from "../InboxPanel";
+import { scoreBand, scoreBandColorKey } from "../labelPill";
 
 function message(id: number, overrides: Partial<InboxMessage> = {}): InboxMessage {
   return {
@@ -255,5 +256,23 @@ describe("同步状态徽标", () => {
       "同步中 3/10",
     );
     expect(syncBadgeText(base)).toBe("空闲");
+  });
+});
+
+describe("打分胶囊颜色分档", () => {
+  it("1–5 区间里 1 灰、3 黄、5 红", () => {
+    expect(scoreBand(1, 1, 5)).toBe(1);
+    expect(scoreBand(3, 1, 5)).toBe(3);
+    expect(scoreBand(5, 1, 5)).toBe(5);
+    expect(scoreBandColorKey(1)).toBe("gray");
+    expect(scoreBandColorKey(3)).toBe("amber");
+    expect(scoreBandColorKey(5)).toBe("red");
+  });
+
+  it("其它区间按相对位置分档，越界时夹在 1–5 之内", () => {
+    expect(scoreBand(1, 1, 10)).toBe(1);
+    expect(scoreBand(10, 1, 10)).toBe(5);
+    expect(scoreBand(0, 1, 5)).toBe(1);
+    expect(scoreBand(9, 1, 5)).toBe(5);
   });
 });
