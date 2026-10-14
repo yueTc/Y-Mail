@@ -1646,13 +1646,26 @@ textarea:focus {
   background: var(--panel-bg);
 }
 
-.rail-button {
+.workspace-rail-main,
+.workspace-rail-bottom {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 4px;
+  gap: 6px;
   width: 100%;
-  padding: 8px 2px;
+}
+
+.workspace-rail-bottom {
+  margin-top: auto;
+}
+
+.rail-button {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 2px;
   border: 1px solid transparent;
   border-radius: 10px;
   background: transparent;
@@ -1677,11 +1690,6 @@ textarea:focus {
 .rail-icon {
   width: 22px;
   height: 22px;
-}
-
-.rail-label {
-  font-size: 0.72rem;
-  line-height: 1.2;
 }
 
 .workspace-body {

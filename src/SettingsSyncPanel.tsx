@@ -7,7 +7,7 @@
 //! - 开启前必须让用户明确勾选两条风险说明；
 //! - Gist 链接只交给系统浏览器打开，不在界面内嵌远程内容。
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import GitHubLoginPanel from "./GitHubLoginPanel";
 import {
@@ -33,6 +33,8 @@ export default function SettingsSyncPanel() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [deviceLabel, setDeviceLabel] = useState("");
+  const deviceLabelEdited = useRef(false);
+  const joinLabelEdited = useRef(false);
   const [agreePrivate, setAgreePrivate] = useState(false);
   const [agreeSecrets, setAgreeSecrets] = useState(false);
 
@@ -64,6 +66,21 @@ export default function SettingsSyncPanel() {
     void refreshProfile();
     void refreshStatus();
   }, [refreshProfile, refreshStatus]);
+
+  // 默认填写电脑名称；请求晚到时不覆盖用户已经改过或清空的输入。
+  useEffect(() => {
+    let cancelled = false;
+    const applyName = (name: string) => {
+      if (cancelled) return;
+      const value = name.trim() || t("本机");
+      if (!deviceLabelEdited.current) setDeviceLabel(value);
+      if (!joinLabelEdited.current) setJoinLabel(value);
+    };
+    void api.getComputerName().then(applyName).catch(() => applyName(t("本机")));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   /** 统一包一层：忙状态、错误提示、状态刷新；成功返回新状态，失败返回空。 */
   const run = useCallback(async (job: () => Promise<SettingsSyncStatus>) => {
@@ -306,7 +323,10 @@ export default function SettingsSyncPanel() {
                   <input
                     type="text"
                     value={deviceLabel}
-                    onChange={(event) => setDeviceLabel(event.target.value)}
+                    onChange={(event) => {
+                      deviceLabelEdited.current = true;
+                      setDeviceLabel(event.target.value);
+                    }}
                     placeholder={t("例如：家里的台式机")}
                   />
                 </label>
@@ -351,7 +371,10 @@ export default function SettingsSyncPanel() {
                   <input
                     type="text"
                     value={joinLabel}
-                    onChange={(event) => setJoinLabel(event.target.value)}
+                    onChange={(event) => {
+                      joinLabelEdited.current = true;
+                      setJoinLabel(event.target.value);
+                    }}
                     placeholder={t("例如：公司的笔记本")}
                   />
                 </label>

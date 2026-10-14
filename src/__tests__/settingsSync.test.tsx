@@ -20,6 +20,7 @@ vi.mock("../api", () => ({
     githubLoginSignOut: vi.fn(),
     openExternalUrl: vi.fn(),
     settingsSyncStatus: vi.fn(),
+    getComputerName: vi.fn(),
     settingsSyncEnable: vi.fn(),
     settingsSyncDisable: vi.fn(),
     settingsSyncNow: vi.fn(),
@@ -62,6 +63,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   (api.githubLoginProfile as ReturnType<typeof vi.fn>).mockResolvedValue(loggedInSync);
   (api.settingsSyncStatus as ReturnType<typeof vi.fn>).mockResolvedValue(baseStatus);
+  (api.getComputerName as ReturnType<typeof vi.fn>).mockResolvedValue("测试电脑");
   (api.githubLoginSignOut as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
   (api.openExternalUrl as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
   (api.settingsSyncEnable as ReturnType<typeof vi.fn>).mockImplementation(
@@ -74,6 +76,18 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe("设备名默认值", () => {
+  it("默认填入电脑名称，用户修改后保留修改值", async () => {
+    render(<SettingsSyncPanel />);
+
+    const form = await findEl(document.body, ".settings-sync-enable");
+    const input = within(form).getByLabelText("这台设备的名字") as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("测试电脑"));
+
+    fireEvent.change(input, { target: { value: "手动设备名" } });
+    await waitFor(() => expect(input.value).toBe("手动设备名"));
+  });
+});
 describe("GitHub 登录面板", () => {
   it("显示用户码，轮询成功后显示头像", async () => {
     (api.githubLoginProfile as ReturnType<typeof vi.fn>).mockResolvedValue(null);

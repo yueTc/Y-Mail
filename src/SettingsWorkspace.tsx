@@ -27,6 +27,7 @@ type SettingsCategoryId =
   | "general"
   | "appearance"
   | "accounts"
+  | "settingsSync"
   | "proxy"
   | "ai"
   | "mcp"
@@ -38,7 +39,8 @@ type SettingsCategoryId =
 const SETTINGS_CATEGORIES: { id: SettingsCategoryId; label: string }[] = [
   { id: "general", label: "通用" },
   { id: "appearance", label: "外观" },
-  { id: "accounts", label: "账号与同步" },
+  { id: "accounts", label: "账户" },
+  { id: "settingsSync", label: "设置同步" },
   { id: "proxy", label: "代理" },
   { id: "ai", label: "AI功能" },
   { id: "mcp", label: "MCP" },
@@ -666,13 +668,21 @@ export default function SettingsWorkspace({
 
           <section
             className="settings-group"
-            aria-label={t("账号与同步")}
+            aria-label={t("账户")}
             hidden={activeCategory !== "accounts"}
           >
-            <h2 className="settings-group-title">{t("账号与同步")}</h2>
+            <h2 className="settings-group-title">{t("账户")}</h2>
             <SyncPollSettingsPanel />
             <SyncPanel />
             <AccountPanel proxiesVersion={proxiesVersion} />
+          </section>
+
+          <section
+            className="settings-group"
+            aria-label={t("设置同步")}
+            hidden={activeCategory !== "settingsSync"}
+          >
+            <h2 className="settings-group-title">{t("设置同步")}</h2>
             <SettingsSyncPanel />
           </section>
 

@@ -40,7 +40,7 @@
 
 **做法：**
 
-- 把分类编号从 `accounts` 改成 `account` 和 `settingsSync`。
+- 保留 `accounts` 作为“账户”分类编号，新增 `settingsSync` 作为“设置同步”分类编号。
 - 分类文字改为“账户”和“设置同步”。
 - “账户”渲染 `SyncPollSettingsPanel`、`SyncPanel`、`AccountPanel`；“设置同步”只渲染 `SettingsSyncPanel`。
 - 把原来“账号与同步”分类拆成两个区块，保持每个面板在切换时继续挂载。
@@ -80,5 +80,5 @@
 
 - 先运行受影响的前端和 Rust 测试，修复类型、布局或命令注册问题。
 - 再运行项目要求的四项完整检查。
-- 更新 `.ai-memory/handoff.md`、`.ai-memory/project_memory.md`、`.ai-memory/2026-10-15.md`，记录完成证据、相关文件、未完成项和阻塞点。
+- 更新 `.ai-memory/handoff.md`、`.ai-memory/project_memory.md`、`.ai-memory/20261015/daily.md`，记录完成证据、相关文件、未完成项和阻塞点。
 - 提交实现，提交信息使用中文；确认未加入 `.db`、`.env`、密钥和构建产物。

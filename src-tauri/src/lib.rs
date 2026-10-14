@@ -53,6 +53,7 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            commands::get_computer_name,
             commands::get_app_settings,
             commands::set_app_settings,
             commands::set_classify_settings,

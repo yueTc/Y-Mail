@@ -799,6 +799,7 @@ export const EN: Record<string, string> = {
   "账号已保存。": "Account saved.",
   "账号已更新；引擎在写入前完成了一次连接自检。": "Account updated; the engine ran a connection self-test before writing.",
   "账号已更新。": "Account updated.",
+  "账户": "Accounts",
   "账号与同步": "Accounts & sync",
   "这 {0} 个附件已经在列表里": "These {0} attachments are already in the list",
   "这次要执行「": "This will run “",

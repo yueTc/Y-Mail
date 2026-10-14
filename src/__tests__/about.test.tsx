@@ -17,6 +17,7 @@ vi.mock("../api", () => ({
     openDataDir: vi.fn(),
     clearAutoContacts: vi.fn(),
     autostartStatus: vi.fn(),
+    getComputerName: vi.fn().mockResolvedValue("测试电脑"),
     setAutostart: vi.fn(),
     setTraySettings: vi.fn(),
     setUpdateSettings: vi.fn(),

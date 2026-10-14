@@ -296,7 +296,7 @@ describe("通讯录页", () => {
 });
 
 describe("最左设置栏", () => {
-  it("三个入口按「收件箱 / 通讯录 / 设置」排列", () => {
+  it("三个入口保留名称并按「收件箱 / 通讯录 / 设置」排列", () => {
     renderShell("contacts");
 
     const labels = screen

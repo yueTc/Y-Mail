@@ -17,6 +17,7 @@ vi.mock("../api", () => ({
     openDataDir: vi.fn(),
     clearAutoContacts: vi.fn(),
     autostartStatus: vi.fn(),
+    getComputerName: vi.fn(),
     setAutostart: vi.fn(),
     setTraySettings: vi.fn(),
     setUpdateSettings: vi.fn(),
@@ -94,6 +95,7 @@ beforeEach(() => {
   vi.mocked(api.restartApp).mockResolvedValue(undefined);
   vi.mocked(api.openDataDir).mockResolvedValue(undefined);
   vi.mocked(api.autostartStatus).mockResolvedValue(false);
+  vi.mocked(api.getComputerName).mockResolvedValue("测试电脑");
   vi.mocked(api.setAutostart).mockResolvedValue(false);
   vi.mocked(open).mockResolvedValue("D:/Mail");
 });
@@ -105,7 +107,7 @@ afterEach(() => {
 });
 
 describe("设置页分类栏", () => {
-  it("九个分类按拍板顺序排列，默认选中通用", async () => {
+  it("十个分类按拍板顺序排列，默认选中通用", async () => {
     renderSettings();
 
     const nav = await screen.findByRole("navigation", { name: "设置分类" });
@@ -113,7 +115,8 @@ describe("设置页分类栏", () => {
     expect(labels).toEqual([
       "通用",
       "外观",
-      "账号与同步",
+      "账户",
+      "设置同步",
       "代理",
       "AI功能",
       "MCP",

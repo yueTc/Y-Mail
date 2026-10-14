@@ -860,6 +860,9 @@ export interface UpdateInfo {
 // ============================ 命令封装 ============================
 
 export const api = {
+  /** 读取本机电脑名称，供设置同步的设备名默认填写。 */
+  getComputerName: () => call<string>("get_computer_name"),
+
   getAppSettings: () => call<AppSettings>("get_app_settings"),
 
   saveAppSettings: (input: AppSettingsInput) =>

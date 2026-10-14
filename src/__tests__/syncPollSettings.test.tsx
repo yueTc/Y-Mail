@@ -16,6 +16,7 @@ vi.mock("../api", () => ({
     openDataDir: vi.fn(),
     clearAutoContacts: vi.fn(),
     autostartStatus: vi.fn(),
+    getComputerName: vi.fn(),
     setAutostart: vi.fn(),
     setTraySettings: vi.fn(),
     setUpdateSettings: vi.fn(),
@@ -67,7 +68,7 @@ function renderSettings() {
 }
 
 async function openAccounts() {
-  fireEvent.click(await screen.findByRole("button", { name: "账号与同步" }));
+  fireEvent.click(await screen.findByRole("button", { name: "账户" }));
 }
 
 /** 拉信间隔输入框。 */
@@ -78,6 +79,7 @@ async function intervalInput() {
 beforeEach(() => {
   vi.mocked(api.getAppSettings).mockResolvedValue(SETTINGS);
   vi.mocked(api.autostartStatus).mockResolvedValue(false);
+  vi.mocked(api.getComputerName).mockResolvedValue("测试电脑");
   vi.mocked(api.setSyncPollSettings).mockImplementation(async (seconds) => ({
     ...SETTINGS,
     syncPollIntervalSeconds: seconds,

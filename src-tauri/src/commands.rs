@@ -632,6 +632,16 @@ fn normalize_dir(raw: &str, label: &str) -> Result<Option<PathBuf>, CommandError
     Ok(Some(path))
 }
 
+/// 读取系统提供的电脑名称，只在本机使用，不联网也不写日志。
+#[tauri::command]
+pub fn get_computer_name() -> String {
+    ["COMPUTERNAME", "HOSTNAME"]
+        .into_iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .map(|value| value.trim().to_string())
+        .find(|value| !value.is_empty())
+        .unwrap_or_else(|| "本机".to_string())
+}
 /// 读取已保存的存储目录与通知开关。
 #[tauri::command]
 pub async fn get_app_settings(state: tauri::State<'_, AppState>) -> Result<AppSettingsDto, CommandError> {
@@ -662,7 +672,7 @@ pub async fn set_app_settings(
         // 自动检测更新由「关于」分组单独维护，这里也从旧值带过。
         auto_check_update: previous.auto_check_update,
         update_check_interval_hours: previous.update_check_interval_hours,
-        // 拉信间隔由「账号与同步」分组单独维护，这里从旧值带过。
+        // 拉信间隔由「账户」分组单独维护，这里从旧值带过。
         sync_poll_interval_seconds: previous.sync_poll_interval_seconds,
         pending_cleanup_dir: previous.pending_cleanup_dir.take(),
         // 分类开关与门槛由 AI 面板单独维护，这里从旧值原样带过。

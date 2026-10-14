@@ -12,14 +12,17 @@ type WorkspaceShellProps = {
 };
 
 /**
- * 最左设置栏的入口，顺序就是显示顺序：收件箱在上、设置在下，
- * 通讯录夹在中间。想再加入口先跟用户确认，别自己塞。
+ * 最左设置栏的入口：收件箱和通讯录在上方，设置固定在底部。
+ * 想再加入口先跟用户确认，别自己塞。
  */
-const ENTRIES: ReadonlyArray<{ id: WorkspaceMode; label: string }> = [
+const PRIMARY_ENTRIES: ReadonlyArray<{ id: WorkspaceMode; label: string }> = [
   { id: "inbox", label: "收件箱" },
   { id: "contacts", label: "通讯录" },
-  { id: "settings", label: "设置" },
 ];
+const SETTINGS_ENTRY: { id: WorkspaceMode; label: string } = {
+  id: "settings",
+  label: "设置",
+};
 
 function EntryIcon({ id }: { id: WorkspaceMode }) {
   if (id === "settings") {
@@ -76,7 +79,7 @@ function EntryIcon({ id }: { id: WorkspaceMode }) {
 }
 
 /**
- * 工作区外壳：最左固定设置栏 + 右侧内容区。
+ * 工作区外壳：最左固定图标栏 + 右侧内容区。
  * 收件箱、通讯录和单栏设置页同时挂载，靠 hidden 切换，
  * 这样来回切换不会丢掉选中的账号、文件夹、邮件和面板宽度。
  */
@@ -87,23 +90,25 @@ export default function WorkspaceShell({
   contacts,
   settings,
 }: WorkspaceShellProps) {
+  const renderEntry = (entry: { id: WorkspaceMode; label: string }) => (
+    <button
+      key={entry.id}
+      type="button"
+      className={mode === entry.id ? "rail-button active" : "rail-button"}
+      aria-current={mode === entry.id ? "page" : undefined}
+      aria-label={t(entry.label)}
+      title={t(entry.label)}
+      onClick={() => onModeChange(entry.id)}
+    >
+      <EntryIcon id={entry.id} />
+    </button>
+  );
+
   return (
     <div className="workspace">
       <nav className="workspace-rail" aria-label={t("主导航")}>
-        {ENTRIES.map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            className={mode === entry.id ? "rail-button active" : "rail-button"}
-            aria-current={mode === entry.id ? "page" : undefined}
-            aria-label={t(entry.label)}
-            title={t(entry.label)}
-            onClick={() => onModeChange(entry.id)}
-          >
-            <EntryIcon id={entry.id} />
-            <span className="rail-label">{t(entry.label)}</span>
-          </button>
-        ))}
+        <div className="workspace-rail-main">{PRIMARY_ENTRIES.map(renderEntry)}</div>
+        <div className="workspace-rail-bottom">{renderEntry(SETTINGS_ENTRY)}</div>
       </nav>
       <div className="workspace-body">
         <div className="workspace-pane" hidden={mode !== "inbox"}>
