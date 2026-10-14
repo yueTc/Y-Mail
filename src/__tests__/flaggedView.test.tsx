@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import InboxPanel, { SEARCH_PLACEHOLDER, SEARCH_SYNTAX_HINT } from "../InboxPanel";
+import InboxPanel, { SEARCH_PLACEHOLDER } from "../InboxPanel";
 import type {
   Account,
   AppSettings,
@@ -802,10 +802,17 @@ describe("收件箱右键按组修改", () => {
     );
   });
 
-  it("搜索提示里不再出现 label:，统一用 tag:", () => {
-    expect(SEARCH_SYNTAX_HINT).not.toContain("label:");
-    expect(SEARCH_SYNTAX_HINT).toContain("tag:");
-    expect(SEARCH_PLACEHOLDER).not.toContain("label:");
-    expect(SEARCH_PLACEHOLDER).toContain("tag:");
+  it("搜索框只提示 --help，输入后弹窗说明命令且不发搜索请求", async () => {
+    expect(SEARCH_PLACEHOLDER).toContain("--help");
+    expect(SEARCH_PLACEHOLDER).not.toContain("tag:");
+    render(<InboxPanel />);
+
+    const searchBox = screen.getByLabelText("搜索邮件") as HTMLInputElement;
+    fireEvent.change(searchBox, { target: { value: "--help" } });
+    fireEvent.keyDown(searchBox, { key: "Enter" });
+
+    expect(await screen.findByRole("dialog", { name: "搜索命令" })).toBeTruthy();
+    expect(screen.getByText("from:发件人")).toBeTruthy();
+    expect(vi.mocked(api.searchMessages)).not.toHaveBeenCalled();
   });
 });

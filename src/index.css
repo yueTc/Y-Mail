@@ -657,9 +657,10 @@ textarea:focus {
   border-radius: 6px;
 }
 
+/* 选中态收敛：一层淡淡的底色 + 强调色文字，不再描一圈亮边框。 */
 .sidebar-item.active {
-  background: var(--state-active-bg);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
 }
 
 .sidebar-item-title {
@@ -1283,15 +1284,58 @@ textarea:focus {
   min-width: 180px;
 }
 
-.inbox-search .hint {
-  margin: 0;
-  flex-basis: 100%;
-  font-size: 0.82rem;
-  opacity: 0.75;
-}
-
 .inbox-search-note {
   margin: 8px 14px 0;
+}
+
+/* 搜索命令说明：命令和解释分成两列，扫一眼就能抄。 */
+.search-help-modal {
+  width: min(620px, 100%);
+}
+
+.search-help-commands {
+  display: grid;
+  gap: 0;
+  margin: 14px 0;
+}
+
+.search-help-commands > div {
+  display: grid;
+  grid-template-columns: minmax(150px, max-content) 1fr;
+  gap: 10px 14px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.search-help-commands > div:last-child {
+  border-bottom: 0;
+}
+
+.search-help-commands dt,
+.search-help-commands dd {
+  margin: 0;
+}
+
+.search-help-commands code {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--field-bg);
+  color: var(--text);
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 0.86rem;
+}
+
+.search-help-commands dd {
+  color: var(--text-muted);
+}
+
+@media (max-width: 560px) {
+  .search-help-commands > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
 }
 
 .inbox-row-snippet {
@@ -1619,9 +1663,9 @@ textarea:focus {
   background: var(--state-hover-bg);
 }
 
+/* 同上：选中态只留淡底和强调色图标文字，去掉亮边框。 */
 .rail-button.active {
-  background: var(--state-active-bg);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
 }
 

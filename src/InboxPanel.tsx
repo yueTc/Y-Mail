@@ -51,13 +51,8 @@ import { t } from "./i18n";
 /** 每页条数；外壳上限是 500。 */
 const PAGE_SIZE = 200;
 
-/** 搜索框下方的语法提示。 */
-export const SEARCH_SYNTAX_HINT =
-  "支持 tag:组名:值、from: 发件人、has:attachment、is:unread、before:2026-01-01";
-
-/** 搜索框的占位提示；和上面的语法提示用同一套写法。 */
-export const SEARCH_PLACEHOLDER =
-  "按 Ctrl+K 聚焦；支持 tag: / from: / has: / is: / before:，例如：发票 tag:内容分类:账单 from:alice";
+/** 搜索框的占位提示；完整命令在输入 --help 后弹窗说明。 */
+export const SEARCH_PLACEHOLDER = "按 Ctrl+K 聚焦，输入 --help 查看命令使用方法";
 
 
 /** 列表里的一行：线程、平铺邮件、展开出来的子邮件，或一条搜索命中。 */
@@ -547,6 +542,8 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   const [searchNote, setSearchNote] = useState("");
   // 联网补历史必须用户显式点击，单独给一个忙碌标记。
   const [searchDeepBusy, setSearchDeepBusy] = useState(false);
+  // 搜索命令说明弹窗；输入 --help 后打开，不发起搜索请求。
+  const [searchHelpOpen, setSearchHelpOpen] = useState(false);
 
   // 写信窗格的打开请求；为空表示当前在收件箱。
   const [composeRequest, setComposeRequest] = useState<ComposeRequest>();
@@ -991,6 +988,11 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   const runSearch = useCallback(
     async (options?: { deep?: boolean; append?: boolean; raw?: string }) => {
       const raw = (options?.raw ?? searchInput).trim();
+      if (raw.toLowerCase() === "--help") {
+        setSearchHelpOpen(true);
+        setSearchError(undefined);
+        return;
+      }
       if (raw === "") {
         setSearchRaw("");
         setHits([]);
@@ -1044,6 +1046,25 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  /** 关闭搜索命令说明并把焦点送回搜索框。 */
+  const closeSearchHelp = useCallback(() => {
+    setSearchHelpOpen(false);
+    searchBoxRef.current?.focus();
+  }, []);
+
+  /** 搜索命令弹窗打开时，按 Esc 关闭。 */
+  useEffect(() => {
+    if (!searchHelpOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSearchHelp();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closeSearchHelp, searchHelpOpen]);
 
   /** 点列表里的胶囊：按 tag:组名:值 搜一次。 */
   const filterByLabel = useCallback(
@@ -1617,7 +1638,6 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
                 {t("退出搜索")}</button>
             </>
           )}
-          <span className="hint">{t(SEARCH_SYNTAX_HINT)}</span>
         </div>
 
         {error && (
@@ -1888,6 +1908,58 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
           onClick={() => void startDeleteMessage(messageMenu.message)}
         >
           {t("删除")}</button>
+      </div>
+    )}
+
+    {searchHelpOpen && (
+      <div
+        className="ai-modal-backdrop"
+        role="presentation"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) closeSearchHelp();
+        }}
+      >
+        <section
+          className="ai-modal search-help-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("搜索命令")}
+        >
+          <h3>{t("搜索命令")}</h3>
+          <p>{t("输入关键词，或把下面命令和关键词用空格组合起来。")}</p>
+          <dl className="search-help-commands">
+            <div>
+              <dt><code>{t("关键词")}</code></dt>
+              <dd>{t("搜索主题、发件人和正文。")}</dd>
+            </div>
+            <div>
+              <dt><code>{t("from:发件人")}</code></dt>
+              <dd>{t("只看某个发件人，例如 from:alice。")}</dd>
+            </div>
+            <div>
+              <dt><code>has:attachment</code></dt>
+              <dd>{t("只看带附件的邮件。")}</dd>
+            </div>
+            <div>
+              <dt><code>is:unread</code></dt>
+              <dd>{t("只看未读邮件。")}</dd>
+            </div>
+            <div>
+              <dt><code>before:YYYY-MM-DD</code></dt>
+              <dd>{t("只看这个日期以前的邮件。")}</dd>
+            </div>
+            <div>
+              <dt><code>{t("tag:组名:值")}</code></dt>
+              <dd>{t("按本地标签筛选，例如 tag:内容分类:账单。")}</dd>
+            </div>
+          </dl>
+          <p className="hint">{t("多个条件用空格连接，需要同时满足。")}</p>
+          <div className="form-actions">
+            <button type="button" className="primary" autoFocus onClick={closeSearchHelp}>
+              {t("知道了")}
+            </button>
+          </div>
+        </section>
       </div>
     )}
 
