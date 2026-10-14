@@ -11,7 +11,7 @@
 
 - 保留主导航三个工作区模式，不新增路由。
 - 文字只从视觉上隐藏，保留 `aria-label`、`title` 和键盘操作。
-- “账户”只挂载 `AccountPanel`；“设置同步”只挂载 `SettingsSyncPanel`。
+- “账户”挂载原“账号与同步”里的 `SyncPollSettingsPanel`、`SyncPanel`、`AccountPanel`；“设置同步”只挂载 `SettingsSyncPanel`。
 - 设备名由后端只读命令读取；前端加载失败时用“本机”兜底。
 - 不触碰密码、令牌、邮件正文和远端同步协议。
 - 每批改动结束运行四项检查：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`、`npm run build`。
@@ -42,8 +42,8 @@
 
 - 把分类编号从 `accounts` 改成 `account` 和 `settingsSync`。
 - 分类文字改为“账户”和“设置同步”。
-- “账户”只渲染 `AccountPanel`；“设置同步”只渲染 `SettingsSyncPanel`。
-- 删除原来“账号与同步”分类中的并列渲染，保持每个面板在切换时继续挂载。
+- “账户”渲染 `SyncPollSettingsPanel`、`SyncPanel`、`AccountPanel`；“设置同步”只渲染 `SettingsSyncPanel`。
+- 把原来“账号与同步”分类拆成两个区块，保持每个面板在切换时继续挂载。
 - 更新默认分类与所有面板显示判断，避免旧编号残留。
 
 ## 步骤 3：增加读取电脑名称的后端命令
