@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { t } from "./i18n";
 
@@ -33,6 +33,7 @@ export default function ReaderResizer({
   onCommit,
   onReset,
 }: ReaderResizerProps) {
+  const [dragging, setDragging] = useState(false);
   const drag = useRef<{ startY: number; startValue: number } | null>(null);
 
   const handlePointerDown = useCallback(
@@ -41,6 +42,7 @@ export default function ReaderResizer({
       event.preventDefault();
       drag.current = { startY: event.clientY, startValue: value };
       event.currentTarget.setPointerCapture(event.pointerId);
+      setDragging(true);
     },
     [value],
   );
@@ -59,6 +61,7 @@ export default function ReaderResizer({
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (!drag.current) return;
       drag.current = null;
+      setDragging(false);
       onCommit();
       try {
         event.currentTarget.releasePointerCapture(event.pointerId);
@@ -92,6 +95,7 @@ export default function ReaderResizer({
   return (
     <div
       className="reader-resizer"
+      data-dragging={dragging ? "" : undefined}
       role="separator"
       tabIndex={0}
       aria-orientation="horizontal"
@@ -104,6 +108,7 @@ export default function ReaderResizer({
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}
       onPointerCancel={handlePointerEnd}
+      onLostPointerCapture={handlePointerEnd}
       onDoubleClick={onReset}
       onKeyDown={handleKeyDown}
     >

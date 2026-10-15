@@ -17,13 +17,14 @@ import {
 } from "../usePaneWidths";
 
 describe("三栏宽度计算", () => {
-  it("预算扣掉设置栏、两条拖动条和邮件内容最小宽度", () => {
-    expect(paneBudget(1440)).toBe(1440 - RAIL_WIDTH - RESIZER_WIDTH * 2 - READER_MIN_WIDTH);
+  it("预算只扣掉设置栏和邮件内容最小宽度，拖动条不占列宽", () => {
+    expect(RESIZER_WIDTH).toBe(0);
+    expect(paneBudget(1440)).toBe(1440 - RAIL_WIDTH - READER_MIN_WIDTH);
   });
 
   it("写信时按 480 像素给内容区留位置", () => {
     expect(paneBudget(1440, COMPOSE_MIN_WIDTH)).toBe(
-      1440 - RAIL_WIDTH - RESIZER_WIDTH * 2 - COMPOSE_MIN_WIDTH,
+      1440 - RAIL_WIDTH - COMPOSE_MIN_WIDTH,
     );
   });
 

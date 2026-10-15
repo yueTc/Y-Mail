@@ -205,8 +205,8 @@ describe("按文件夹类型计数", () => {
 });
 
 describe("列表行高", () => {
-  it("三行内容的行要留够高度，两行内容不用", () => {
-    expect(inboxRowHeight("thread")).toBe(73);
+  it("单行分组标题更紧凑，邮件与摘要行保留各自高度", () => {
+    expect(inboxRowHeight("thread")).toBe(40);
     expect(inboxRowHeight("message")).toBe(73);
     expect(inboxRowHeight("thread-message")).toBe(92);
     expect(inboxRowHeight("search")).toBe(96);

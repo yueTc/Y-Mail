@@ -28,7 +28,7 @@ describe("附件区高度范围", () => {
       min: MIN_ATTACHMENT_HEIGHT,
       max: MAX_ATTACHMENT_HEIGHT,
     });
-    expect(attachmentHeightLimits(400)).toEqual({ min: 96, max: 212 });
+    expect(attachmentHeightLimits(400)).toEqual({ min: 96, max: 220 });
   });
 
   it("窗口很小时正文和附件都保留正高度", () => {
@@ -53,7 +53,7 @@ describe("附件区高度记忆", () => {
   it("读取记忆后先按当前窗口校正，不越界", () => {
     window.localStorage.setItem(ATTACHMENT_HEIGHT_KEY, "999");
     const { result } = renderHook(() => useAttachmentHeight(400));
-    expect(result.current.height).toBe(212);
+    expect(result.current.height).toBe(220);
   });
 
   it("低于下限时抬到最小值", () => {
@@ -90,7 +90,7 @@ describe("附件区高度记忆", () => {
     expect(result.current.height).toBe(520);
 
     rerender({ available: 400 });
-    expect(result.current.height).toBe(212);
+    expect(result.current.height).toBe(220);
     expect(window.localStorage.getItem(ATTACHMENT_HEIGHT_KEY)).toBe("520");
   });
 

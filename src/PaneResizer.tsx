@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { t } from "./i18n";
 
@@ -33,6 +33,7 @@ export default function PaneResizer({
   onCommit,
   onReset,
 }: PaneResizerProps) {
+  const [dragging, setDragging] = useState(false);
   const drag = useRef<{ startX: number; startValue: number } | null>(null);
 
   const handlePointerDown = useCallback(
@@ -41,6 +42,7 @@ export default function PaneResizer({
       event.preventDefault();
       drag.current = { startX: event.clientX, startValue: value };
       event.currentTarget.setPointerCapture(event.pointerId);
+      setDragging(true);
     },
     [value],
   );
@@ -58,6 +60,7 @@ export default function PaneResizer({
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (!drag.current) return;
       drag.current = null;
+      setDragging(false);
       onCommit();
       try {
         event.currentTarget.releasePointerCapture(event.pointerId);
@@ -87,6 +90,7 @@ export default function PaneResizer({
   return (
     <div
       className="pane-resizer"
+      data-dragging={dragging ? "" : undefined}
       role="separator"
       tabIndex={0}
       aria-orientation="vertical"
@@ -99,6 +103,7 @@ export default function PaneResizer({
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}
       onPointerCancel={handlePointerEnd}
+      onLostPointerCapture={handlePointerEnd}
       onDoubleClick={onReset}
       onKeyDown={handleKeyDown}
     >

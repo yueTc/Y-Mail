@@ -46,7 +46,7 @@
   --space-6: 24px;
   --input-height: 32px;
   --button-height: 32px;
-  --resizer-width: 8px;
+  --resizer-width: 2px;
   /* 字体令牌：标题、正文、辅助文字、等宽、未读强调。 */
   --font-title: 1.7rem;
   --font-heading: 1.05rem;
@@ -617,7 +617,7 @@ textarea:focus {
 
 .inbox-layout {
   display: grid;
-  /* 列宽由 InboxPanel 内联样式给出：邮箱栏 / 拖动条 / 列表 / 拖动条 / 内容栏。 */
+  /* 列宽由 InboxPanel 内联样式给出；拖动条列为 0，组件叠在交界线上。 */
   gap: 0;
   align-items: stretch;
   height: 100%;
@@ -627,9 +627,10 @@ textarea:focus {
 .inbox-sidebar,
 .inbox-main,
 .inbox-reader {
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  border: 0;
+  border-radius: 0;
   background: var(--panel-bg);
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -862,15 +863,41 @@ textarea:focus {
   white-space: nowrap;
 }
 
+.inbox-row-thread {
+  gap: 8px;
+}
+
+.inbox-thread-sender {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.94rem;
+  font-weight: 600;
+}
+
+.inbox-row-thread[data-read="false"] .inbox-thread-sender {
+  font-weight: var(--font-unread-weight);
+}
+
 .thread-count {
-  margin-left: 6px;
-  font-size: 0.78rem;
-  opacity: 0.72;
+  flex: none;
+  font-size: var(--font-small);
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .thread-arrow {
   flex: none;
-  opacity: 0.65;
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+}
+
+.inbox-row-thread[aria-expanded="true"] .thread-arrow {
+  transform: rotate(90deg);
 }
 
 /* ===== 读信窗格（Wave 4） ===== */
@@ -1092,36 +1119,36 @@ textarea:focus {
 
 .reader-resizer {
   position: relative;
+  z-index: 2;
   display: flex;
-  flex: 0 0 8px;
+  flex: 0 0 2px;
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 8px;
+  height: 2px;
+  margin-block: -1px;
   cursor: row-resize;
   touch-action: none;
   background: transparent;
 }
 
-.reader-resizer:hover,
-.reader-resizer:focus-visible {
-  background: var(--state-hover-bg);
-}
-
 .reader-resizer:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: -1px;
 }
 
 .reader-resizer-grip {
   width: 48px;
   height: 2px;
+  flex-shrink: 0;
+  pointer-events: none;
   border-radius: 999px;
-  background: var(--line);
+  background: transparent;
 }
 
 .reader-resizer:hover .reader-resizer-grip,
-.reader-resizer:focus-visible .reader-resizer-grip {
+.reader-resizer:focus-visible .reader-resizer-grip,
+.reader-resizer[data-dragging] .reader-resizer-grip {
   background: var(--accent);
 }
 
@@ -1136,11 +1163,7 @@ textarea:focus {
   margin-top: 0;
   padding: 10px 14px 14px;
   overflow-y: auto;
-  border-top: 1px solid var(--line);
-}
-
-.reader-dark .reader-attachments-docked {
-  border-top-color: rgba(255, 255, 255, 0.14);
+  border-top: 0;
 }
 
 .reader-attachments h4 {
@@ -1692,6 +1715,21 @@ textarea:focus {
   height: 22px;
 }
 
+.rail-button.rail-account-button {
+  height: 44px;
+  padding: 6px 2px;
+}
+
+.rail-avatar {
+  display: block;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface);
+}
+
 .workspace-body {
   flex: 1 1 auto;
   min-width: 0;
@@ -1713,35 +1751,36 @@ textarea:focus {
 
 .pane-resizer {
   position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
+  justify-self: center;
+  width: 2px;
   height: 100%;
+  margin-inline: -1px;
   cursor: col-resize;
   background: transparent;
   touch-action: none;
 }
 
-.pane-resizer:hover,
-.pane-resizer:focus-visible {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-}
-
 .pane-resizer:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: -1px;
 }
 
 .pane-resizer-grip {
   width: 2px;
   height: 44px;
+  flex-shrink: 0;
+  pointer-events: none;
   border-radius: 999px;
-  background: var(--line);
+  background: transparent;
 }
 
 .pane-resizer:hover .pane-resizer-grip,
-.pane-resizer:focus-visible .pane-resizer-grip {
+.pane-resizer:focus-visible .pane-resizer-grip,
+.pane-resizer[data-dragging] .pane-resizer-grip {
   background: var(--accent);
 }
 
@@ -1783,7 +1822,8 @@ textarea:focus {
   padding: 6px;
   overflow-y: auto;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-right: 0;
+  border-radius: 10px 0 0 10px;
   background: var(--panel-bg);
 }
 
@@ -1934,7 +1974,6 @@ textarea:focus {
 .contacts-detail {
   min-width: 0;
   min-height: 0;
-  border-right: 1px solid var(--line);
   background: var(--panel-bg);
 }
 
@@ -2049,16 +2088,39 @@ textarea:focus {
   overflow-y: auto;
 }
 
-/* 右键菜单里按组列可选值：每组用细线隔开，组名是小号灰字。 */
-.context-menu-group {
-  margin-top: 4px;
-  padding-top: 4px;
-  border-top: 1px solid var(--line);
+/* 手动分类逐层展开；固定定位使子菜单不被上层滚动区域裁掉。 */
+.classification-submenu {
+  width: max-content;
+  max-width: min(280px, calc(100vw - 16px));
+  max-height: min(70vh, 520px, calc(100vh - 16px));
+  overscroll-behavior: contain;
 }
 
-.context-menu-heading {
-  padding: 2px 10px;
-  font-size: 12px;
+.classification-menu-branch > .context-menu-item[aria-expanded="true"],
+.classification-submenu .context-menu-item:focus-visible {
+  background: var(--state-hover-bg);
+}
+
+.classification-menu-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classification-menu-arrow {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.classification-menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
+}
+
+.classification-menu-note {
+  padding: 6px 10px;
   color: var(--text-muted);
 }
 
@@ -2089,34 +2151,6 @@ textarea:focus {
   padding: 6px 10px;
   font-size: 0.85rem;
   opacity: 0.6;
-}
-
-.contacts-groups-foot {
-  position: relative;
-  display: flex;
-  gap: 6px;
-  padding: 10px 12px;
-  border-top: 1px solid var(--line);
-}
-
-.contacts-groups-foot button {
-  flex: 1 1 auto;
-}
-
-.contacts-export-menu {
-  position: absolute;
-  bottom: 48px;
-  left: 12px;
-  right: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel-bg);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
-  z-index: 5;
 }
 
 .contacts-list-pane {
@@ -2493,12 +2527,6 @@ select:disabled,
 textarea:disabled {
   opacity: var(--state-disabled-opacity);
   cursor: not-allowed;
-}
-
-/* 拖动条：hover / focus 走状态令牌，深色下不会发亮。 */
-.pane-resizer:hover,
-.pane-resizer:focus-visible {
-  background: var(--state-hover-bg);
 }
 
 /* 筛选器与工具栏：底色和分隔线跟随令牌。 */

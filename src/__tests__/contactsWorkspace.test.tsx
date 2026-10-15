@@ -1,5 +1,6 @@
 //! 通讯录三栏页回归：入口位置、分区排序、详情、增删改、分组、已隐藏。
 
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -98,6 +99,8 @@ beforeEach(() => {
   vi.mocked(api.restoreContact).mockResolvedValue(undefined);
   vi.mocked(api.purgeContact).mockResolvedValue(undefined);
   vi.mocked(api.createContactGroup).mockResolvedValue(8);
+  vi.mocked(open).mockResolvedValue(null);
+  vi.mocked(save).mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -254,7 +257,158 @@ describe("通讯录页", () => {
     await waitForLoaded();
 
     expect(screen.queryByText("客户")).toBeNull();
-    expect(screen.getByRole("button", { name: "新建分组" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "新建分组" })).toBeNull();
+    fireEvent.contextMenu(screen.getByLabelText("联系人分组栏"));
+    expect(screen.getByRole("menuitem", { name: "新建分组" })).toBeTruthy();
+  });
+
+  it.each(["联系人分组栏", "所有联系人", "未分组", "已隐藏"])(
+    "右键%s显示管理入口，底部没有常驻按钮",
+    async (target) => {
+      render(<ContactsWorkspace onCompose={() => {}} />);
+      await waitForLoaded();
+
+      expect(screen.queryByRole("button", { name: "新建分组" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "导入" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "导出" })).toBeNull();
+      const element = target === "联系人分组栏"
+        ? screen.getByLabelText(target)
+        : screen.getByText(target, { selector: ".contacts-group-name" });
+      fireEvent.contextMenu(element);
+      const menu = screen.getByRole("menu", { name: "分组菜单" });
+      expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+        "新建分组", "导入", "导出为 CSV", "导出为 vCard",
+      ]);
+    },
+  );
+
+  it("搜索框保留原生文字编辑右键菜单", async () => {
+    render(<ContactsWorkspace onCompose={() => {}} />);
+    await waitForLoaded();
+
+    expect(fireEvent.contextMenu(screen.getByLabelText("搜索联系人"))).toBe(true);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("菜单新建分组沿用原有流程，并关闭菜单", async () => {
+    vi.spyOn(window, "prompt").mockReturnValue("朋友");
+    render(<ContactsWorkspace onCompose={() => {}} />);
+    await waitForLoaded();
+
+    fireEvent.contextMenu(screen.getByLabelText("联系人分组栏"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "新建分组" }));
+
+    await waitFor(() => expect(api.createContactGroup).toHaveBeenCalledWith("朋友"));
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("取消新建分组不写入", async () => {
+    vi.spyOn(window, "prompt").mockReturnValue(null);
+    render(<ContactsWorkspace onCompose={() => {}} />);
+    await waitForLoaded();
+
+    fireEvent.contextMenu(screen.getByLabelText("联系人分组栏"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "新建分组" }));
+
+    expect(api.createContactGroup).not.toHaveBeenCalled();
+  });
+
+  it("取消导入文件选择不读取或写入联系人", async () => {
+    render(<ContactsWorkspace onCompose={() => {}} />);
+    await waitForLoaded();
+
+    fireEvent.contextMenu(screen.getByLabelText("联系人分组栏"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "导入" }));
+
+    await waitFor(() => expect(open).toHaveBeenCalled());
+    expect(api.previewContactImport).not.toHaveBeenCalled();
+    expect(api.applyContactImport).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("右键导入仍需在预览中确认后才写入", async () => {
+    const entries = [{ name: "朋友", email: "friend@example.com", note: "", group: "" }];
+    vi.mocked(open).mockResolvedValue("D:/contacts.csv");
+    vi.mocked(api.previewContactImport).mockResolvedValue({
+      headers: [], emailColumn: null, entries, problems: [], duplicateCount: 0, newCount: 1,
+    });
+    vi.mocked(api.applyContactImport).mockResolvedValue({
+      imported: 1, skipped: 0, overwritten: 0, invalid: 0, groupsCreated: 0,
+    });
+    render(<ContactsWorkspace onCompose={() => {}} />);
+    await waitForLoaded();
+
+    fireEvent.contextMenu(screen.getByLabelText("联系人分组栏"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "导入" }));
+    const preview = await screen.findByRole("dialog", { name: "导入预览" });
+    expect(api.previewContactImport).toHaveBeenCalledWith("D:/contacts.csv");
+    expect(api.applyContactImport).not.toHaveBeenCalled();
+
+    fireEvent.click(within(preview).getByRole("button", { name: "确认导入" }));
+    await waitFor(() => expect(api.applyContactImport).toHaveBeenCalledWith(entries, false));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it.each([
+    ["导出为 CSV", "csv"],
+    ["导出为 vCard", "vcf"],
+  ] as const)("取消%s的保存对话框不导出", async (label, kind) => {
+    render(<ContactsWorkspace onCompose={() => {}} />);
+    await waitForLoaded();
+
+    fireEvent.contextMenu(screen.getByLabelText("联系人分组栏"));
+    fireEvent.click(screen.getByRole("menuitem", { name: label }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      filters: [expect.objectContaining({ extensions: [kind] })],
+    })));
+    expect(api.exportContacts).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it.each([
+    ["导出为 CSV", "csv"],
+    ["导出为 vCard", "vcf"],
+  ] as const)("%s仍导出全部可见联系人", async (label, kind) => {
+    const path = `D:/contacts.${kind}`;
+    vi.mocked(save).mockResolvedValue(path);
+    vi.mocked(api.exportContacts).mockResolvedValue({ count: 4, path });
+    render(<ContactsWorkspace onCompose={() => {}} />);
+    await waitForLoaded();
+    fireEvent.click(screen.getByText("已隐藏"));
+
+    fireEvent.contextMenu(screen.getByLabelText("联系人分组栏"));
+    fireEvent.click(screen.getByRole("menuitem", { name: label }));
+
+    await waitFor(() => expect(api.exportContacts).toHaveBeenCalledWith(path, kind, "active"));
+  });
+
+  it("键盘可以打开菜单，Escape 关闭并回到原位置", async () => {
+    render(<ContactsWorkspace onCompose={() => {}} />);
+    await waitForLoaded();
+    const sidebar = screen.getByLabelText("联系人分组栏");
+    sidebar.focus();
+
+    fireEvent.keyDown(sidebar, { key: "F10", shiftKey: true });
+    expect(screen.getByRole("menuitem", { name: "新建分组" })).toBe(document.activeElement);
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(sidebar);
+
+    fireEvent.keyDown(screen.getByText("客户").closest("button")!, { key: "ContextMenu" });
+    expect(screen.getByRole("menuitem", { name: "重命名" })).toBeTruthy();
+  });
+
+  it("点击外部或滚动会关闭菜单", async () => {
+    render(<ContactsWorkspace onCompose={() => {}} />);
+    await waitForLoaded();
+
+    fireEvent.contextMenu(screen.getByLabelText("联系人分组栏"));
+    fireEvent.click(screen.getByText("从中间选一个人看看详情。"));
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    fireEvent.contextMenu(screen.getByLabelText("联系人分组栏"));
+    fireEvent.scroll(screen.getByLabelText("联系人分组栏"));
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("右键分组给出重命名与删除", async () => {
@@ -267,6 +421,10 @@ describe("通讯录页", () => {
 
     const menu = await screen.findByRole("menu", { name: "分组菜单" });
     expect(within(menu).getByRole("menuitem", { name: "重命名" })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: "新建分组" })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: "导入" })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: "导出为 CSV" })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: "导出为 vCard" })).toBeTruthy();
     fireEvent.click(within(menu).getByRole("menuitem", { name: "删除分组" }));
 
     await waitFor(() => expect(api.deleteContactGroup).toHaveBeenCalledWith(7));
@@ -278,6 +436,7 @@ describe("通讯录页", () => {
 
     fireEvent.contextMenu(screen.getByText("阿里"));
     const menu = await screen.findByRole("menu", { name: "联系人菜单" });
+    expect(within(menu).queryByRole("menuitem", { name: "导入" })).toBeNull();
 
     const parent = within(menu).getByText("添加到").closest(".contacts-menu-parent");
     expect(parent).toBeTruthy();
@@ -296,13 +455,13 @@ describe("通讯录页", () => {
 });
 
 describe("最左设置栏", () => {
-  it("三个入口保留名称并按「收件箱 / 通讯录 / 设置」排列", () => {
+  it("四个入口保留名称并按「收件箱 / 通讯录 / GitHub 账号 / 设置」排列", () => {
     renderShell("contacts");
 
     const labels = screen
       .getAllByRole("button")
       .map((node) => node.getAttribute("aria-label"));
-    expect(labels).toEqual(["收件箱", "通讯录", "设置"]);
+    expect(labels).toEqual(["收件箱", "通讯录", "GitHub 账号", "设置"]);
     expect(screen.getByRole("button", { name: "通讯录" }).getAttribute("aria-current")).toBe(
       "page",
     );

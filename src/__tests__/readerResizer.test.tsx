@@ -51,9 +51,11 @@ describe("上下拖动条", () => {
     expect(onChange).toHaveBeenLastCalledWith(280);
     fireEvent.pointerMove(separator, { pointerId: 1, clientY: 460 });
     expect(onChange).toHaveBeenLastCalledWith(160);
+    expect(separator.hasAttribute("data-dragging")).toBe(true);
     expect(onCommit).not.toHaveBeenCalled();
     fireEvent.pointerUp(separator, { pointerId: 1 });
     expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(separator.hasAttribute("data-dragging")).toBe(false);
   });
 
   it("上下方向键每次 12 像素，按住 Shift 为 36 像素，并立即落盘", () => {

@@ -1056,11 +1056,7 @@ export default function MessageReader({
   const showAttachmentPane = hasAttachments || hasExternalAttachments;
 
   if (!message) {
-    return (
-      <div className="reader-pane">
-        <p className="hint reader-empty">{t("从中间列表选一封邮件，这里显示正文与附件。")}</p>
-      </div>
-    );
+    return <div className="reader-pane" />;
   }
 
   const blocked = body?.blockedRemoteImages ?? 0;
@@ -1264,11 +1260,9 @@ export default function MessageReader({
                 </span>
               </div>
             )}
-            {blocked > 0 && allowRemote && (
+            {blocked > 0 && allowRemote && rememberedFor === message.id && (
               <p className="hint" role="status">
-                {rememberedFor === message.id
-                  ? t("已记住这个发件人，以后自动显示远程图片；可在「账号与代理」设置里移除。")
-                  : t("本封已放行远程图片，关闭后自动恢复默认拦截。")}
+                {t("已记住这个发件人，以后自动显示远程图片；可在「账号与代理」设置里移除。")}
               </p>
             )}
 

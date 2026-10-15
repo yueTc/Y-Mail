@@ -1,6 +1,6 @@
 //! 通讯录：三栏地址簿（分组栏 / 列表栏 / 详情栏）。
 //!
-//! 口径（见 `docs/superpowers/specs/2026-10-06-contacts-workspace-design.md` v1.2）：
+//! 口径（见 `docs/superpowers/specs/2026-10-06-contacts-workspace-design.md` v1.4）：
 //! - 一份共用的通讯录，一个邮箱一条；删除 = 隐藏，进「已隐藏」，可恢复；
 //! - 左侧分组栏：搜索 + 分组列表（所有联系人 / 未分组 / 自建分组 / 已隐藏）；
 //! - 中间列表栏：按数字区与拼音首字母分区排序，可批量操作；
@@ -50,8 +50,9 @@ export type ContactsView =
   | { kind: "hidden" }
   | { kind: "group"; id: number };
 
-/** 右键菜单：要么开在分组上，要么开在联系人上。 */
+/** 右键菜单：分组栏、具体分组或联系人。 */
 type ContactsMenu =
+  | { kind: "groups"; x: number; y: number }
   | { kind: "group"; group: ContactGroup; x: number; y: number }
   | { kind: "contact"; contact: Contact; x: number; y: number };
 
@@ -225,12 +226,13 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
 
   const [menu, setMenu] = useState<ContactsMenu>();
   const [submenuOpen, setSubmenuOpen] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
   const [importPreview, setImportPreview] = useState<ContactImportPreview>();
   const [importPath, setImportPath] = useState("");
   const [importOverwrite, setImportOverwrite] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
 
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuTriggerRef = useRef<HTMLElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const reload = useCallback(() => setVersion((value) => value + 1), []);
 
@@ -409,11 +411,22 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
     [flash],
   );
 
+  /** 分组栏空白处和固定项共用管理入口；搜索框保留文字编辑菜单。 */
+  const openGroupsMenu = useCallback((event: ReactMouseEvent) => {
+    if ((event.target as HTMLElement).closest("input")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    menuTriggerRef.current = event.currentTarget as HTMLElement;
+    setSubmenuOpen(false);
+    setMenu({ kind: "groups", x: event.clientX, y: event.clientY });
+  }, []);
+
   /** 右键菜单：开在分组上。 */
   const openGroupMenu = useCallback((event: ReactMouseEvent, group: ContactGroup) => {
     event.preventDefault();
     event.stopPropagation();
     setSubmenuOpen(false);
+    menuTriggerRef.current = event.currentTarget as HTMLElement;
     setMenu({ kind: "group", group, x: event.clientX, y: event.clientY });
   }, []);
 
@@ -422,6 +435,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
     event.preventDefault();
     event.stopPropagation();
     setSubmenuOpen(false);
+    menuTriggerRef.current = event.currentTarget as HTMLElement;
     setMenu({ kind: "contact", contact, x: event.clientX, y: event.clientY });
   }, []);
 
@@ -433,8 +447,12 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
   // 菜单开着的时候，点别处 / 按 Esc / 一滚动就收起来。
   useEffect(() => {
     if (!menu) return;
+    menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeMenu();
+      if (event.key === "Escape") {
+        closeMenu();
+        menuTriggerRef.current?.focus();
+      }
     };
     document.addEventListener("click", closeMenu);
     document.addEventListener("keydown", onKeyDown);
@@ -531,7 +549,6 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
   /** 导出到用户选定的文件。 */
   const exportContacts = useCallback(
     async (kind: "csv" | "vcf") => {
-      setExportOpen(false);
       const extension = kind === "csv" ? "csv" : "vcf";
       const path = await save({
         title: kind === "csv" ? t("导出为 CSV") : t("导出为 vCard"),
@@ -604,7 +621,26 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
         gridTemplateColumns: `${widths.sidebar}px ${RESIZER_WIDTH}px ${widths.list}px ${RESIZER_WIDTH}px minmax(0, 1fr)`,
       }}
     >
-      <aside className="contacts-groups">
+      <aside
+        className="contacts-groups"
+        aria-label={t("联系人分组栏")}
+        title={t("右键可以新建分组、导入或导出")}
+        tabIndex={0}
+        onContextMenu={openGroupsMenu}
+        onKeyDown={(event) => {
+          if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+          event.preventDefault();
+          const target = event.target as HTMLElement;
+          const bounds = target.getBoundingClientRect();
+          const groupId = target.closest<HTMLElement>("[data-contact-group-id]")?.dataset.contactGroupId;
+          const group = groups.find((item) => String(item.id) === groupId);
+          menuTriggerRef.current = target;
+          setSubmenuOpen(false);
+          setMenu(group
+            ? { kind: "group", group, x: bounds.left, y: bounds.bottom }
+            : { kind: "groups", x: bounds.left, y: bounds.bottom });
+        }}
+      >
         <div className="contacts-groups-head">
           <input
             type="search"
@@ -648,6 +684,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
                     ? "contacts-group active"
                     : "contacts-group"
                 }
+                data-contact-group-id={group.id}
                 title={t("右键可以重命名或删除")}
                 onClick={() => setView({ kind: "group", id: group.id })}
                 onContextMenu={(event) => openGroupMenu(event, group)}
@@ -669,22 +706,6 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
           </li>
         </ul>
 
-        <div className="contacts-groups-foot">
-          <button type="button" onClick={() => void createGroup()}>
-            {t("新建分组")}</button>
-          <button type="button" onClick={() => void openImport()}>
-            {t("导入")}</button>
-          <button type="button" onClick={() => setExportOpen((value) => !value)}>
-            {t("导出")}</button>
-          {exportOpen ? (
-            <div className="contacts-export-menu">
-              <button type="button" onClick={() => void exportContacts("csv")}>
-                {t("CSV（Excel 能开）")}</button>
-              <button type="button" onClick={() => void exportContacts("vcf")}>
-                {t("vCard（手机 / Outlook 能认）")}</button>
-            </div>
-          ) : null}
-        </div>
       </aside>
 
       <PaneResizer
@@ -986,39 +1007,90 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
 
       {menuTarget === undefined ? null : (
         <div
+          ref={menuRef}
           className="contacts-menu"
           role="menu"
-          aria-label={menuTarget.kind === "group" ? t("分组菜单") : t("联系人菜单")}
+          aria-label={menuTarget.kind === "contact" ? t("联系人菜单") : t("分组菜单")}
           style={{
             left: Math.min(menuTarget.x, Math.max(8, window.innerWidth - 220)),
-            top: Math.min(menuTarget.y, Math.max(8, window.innerHeight - 200)),
+            top: Math.min(menuTarget.y, Math.max(8, window.innerHeight - (menuTarget.kind === "group" ? 260 : 200))),
           }}
           onClick={(event) => event.stopPropagation()}
         >
-          {menuTarget.kind === "group" ? (
+          {menuTarget.kind !== "contact" ? (
             <>
               <button
                 type="button"
                 role="menuitem"
                 className="contacts-menu-item"
                 onClick={() => {
-                  const target = menuTarget.group;
                   closeMenu();
-                  void renameGroup(target);
+                  void createGroup();
                 }}
               >
-                {t("重命名")}</button>
+                {t("新建分组")}
+              </button>
               <button
                 type="button"
                 role="menuitem"
-                className="contacts-menu-item danger"
+                className="contacts-menu-item"
                 onClick={() => {
-                  const target = menuTarget.group;
                   closeMenu();
-                  void removeGroup(target);
+                  void openImport();
                 }}
               >
-                {t("删除分组")}</button>
+                {t("导入")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="contacts-menu-item"
+                onClick={() => {
+                  closeMenu();
+                  void exportContacts("csv");
+                }}
+              >
+                {t("导出为 CSV")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="contacts-menu-item"
+                onClick={() => {
+                  closeMenu();
+                  void exportContacts("vcf");
+                }}
+              >
+                {t("导出为 vCard")}
+              </button>
+              {menuTarget.kind === "group" ? (
+                <>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="contacts-menu-item"
+                    onClick={() => {
+                      const target = menuTarget.group;
+                      closeMenu();
+                      void renameGroup(target);
+                    }}
+                  >
+                    {t("重命名")}
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="contacts-menu-item danger"
+                    onClick={() => {
+                      const target = menuTarget.group;
+                      closeMenu();
+                      void removeGroup(target);
+                    }}
+                  >
+                    {t("删除分组")}
+                  </button>
+                </>
+              ) : null}
             </>
           ) : (
             <div

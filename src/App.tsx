@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { api, describeError, type AppSettings, type Contact } from "./api";
+import { api, describeError, type AppSettings, type Contact, type GitHubLoginView } from "./api";
 import ContactsWorkspace from "./ContactsWorkspace";
 import FirstRunWizard from "./FirstRunWizard";
 import InboxPanel, { type InboxComposeSeed } from "./InboxPanel";
@@ -26,6 +26,13 @@ export default function App() {
   const [language] = useLanguage();
   const [mode, setMode] = useState<WorkspaceMode>("inbox");
   const [proxiesVersion, setProxiesVersion] = useState(0);
+  const [githubProfile, setGitHubProfile] = useState<GitHubLoginView | null>(null);
+  // 每点一次账号都重新打开同步分类，包括已经停留在设置页时。
+  const [syncOpenRequest, setSyncOpenRequest] = useState(0);
+  const openSyncSettings = useCallback(() => {
+    setMode("settings");
+    setSyncOpenRequest((value) => value + 1);
+  }, []);
   // 通讯录发起的写信请求；收件箱消费掉就清空，免得再次切回又弹一次。
   const [composeSeed, setComposeSeed] = useState<InboxComposeSeed>();
   // 首次启动向导要用的设置；null 表示不显示向导。
@@ -121,6 +128,8 @@ export default function App() {
       <WorkspaceShell
         mode={mode}
         onModeChange={setMode}
+        githubProfile={githubProfile}
+        onAccountClick={openSyncSettings}
         inbox={
           <InboxPanel
             composeSeed={composeSeed}
@@ -131,6 +140,8 @@ export default function App() {
         settings={
           <SettingsWorkspace
             proxiesVersion={proxiesVersion}
+            syncOpenRequest={syncOpenRequest}
+            onGitHubProfileChanged={setGitHubProfile}
             onProxiesChanged={() => setProxiesVersion((value) => value + 1)}
             hasUpdateNotice={availableUpdateVersion !== null}
             onAboutOpened={markUpdateNotified}

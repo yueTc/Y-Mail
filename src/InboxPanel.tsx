@@ -36,7 +36,8 @@ import {
 } from "./api";
 import ComposePanel, { type ComposeRequest } from "./ComposePanel";
 import MessageReader from "./MessageReader";
-import { GroupPills, scoreOptions } from "./labelPill";
+import { GroupPills } from "./labelPill";
+import MessageClassificationMenu from "./MessageClassificationMenu";
 import FlagButton from "./FlagButton";
 import AccountDialog from "./AccountDialog";
 import PaneResizer from "./PaneResizer";
@@ -67,10 +68,12 @@ export type InboxRow =
  *
  * 行高必须和行里真正渲染的文字对齐：虚拟列表给行盒的高度小于内容时，
  * 多出来的那行会溢到下一行去（会话聚合下「来自 xxx」就是这么溢出来的）。
- * 实测：两行（发件人 + 主题）约 72.7 像素；会话子邮件多一行「来自 xxx」约
+ * 会话分组标题为单行，使用 40 像素。两行邮件（发件人 + 主题）约 72.7 像素；
+ * 会话子邮件多一行「来自 xxx」约
  * 91.9 像素；搜索结果多一行摘要约 95.1 像素。取整后往上留不到 1 像素的余量。
  */
 export function inboxRowHeight(kind: InboxRow["kind"]): number {
+  if (kind === "thread") return 40;
   if (kind === "thread-message") return 92;
   if (kind === "search") return 96;
   return 73;
@@ -208,10 +211,15 @@ export function syncBadgeClass(status: SyncStatus): string {
   return "sync-badge";
 }
 
-/** 徽标上的短文字：状态名带进度（有进度才显示）。 */
-export function syncBadgeText(status: SyncStatus): string {
-  if (status.total > 0) return `${status.stateLabel} ${status.progress}/${status.total}`;
-  return status.stateLabel;
+/** 徽标状态仍取最需注意的账号，数量按当前范围合计；总数未齐时不显示局部合计。 */
+export function syncBadgeText(
+  status: SyncStatus,
+  statuses: readonly SyncStatus[] = [status],
+): string {
+  if (statuses.length === 0 || statuses.some((item) => item.total <= 0)) return status.stateLabel;
+  const progress = statuses.reduce((sum, item) => sum + item.progress, 0);
+  const total = statuses.reduce((sum, item) => sum + item.total, 0);
+  return `${status.stateLabel} ${progress}/${total}`;
 }
 
 /**
@@ -438,56 +446,33 @@ function SearchResultRow({
   );
 }
 
-/** 一行会话线程。 */
+/** 会话分组标题：只负责显示发件方、封数和展开状态，邮件详情留给子行。 */
 function ThreadRow({
   thread,
   expanded,
   onToggle,
-  onToggleFlag,
-  onLabelClick,
 }: {
   thread: InboxThread;
   expanded: boolean;
   onToggle: () => void;
-  onToggleFlag?: (message: InboxMessage) => void;
-  onLabelClick?: (result: GroupResult) => void;
 }) {
-  const latest = thread.latest;
+  const sender = senderText(thread.latest);
   return (
     <div
       className="inbox-row inbox-row-thread"
+      data-read={thread.unreadCount > 0 ? "false" : "true"}
       role="button"
+      aria-label={`${sender} ${t("共 {0} 封", [thread.messageCount])}`}
       aria-expanded={expanded}
       onClick={onToggle}
       tabIndex={0}
       onKeyDown={(event) => handleRowKeyDown(event, onToggle)}
     >
-      <span className="dot" style={{ background: latest.accountColor || "#888" }} />
-      <div className="inbox-row-main">
-        <div className="inbox-row-top">
-          <span className="inbox-row-sender">{senderText(latest)}</span>
-          <GroupPills results={latest.groupResults} onClick={onLabelClick} />
-          <span className="inbox-row-time">{formatListTime(latest.dateUtc)}</span>
-        </div>
-        <div className="inbox-row-bottom">
-          <span className="inbox-row-subject">
-            {latest.subject || t("（无主题）")}
-            <span className="thread-count">{thread.messageCount}</span>
-          </span>
-          <span className="inbox-row-marks">
-            {thread.unreadCount > 0 && (
-              <span className="unread-badge" title={t("未读 {0} 封", [thread.unreadCount])}>
-                {thread.unreadCount}
-              </span>
-            )}
-            {latest.hasAttachments && <span title={t("有附件")}>📎</span>}
-            {onToggleFlag && (
-              <FlagButton flagged={latest.isFlagged} onToggle={() => onToggleFlag(latest)} />
-            )}
-          </span>
-        </div>
-      </div>
-      <span className="thread-arrow">{expanded ? "▾" : "▸"}</span>
+      <svg className="thread-arrow" viewBox="0 0 14 14" aria-hidden="true" focusable="false">
+        <path d="m5 3 4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <span className="inbox-thread-sender" title={sender}>{sender}</span>
+      <span className="thread-count">{t("共 {0} 封", [thread.messageCount])}</span>
     </div>
   );
 }
@@ -574,8 +559,11 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
     x: number;
     y: number;
   }>();
-  // 邮件右键菜单按组列可选值；开菜单时拉一次组与标签。
+  // 手动分类菜单的数据与读取状态；开菜单时只读取本地标签。
   const [menuGroups, setMenuGroups] = useState<LabelGroup[]>([]);
+  const [menuGroupsLoading, setMenuGroupsLoading] = useState(false);
+  const [menuGroupsError, setMenuGroupsError] = useState(false);
+  const menuRequestId = useRef(0);
   const [classifyConfirm, setClassifyConfirm] = useState<{
     preview: ClassifyPreview;
     subject: string;
@@ -876,13 +864,19 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") close();
     };
+    const onScroll = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest(".classification-submenu")) return;
+      close();
+    };
     document.addEventListener("click", close);
     document.addEventListener("keydown", onKeyDown);
-    document.addEventListener("scroll", close, true);
+    document.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", close);
     return () => {
       document.removeEventListener("click", close);
       document.removeEventListener("keydown", onKeyDown);
-      document.removeEventListener("scroll", close, true);
+      document.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", close);
     };
   }, [messageMenu]);
 
@@ -890,12 +884,21 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   const openMessageMenu = useCallback((event: ReactMouseEvent, message: InboxMessage) => {
     event.preventDefault();
     event.stopPropagation();
+    const requestId = ++menuRequestId.current;
     setMenuGroups([]);
+    setMenuGroupsLoading(true);
+    setMenuGroupsError(false);
     setMessageMenu({ message, x: event.clientX, y: event.clientY });
-    void api
-      .listLabelGroups()
-      .then((groups) => setMenuGroups(groups))
-      .catch(() => setMenuGroups([]));
+    void api.listLabelGroups()
+      .then((groups) => {
+        if (requestId === menuRequestId.current) setMenuGroups(groups);
+      })
+      .catch(() => {
+        if (requestId === menuRequestId.current) setMenuGroupsError(true);
+      })
+      .finally(() => {
+        if (requestId === menuRequestId.current) setMenuGroupsLoading(false);
+      });
   }, []);
 
   /**
@@ -1377,14 +1380,14 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
     );
   }, [syncStatuses, refreshAll]);
 
-  /** 当前账号的同步状态；统一收件箱取“最需要注意”的一个。 */
-  const currentSync = useMemo(() => {
-    if (syncStatuses.length === 0) return undefined;
-    if (selectedAccount !== undefined) {
-      return syncStatuses.find((item) => item.accountId === selectedAccount);
-    }
-    return worstSyncStatus(syncStatuses);
-  }, [syncStatuses, selectedAccount]);
+  /** 统一入口统计所有账号，选中账号后只统计该账号。 */
+  const currentSyncStatuses = useMemo(
+    () => selectedAccount === undefined
+      ? syncStatuses
+      : syncStatuses.filter((item) => item.accountId === selectedAccount),
+    [syncStatuses, selectedAccount],
+  );
+  const currentSync = worstSyncStatus(currentSyncStatuses);
 
   /** 同步失败或需要重新授权时的重试入口。 */
   const retrySync = useCallback(async () => {
@@ -1593,9 +1596,9 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
               className={syncBadgeClass(currentSync)}
               tabIndex={0}
               role="status"
-              title={syncBadgeTitle(currentSync)}
+              title={currentSyncStatuses.map(syncBadgeTitle).join("\n")}
             >
-              {syncBadgeText(currentSync)}
+              {syncBadgeText(currentSync, currentSyncStatuses)}
             </span>
           )}
           {currentSync && (currentSync.needsReauth || currentSync.state === "error") && (
@@ -1715,8 +1718,6 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
                       thread={row.thread}
                       expanded={expanded.has(row.key)}
                       onToggle={() => void toggleThread(row.thread)}
-                      onToggleFlag={(message) => void toggleFlag(message)}
-                      onLabelClick={filterByLabel}
                     />
                   ) : row.kind === "search" ? (
                     <SearchResultRow
@@ -1868,39 +1869,13 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
           disabled={classifyBusy}
         >
           {t("立即分类")}</button>
-        {menuGroups.map((group) => (
-          <div key={group.id} className="context-menu-group">
-            <div className="context-menu-heading">{group.name}</div>
-            {group.kind === "score"
-              ? scoreOptions(group.scoreMin, group.scoreMax).map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    role="menuitem"
-                    className="context-menu-item"
-                    onClick={() => void setGroupValue(group.id, null, value)}
-                  >
-                    {value}</button>
-                ))
-              : group.labels.map((label) => (
-                  <button
-                    key={label.id}
-                    type="button"
-                    role="menuitem"
-                    className="context-menu-item"
-                    onClick={() => void setGroupValue(group.id, label.id, null)}
-                  >
-                    {label.name}</button>
-                ))}
-            <button
-              type="button"
-              role="menuitem"
-              className="context-menu-item"
-              onClick={() => void clearGroupValue(group.id)}
-            >
-              {t("清除本组结果")}</button>
-          </div>
-        ))}
+        <MessageClassificationMenu
+          groups={menuGroups}
+          loading={menuGroupsLoading}
+          error={menuGroupsError}
+          onSetValue={(groupId, labelId, scoreValue) => void setGroupValue(groupId, labelId, scoreValue)}
+          onClearValue={(groupId) => void clearGroupValue(groupId)}
+        />
         <button
           type="button"
           role="menuitem"

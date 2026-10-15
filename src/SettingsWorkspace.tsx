@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
-import { api, describeError, type AppSettings } from "./api";
+import { api, describeError, type AppSettings, type GitHubLoginView } from "./api";
 import AboutPanel from "./AboutPanel";
 import AccountPanel from "./AccountPanel";
 import AiPanel from "./AiPanel";
@@ -40,7 +40,7 @@ const SETTINGS_CATEGORIES: { id: SettingsCategoryId; label: string }[] = [
   { id: "general", label: "通用" },
   { id: "appearance", label: "外观" },
   { id: "accounts", label: "账户" },
-  { id: "settingsSync", label: "设置同步" },
+  { id: "settingsSync", label: "同步" },
   { id: "proxy", label: "代理" },
   { id: "ai", label: "AI功能" },
   { id: "mcp", label: "MCP" },
@@ -85,6 +85,9 @@ function persistNavWidth(value: number): void {
 
 type SettingsWorkspaceProps = {
   proxiesVersion: number;
+  /** 账号入口每次点击递增，确保重复点击仍能跳回同步分类。 */
+  syncOpenRequest?: number;
+  onGitHubProfileChanged?: (profile: GitHubLoginView | null) => void;
   onProxiesChanged: () => void;
   /** 左栏「关于」是否显示小红点（有待提醒的新版本）。 */
   hasUpdateNotice?: boolean;
@@ -103,6 +106,8 @@ type SettingsWorkspaceProps = {
  */
 export default function SettingsWorkspace({
   proxiesVersion,
+  syncOpenRequest = 0,
+  onGitHubProfileChanged,
   onProxiesChanged,
   hasUpdateNotice = false,
   onAboutOpened,
@@ -146,6 +151,9 @@ export default function SettingsWorkspace({
   const [restartError, setRestartError] = useState<string | null>(null);
   // 左栏选中项：只在本次运行内记住，默认选「通用」。
   const [activeCategory, setActiveCategory] = useState<SettingsCategoryId>("general");
+  useEffect(() => {
+    if (syncOpenRequest > 0) setActiveCategory("settingsSync");
+  }, [syncOpenRequest]);
   // 左栏宽度：拖动时只改内存，松手或键盘调整后落盘。
   const [navWidth, setNavWidth] = useState<number>(() => readStoredNavWidth());
   const navWidthRef = useRef(navWidth);
@@ -679,11 +687,11 @@ export default function SettingsWorkspace({
 
           <section
             className="settings-group"
-            aria-label={t("设置同步")}
+            aria-label={t("同步")}
             hidden={activeCategory !== "settingsSync"}
           >
-            <h2 className="settings-group-title">{t("设置同步")}</h2>
-            <SettingsSyncPanel />
+            <h2 className="settings-group-title">{t("同步")}</h2>
+            <SettingsSyncPanel onProfileChanged={onGitHubProfileChanged} />
           </section>
 
           <section

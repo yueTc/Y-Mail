@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 import { t } from "./i18n";
+import type { GitHubLoginView } from "./api";
+import AccountRailButton from "./AccountRailButton";
 
 export type WorkspaceMode = "inbox" | "contacts" | "settings";
 
@@ -9,10 +11,12 @@ type WorkspaceShellProps = {
   inbox: ReactNode;
   contacts: ReactNode;
   settings: ReactNode;
+  githubProfile?: GitHubLoginView | null;
+  onAccountClick?: () => void;
 };
 
 /**
- * 最左设置栏的入口：收件箱和通讯录在上方，设置固定在底部。
+ * 最左设置栏的入口：收件箱和通讯录在上方，账号和设置固定在底部。
  * 想再加入口先跟用户确认，别自己塞。
  */
 const PRIMARY_ENTRIES: ReadonlyArray<{ id: WorkspaceMode; label: string }> = [
@@ -89,6 +93,8 @@ export default function WorkspaceShell({
   inbox,
   contacts,
   settings,
+  githubProfile = null,
+  onAccountClick,
 }: WorkspaceShellProps) {
   const renderEntry = (entry: { id: WorkspaceMode; label: string }) => (
     <button
@@ -108,7 +114,13 @@ export default function WorkspaceShell({
     <div className="workspace">
       <nav className="workspace-rail" aria-label={t("主导航")}>
         <div className="workspace-rail-main">{PRIMARY_ENTRIES.map(renderEntry)}</div>
-        <div className="workspace-rail-bottom">{renderEntry(SETTINGS_ENTRY)}</div>
+        <div className="workspace-rail-bottom">
+          <AccountRailButton
+            profile={githubProfile}
+            onClick={onAccountClick ?? (() => onModeChange("settings"))}
+          />
+          {renderEntry(SETTINGS_ENTRY)}
+        </div>
       </nav>
       <div className="workspace-body">
         <div className="workspace-pane" hidden={mode !== "inbox"}>

@@ -8,8 +8,8 @@ export const MIN_ATTACHMENT_HEIGHT = 96;
 export const MAX_ATTACHMENT_HEIGHT = 520;
 /** 正文区最小高度。 */
 export const READER_BODY_MIN_HEIGHT = 180;
-/** 上下拖动条占用的高度，和样式保持一致。 */
-export const READER_RESIZER_HEIGHT = 8;
+/** 拖动细线叠在交界线上，不占正文与附件的布局高度。 */
+export const READER_RESIZER_HEIGHT = 0;
 
 export const ATTACHMENT_HEIGHT_KEY = "ymail.reader-attachment-height.v1";
 

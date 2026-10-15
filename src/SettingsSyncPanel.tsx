@@ -22,7 +22,11 @@ import { t } from "./i18n";
 /** 同步密码最少位数，和后端保持一致。 */
 const MIN_PASSWORD_CHARS = 8;
 
-export default function SettingsSyncPanel() {
+type SettingsSyncPanelProps = {
+  onProfileChanged?: (profile: GitHubLoginView | null) => void;
+};
+
+export default function SettingsSyncPanel({ onProfileChanged }: SettingsSyncPanelProps) {
   const [profile, setProfile] = useState<GitHubLoginView | null>(null);
   const [status, setStatus] = useState<SettingsSyncStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -46,13 +50,15 @@ export default function SettingsSyncPanel() {
 
   const refreshProfile = useCallback(async () => {
     try {
-      setProfile(await api.githubLoginProfile());
+      const current = await api.githubLoginProfile();
+      setProfile(current);
+      onProfileChanged?.(current);
     } catch (caught) {
       setError(describeError(caught));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [onProfileChanged]);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -179,7 +185,7 @@ export default function SettingsSyncPanel() {
   return (
     <section className="panel settings-sync" aria-busy={loading || busy}>
       <div className="panel-head">
-        <h2>{t("设置同步")}</h2>
+        <h2>{t("同步")}</h2>
         {enabled && (
           <div className="actions">
             <button className="primary" disabled={busy} onClick={() => void run(() => api.settingsSyncNow())}>

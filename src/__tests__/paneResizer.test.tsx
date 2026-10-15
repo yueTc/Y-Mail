@@ -74,9 +74,11 @@ describe("拖动条", () => {
     fireEvent.pointerDown(separator, { button: 0, pointerId: 1, clientX: 400 });
     fireEvent.pointerMove(separator, { pointerId: 1, clientX: 460 });
     expect(onChange).toHaveBeenLastCalledWith(480);
+    expect(separator.hasAttribute("data-dragging")).toBe(true);
     expect(onCommit).not.toHaveBeenCalled();
     fireEvent.pointerUp(separator, { pointerId: 1 });
     expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(separator.hasAttribute("data-dragging")).toBe(false);
   });
 
   it("双击复位", () => {

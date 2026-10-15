@@ -498,17 +498,19 @@ describe("列表标签胶囊", () => {
     expect(screen.queryByRole("button", { name: "账单" })).toBeNull();
   });
 
-  it("会话折叠行用最新一封的标签与颜色", async () => {
+  it.each([
+    { fromName: "huggingface", count: 1, unread: 0, expected: "huggingface" },
+    { fromName: "很长的发件方名称".repeat(20), count: 1234, unread: 2, expected: "很长的发件方名称".repeat(20) },
+    { fromName: "   ", count: 2, unread: 1, expected: "z@example.com" },
+  ])("会话标题只显示发件方和总封数：$count 封", async ({ fromName, count, unread, expected }) => {
     vi.mocked(api.listInboxThreads).mockResolvedValue({
-      items: [
-        {
-          accountId: 1,
-          threadKey: "t1",
-          messageCount: 2,
-          unreadCount: 1,
-          latest: labelledMessage({ groupResults: [notifyPill] }),
-        },
-      ],
+      items: [{
+        accountId: 1,
+        threadKey: "t1",
+        messageCount: count,
+        unreadCount: unread,
+        latest: labelledMessage({ fromName, groupResults: [notifyPill], isFlagged: true, hasAttachments: true }),
+      }],
       total: 1,
       offset: 0,
       limit: 200,
@@ -516,8 +518,16 @@ describe("列表标签胶囊", () => {
     render(<InboxPanel />);
     fireEvent.click(await screen.findByLabelText("按会话聚合"));
 
-    const chip = await screen.findByRole("button", { name: "通知" });
-    expect(chip.getAttribute("data-label-color")).toBe("teal");
+    const row = await screen.findByRole("button", { name: `${expected} 共 ${count} 封` });
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    expect(row.getAttribute("data-read")).toBe(unread > 0 ? "false" : "true");
+    expect(within(row).getByTitle(expected).textContent).toBe(expected);
+    expect(within(row).queryByText("账单邮件")).toBeNull();
+    expect(within(row).queryByRole("button")).toBeNull();
+    expect(within(row).queryByTitle("有附件")).toBeNull();
+    expect(row.querySelector(".inbox-row-time")).toBeNull();
+    expect(row.querySelector(".dot")).toBeNull();
+    expect(api.listThreadMessages).not.toHaveBeenCalled();
   });
 
   it("展开线程后的子邮件也带标签胶囊", async () => {
@@ -541,7 +551,7 @@ describe("列表标签胶囊", () => {
     render(<InboxPanel />);
     fireEvent.click(await screen.findByLabelText("按会话聚合"));
 
-    const row = await screen.findByRole("button", { name: /张三/ });
+    const row = await screen.findByRole("button", { name: "张三 共 1 封" });
     fireEvent.click(row);
 
     await waitFor(() => {
@@ -568,26 +578,47 @@ describe("列表标签胶囊", () => {
     expect(bill.compareDocumentPosition(urgent) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("会话折叠行显示最新一封的全部组胶囊", async () => {
+  it("分组标题支持键盘展开收起，子邮件保留标签和星标操作", async () => {
+    const child = labelledMessage({ id: 11, uid: 11, groupResults: [billPill, urgentPill], hasAttachments: true });
     vi.mocked(api.listInboxThreads).mockResolvedValue({
-      items: [
-        {
-          accountId: 1,
-          threadKey: "t1",
-          messageCount: 2,
-          unreadCount: 1,
-          latest: labelledMessage({ groupResults: [billPill, urgentPill] }),
-        },
-      ],
+      items: [{
+        accountId: 1,
+        threadKey: "t1",
+        messageCount: 2,
+        unreadCount: 1,
+        latest: child,
+      }],
       total: 1,
       offset: 0,
       limit: 200,
     });
+    vi.mocked(api.listThreadMessages).mockResolvedValue([child]);
+    vi.mocked(api.setMessageFlagged).mockResolvedValue({ changed: true, synced: true });
     render(<InboxPanel />);
     fireEvent.click(await screen.findByLabelText("按会话聚合"));
 
+    const row = await screen.findByRole("button", { name: "张三 共 2 封" });
+    row.focus();
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    const flag = await screen.findByRole("button", { name: "标红" });
     expect(await screen.findByRole("button", { name: "账单" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "5" })).toBeTruthy();
+    expect(screen.getByTitle("有附件")).toBeTruthy();
+    expect(screen.getByText("来自 测试账号")).toBeTruthy();
+
+    fireEvent.click(flag);
+    await waitFor(() => expect(api.setMessageFlagged).toHaveBeenCalledWith(11, true));
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    expect(api.getMessageBody).not.toHaveBeenCalled();
+    fireEvent.keyDown(row, { key: " " });
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("button", { name: "账单" })).toBeNull();
+    expect(document.activeElement).toBe(row);
+    fireEvent.click(row);
+    expect(await screen.findByRole("button", { name: "账单" })).toBeTruthy();
+    expect(api.listThreadMessages).toHaveBeenCalledTimes(1);
+    expect(api.listThreadMessages).toHaveBeenCalledWith(1, "t1", 200);
   });
 });
 describe("收件箱右键立即分类", () => {
@@ -757,49 +788,81 @@ describe("收件箱右键按组修改", () => {
     render(<InboxPanel />);
   }
 
-  it("右键菜单按组列出可选值：选择题列标签、是否题列两条、打分题列 1–5", async () => {
+  async function openManualGroup(name: string) {
+    fireEvent.contextMenu(await screen.findByText("账单邮件"));
+    const menu = await screen.findByRole("menu", { name: "邮件菜单" });
+    fireEvent.mouseEnter(within(menu).getByRole("menuitem", { name: "手动分类" }));
+    fireEvent.mouseEnter(await screen.findByRole("menuitem", { name }));
+    return screen.getByRole("menu", { name });
+  }
+
+  it("右键先显示两种分类入口，悬停手动分类及标签组后才显示可选值", async () => {
     prepareMenu();
     fireEvent.contextMenu(await screen.findByText("账单邮件"));
     const menu = await screen.findByRole("menu", { name: "邮件菜单" });
+    expect(within(menu).getByRole("menuitem", { name: "立即分类" })).toBeTruthy();
+    expect(within(menu).queryByRole("menuitem", { name: "内容分类" })).toBeNull();
+    expect(within(menu).queryByRole("menuitem", { name: "账单" })).toBeNull();
 
-    expect(within(menu).getByRole("menuitem", { name: "客户" })).toBeTruthy();
-    expect(within(menu).getByRole("menuitem", { name: "账单" })).toBeTruthy();
-    expect(within(menu).getByRole("menuitem", { name: "需要回复" })).toBeTruthy();
-    expect(within(menu).getByRole("menuitem", { name: "不用回复" })).toBeTruthy();
+    fireEvent.mouseEnter(within(menu).getByRole("menuitem", { name: "手动分类" }));
+    const group = await screen.findByRole("menuitem", { name: "内容分类" });
+    expect(screen.queryByRole("menuitem", { name: "客户" })).toBeNull();
+    fireEvent.mouseEnter(group);
+    expect(screen.getByRole("menuitem", { name: "客户" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "账单" })).toBeTruthy();
+    expect(screen.getAllByRole("menuitem", { name: "清除本组结果" })).toHaveLength(1);
+
+    fireEvent.mouseEnter(screen.getByRole("menuitem", { name: "需要我回复" }));
+    expect(screen.queryByRole("menuitem", { name: "账单" })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "需要回复" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "不用回复" })).toBeTruthy();
+    fireEvent.mouseEnter(screen.getByRole("menuitem", { name: "紧急程度" }));
     for (const value of ["1", "2", "3", "4", "5"]) {
-      expect(within(menu).getByRole("menuitem", { name: value })).toBeTruthy();
+      expect(screen.getByRole("menuitem", { name: value })).toBeTruthy();
     }
-    expect(within(menu).getAllByRole("menuitem", { name: "清除本组结果" })).toHaveLength(3);
+    expect(api.setMessageGroupValue).not.toHaveBeenCalled();
+    expect(api.previewClassifyMessages).not.toHaveBeenCalled();
+    expect(api.classifyMessages).not.toHaveBeenCalled();
   });
 
-  it("点某个值：写入手动结果并刷新列表", async () => {
+  it("点击标签才写入本地手动结果，收起菜单并刷新列表", async () => {
     vi.mocked(api.setMessageGroupValue).mockResolvedValue(undefined);
     prepareMenu();
-    fireEvent.contextMenu(await screen.findByText("账单邮件"));
-    const menu = await screen.findByRole("menu", { name: "邮件菜单" });
-
+    const menu = await openManualGroup("内容分类");
     const loadsBefore = vi.mocked(api.listInboxMessages).mock.calls.length;
     fireEvent.click(within(menu).getByRole("menuitem", { name: "账单" }));
-
-    await waitFor(() =>
-      expect(vi.mocked(api.setMessageGroupValue)).toHaveBeenCalledWith(42, 1, 2, null),
-    );
-    await waitFor(() =>
-      expect(vi.mocked(api.listInboxMessages).mock.calls.length).toBeGreaterThan(loadsBefore),
-    );
+    await waitFor(() => expect(api.setMessageGroupValue).toHaveBeenCalledWith(42, 1, 2, null));
+    await waitFor(() => expect(vi.mocked(api.listInboxMessages).mock.calls.length).toBeGreaterThan(loadsBefore));
+    expect(screen.queryByRole("menu", { name: "邮件菜单" })).toBeNull();
+    expect(api.classifyMessages).not.toHaveBeenCalled();
   });
 
-  it("点「清除本组结果」：清掉这一组并刷新列表", async () => {
+  it("点击分数仍写入对应组的数值", async () => {
+    vi.mocked(api.setMessageGroupValue).mockResolvedValue(undefined);
+    prepareMenu();
+    const menu = await openManualGroup("紧急程度");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "4" }));
+    await waitFor(() => expect(api.setMessageGroupValue).toHaveBeenCalledWith(42, 3, null, 4));
+  });
+
+  it("每个组里的清除入口只清除对应组", async () => {
     vi.mocked(api.clearMessageGroupValue).mockResolvedValue(undefined);
     prepareMenu();
-    fireEvent.contextMenu(await screen.findByText("账单邮件"));
-    const menu = await screen.findByRole("menu", { name: "邮件菜单" });
+    const menu = await openManualGroup("需要我回复");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "清除本组结果" }));
+    await waitFor(() => expect(api.clearMessageGroupValue).toHaveBeenCalledWith(42, 2));
+  });
 
-    fireEvent.click(within(menu).getAllByRole("menuitem", { name: "清除本组结果" })[0]);
-
-    await waitFor(() =>
-      expect(vi.mocked(api.clearMessageGroupValue)).toHaveBeenCalledWith(42, 1),
-    );
+  it("子菜单滚动不关闭整组菜单，按 Esc 或点击外面会全部关闭", async () => {
+    prepareMenu();
+    const menu = await openManualGroup("内容分类");
+    fireEvent.scroll(menu);
+    expect(screen.getByRole("menuitem", { name: "账单" })).toBeTruthy();
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "邮件菜单" })).toBeNull();
+    await openManualGroup("内容分类");
+    fireEvent.click(document.body);
+    expect(screen.queryByRole("menu", { name: "邮件菜单" })).toBeNull();
   });
 
   it("搜索框只提示 --help，输入后弹窗说明命令且不发搜索请求", async () => {
