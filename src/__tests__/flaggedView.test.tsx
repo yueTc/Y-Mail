@@ -1,6 +1,6 @@
 //! 「红旗邮件」左侧入口回归：每个账号的收件箱下面多一条，点了按账号看标红邮件。
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import InboxPanel, { SEARCH_PLACEHOLDER } from "../InboxPanel";
@@ -42,6 +42,7 @@ vi.mock("../api", () => ({
   api: {
     listInboxThreads: vi.fn(),
     listAccounts: vi.fn(),
+    deleteAccount: vi.fn(),
     listProxies: vi.fn(),
     listInboxMessages: vi.fn(),
     listInboxFolders: vi.fn(),
@@ -161,6 +162,8 @@ beforeEach(() => {
   vi.mocked(api.syncStatus).mockResolvedValue([]);
   vi.mocked(api.listAccounts).mockResolvedValue([ACCOUNT]);
   vi.mocked(api.listProxies).mockResolvedValue([]);
+  vi.mocked(api.stopSync).mockResolvedValue(undefined);
+  vi.mocked(api.deleteAccount).mockResolvedValue(undefined);
   vi.mocked(api.listLabelGroups).mockResolvedValue([]);
 });
 
@@ -392,6 +395,181 @@ describe("邮箱右键编辑", () => {
     expect(api.listAccounts).toHaveBeenCalled();
   });
 });
+describe("邮箱栏右键添加和删除", () => {
+  async function openDelete() {
+    fireEvent.contextMenu(await screen.findByRole("button", { name: /测试账号/ }));
+    const menu = screen.getByRole("menu", { name: "邮箱菜单" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "删除邮箱" }));
+    return screen.getByRole("dialog", { name: "确认删除邮箱" });
+  }
+
+  it("空白处右键可以添加邮箱，原有添加按钮继续保留", async () => {
+    render(<InboxPanel />);
+    await screen.findByRole("button", { name: /测试账号/ });
+    expect(screen.getByRole("button", { name: "＋ 添加邮箱" })).toBeTruthy();
+    fireEvent.contextMenu(screen.getByRole("complementary", { name: "邮箱栏" }));
+    const menu = screen.getByRole("menu", { name: "邮箱菜单" });
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["添加邮箱"]);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "添加邮箱" }));
+    expect(await screen.findByRole("dialog", { name: "添加邮箱" })).toBeTruthy();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("统一入口不触发空白菜单，邮箱右键保留原有操作", async () => {
+    render(<InboxPanel />);
+    const account = await screen.findByRole("button", { name: /测试账号/ });
+    expect(fireEvent.contextMenu(screen.getByRole("button", { name: /统一收件箱/ }))).toBe(true);
+    expect(screen.queryByRole("menu")).toBeNull();
+    fireEvent.contextMenu(account);
+    const menu = screen.getByRole("menu", { name: "邮箱菜单" });
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "编辑", "新建文件夹", "删除邮箱",
+    ]);
+    expect(within(menu).queryByRole("menuitem", { name: "添加邮箱" })).toBeNull();
+  });
+
+  it.each(["点击外部", "按 Esc", "滚动"])("空白处菜单在%s时关闭", async (action) => {
+    render(<InboxPanel />);
+    await screen.findByRole("button", { name: /测试账号/ });
+    const sidebar = screen.getByRole("complementary", { name: "邮箱栏" });
+    fireEvent.contextMenu(sidebar);
+    expect(screen.getByRole("menu")).toBeTruthy();
+    if (action === "点击外部") fireEvent.click(document.body);
+    if (action === "按 Esc") fireEvent.keyDown(document, { key: "Escape" });
+    if (action === "滚动") fireEvent.scroll(sidebar);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("删除先说明范围，取消或按 Esc 都不停止同步、不删除", async () => {
+    render(<InboxPanel />);
+    const dialog = await openDelete();
+    expect(within(dialog).getByText("将移除本机账号、关联邮件数据和保存的凭据，不会删除服务器上的邮件。")).toBeTruthy();
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog", { name: "确认删除邮箱" })).toBeNull();
+    const reopened = await openDelete();
+    fireEvent.keyDown(reopened, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "确认删除邮箱" })).toBeNull();
+    expect(api.deleteAccount).not.toHaveBeenCalled();
+    expect(api.stopSync).not.toHaveBeenCalled();
+  });
+
+  it("删除当前邮箱时先停止该账号同步，成功后刷新并返回统一收件箱", async () => {
+    render(<InboxPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: /测试账号/ }));
+    await waitFor(() => expect(api.listInboxMessages).toHaveBeenLastCalledWith(expect.objectContaining({ accountId: 1 })));
+    const dialog = await openDelete();
+    vi.mocked(api.inboxSummary).mockResolvedValueOnce({ accounts: [], totalUnread: 0, totalMessages: 0 });
+    vi.mocked(api.listInboxFolders).mockResolvedValueOnce([]);
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(api.deleteAccount).toHaveBeenCalledWith(1));
+    expect(api.stopSync).toHaveBeenCalledWith(1);
+    expect(vi.mocked(api.stopSync).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.deleteAccount).mock.invocationCallOrder[0]);
+    await waitFor(() => expect(screen.queryByRole("button", { name: /测试账号/ })).toBeNull());
+    expect(screen.getByRole("button", { name: "统一收件箱" }).classList.contains("active")).toBe(true);
+    await waitFor(() => {
+      const query = vi.mocked(api.listInboxMessages).mock.calls.at(-1)?.[0];
+      expect(query).toBeTruthy();
+      expect(query?.accountId).toBeUndefined();
+      expect(query?.folderId).toBeUndefined();
+    });
+    expect(screen.queryByRole("dialog", { name: "确认删除邮箱" })).toBeNull();
+  });
+
+  it("统一视图中删除邮箱也会重新读取邮件列表", async () => {
+    render(<InboxPanel />);
+    const dialog = await openDelete();
+    const previousLoads = vi.mocked(api.listInboxMessages).mock.calls.length;
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "确认删除邮箱" })).toBeNull());
+    await waitFor(() => expect(vi.mocked(api.listInboxMessages).mock.calls.length).toBeGreaterThan(previousLoads));
+    expect(screen.getByRole("button", { name: /统一收件箱/ }).classList.contains("active")).toBe(true);
+  });
+
+  it("删除其他邮箱时继续停留在当前邮箱", async () => {
+    const first = { accountId: 1, email: "a@example.com", displayName: "测试账号", color: "blue", enabled: true, messageCount: 3, unreadCount: 2 };
+    const second = { ...first, accountId: 2, email: "b@example.com", displayName: "第二邮箱" };
+    vi.mocked(api.inboxSummary).mockResolvedValue({ accounts: [first, second], totalMessages: 6, totalUnread: 4 });
+    render(<InboxPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: /第二邮箱/ }));
+    await waitFor(() => expect(api.listInboxMessages).toHaveBeenLastCalledWith(expect.objectContaining({ accountId: 2 })));
+    const dialog = await openDelete();
+    vi.mocked(api.inboxSummary).mockResolvedValue({ accounts: [second], totalMessages: 3, totalUnread: 2 });
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "确认删除邮箱" })).toBeNull());
+    expect(screen.getByRole("button", { name: /第二邮箱/ }).classList.contains("active")).toBe(true);
+    await waitFor(() => expect(api.listInboxMessages).toHaveBeenLastCalledWith(expect.objectContaining({ accountId: 2 })));
+  });
+
+  it("下一次状态轮询也不会把已删除邮箱的数量算回来", async () => {
+    const intervalSpy = vi.spyOn(window, "setInterval");
+    vi.mocked(api.syncStatus).mockResolvedValue([{
+      accountId: 1, email: "a@example.com", state: "idle", stateLabel: "实时等待",
+      progress: 3, total: 3, message: "", needsReauth: false, updatedAt: "",
+    }]);
+    render(<InboxPanel />);
+    const dialog = await openDelete();
+    expect(await screen.findByText("实时等待 3/3")).toBeTruthy();
+    vi.mocked(api.inboxSummary).mockResolvedValue({ accounts: [], totalMessages: 0, totalUnread: 0 });
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /测试账号/ })).toBeNull());
+    const poll = intervalSpy.mock.calls.find((call) => call[1] === 2000)?.[0];
+    expect(typeof poll).toBe("function");
+    await act(async () => { if (typeof poll === "function") await poll(); });
+    expect(screen.queryByText("实时等待 3/3")).toBeNull();
+    intervalSpy.mockRestore();
+  });
+
+  it("从空白菜单切到文件夹右键时，只留下文件夹菜单", async () => {
+    render(<InboxPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: /测试账号/ }));
+    fireEvent.contextMenu(screen.getByRole("complementary", { name: "邮箱栏" }));
+    expect(screen.getByRole("menu", { name: "邮箱菜单" })).toBeTruthy();
+    fireEvent.contextMenu(screen.getByText("收件箱", { exact: true }));
+    expect(screen.queryByRole("menu", { name: "邮箱菜单" })).toBeNull();
+    expect(screen.getByRole("menu", { name: "文件夹菜单" })).toBeTruthy();
+  });
+
+  it("删除失败保留确认框和账号，可以重试", async () => {
+    vi.mocked(api.deleteAccount).mockRejectedValueOnce(new Error("本机数据暂时不可写"));
+    render(<InboxPanel />);
+    const dialog = await openDelete();
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
+    expect(await within(dialog).findByRole("alert")).toHaveProperty("textContent", "操作失败：本机数据暂时不可写");
+    expect(screen.getByRole("button", { name: /测试账号/ })).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "确认删除邮箱" })).toBeNull());
+    expect(api.deleteAccount).toHaveBeenCalledTimes(2);
+  });
+
+  it("停止同步失败时不调用删除", async () => {
+    vi.mocked(api.stopSync).mockRejectedValueOnce(new Error("无法停止同步"));
+    render(<InboxPanel />);
+    const dialog = await openDelete();
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
+    expect(await within(dialog).findByRole("alert")).toHaveProperty("textContent", "操作失败：无法停止同步");
+    expect(api.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it("提交中锁住确认和取消，避免重复删除", async () => {
+    let completeDelete: () => void = () => {};
+    vi.mocked(api.deleteAccount).mockReturnValueOnce(new Promise<void>((resolve) => { completeDelete = resolve; }));
+    render(<InboxPanel />);
+    const dialog = await openDelete();
+    const confirm = within(dialog).getByRole("button", { name: "确认删除" });
+    fireEvent.click(confirm);
+    await waitFor(() => expect(api.deleteAccount).toHaveBeenCalledTimes(1));
+    expect(confirm).toHaveProperty("disabled", true);
+    expect(within(dialog).getByRole("button", { name: "取消" })).toHaveProperty("disabled", true);
+    fireEvent.click(confirm);
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: "确认删除邮箱" })).toBeTruthy();
+    expect(api.deleteAccount).toHaveBeenCalledTimes(1);
+    completeDelete();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "确认删除邮箱" })).toBeNull());
+  });
+});
+
 describe("列表标签胶囊", () => {
   const billPill: GroupResult = {
     groupId: 1,
@@ -865,15 +1043,100 @@ describe("收件箱右键按组修改", () => {
     expect(screen.queryByRole("menu", { name: "邮件菜单" })).toBeNull();
   });
 
-  it("搜索框只提示 --help，输入后弹窗说明命令且不发搜索请求", async () => {
-    expect(SEARCH_PLACEHOLDER).toContain("--help");
-    expect(SEARCH_PLACEHOLDER).not.toContain("tag:");
+  it("去掉搜索按钮后仍能用 Ctrl+K 聚焦、回车本地搜索和 Esc 退出", async () => {
+    vi.mocked(api.searchMessages).mockResolvedValue({
+      items: [], total: 0, offset: 0, limit: 200, deepSynced: false, deepError: null,
+    });
+    render(<InboxPanel />);
+    const searchBox = screen.getByLabelText("搜索邮件") as HTMLInputElement;
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    expect(document.activeElement).toBe(searchBox);
+    fireEvent.change(searchBox, { target: { value: "账单" } });
+    fireEvent.keyDown(searchBox, { key: "Enter" });
+    await waitFor(() => expect(api.searchMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ raw: "账单", deep: false }),
+    ));
+    await screen.findByText("没有找到匹配的邮件。");
+    expect(screen.queryByText(/共找到 .* 封，当前已显示 .* 封/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "继续联网补历史" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "退出搜索" })).toBeNull();
+    fireEvent.keyDown(searchBox, { key: "Escape" });
+    expect(screen.queryByText("共找到 0 封，当前已显示 0 封")).toBeNull();
+    expect(searchBox.value).toBe("");
+    expect(searchBox.parentElement?.querySelector("kbd")?.textContent).toBe("Ctrl+K");
+  });
+
+  it("有内容时用小叉替换快捷键，清空后返回普通列表并聚焦搜索框", async () => {
+    vi.mocked(api.searchMessages).mockResolvedValue({
+      items: [], total: 0, offset: 0, limit: 200, deepSynced: false, deepError: null,
+    });
+    prepareMenu();
+    await screen.findByText("账单邮件");
+    const searchBox = screen.getByLabelText("搜索邮件") as HTMLInputElement;
+
+    // 未提交的内容也能清空，空格同样算输入内容。
+    fireEvent.change(searchBox, { target: { value: " " } });
+    expect(searchBox.parentElement?.querySelector("kbd")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "清空搜索" }));
+    expect(searchBox.value).toBe("");
+    expect(document.activeElement).toBe(searchBox);
+    expect(api.searchMessages).not.toHaveBeenCalled();
+
+    fireEvent.change(searchBox, { target: { value: "无匹配关键词" } });
+    fireEvent.keyDown(searchBox, { key: "Enter" });
+    await screen.findByText("没有找到匹配的邮件。");
+    expect(screen.queryByText(/共找到 .* 封，当前已显示 .* 封/)).toBeNull();
+    expect(screen.queryByText("账单邮件")).toBeNull();
+    expect(searchBox.parentElement?.querySelector("kbd")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "清空搜索" }));
+
+    expect(searchBox.value).toBe("");
+    expect(document.activeElement).toBe(searchBox);
+    expect(searchBox.parentElement?.querySelector("kbd")?.textContent).toBe("Ctrl+K");
+    expect(screen.queryByRole("button", { name: "清空搜索" })).toBeNull();
+    expect(screen.queryByText("共找到 0 封，当前已显示 0 封")).toBeNull();
+    expect(screen.getByText("账单邮件")).toBeTruthy();
+    expect(api.searchMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["成功", "失败"])("清空后忽略晚到的搜索%s，不重新显示结果或报错", async (outcome) => {
+    let finish!: () => void;
+    vi.mocked(api.searchMessages).mockImplementationOnce(() => new Promise((resolve, reject) => {
+      finish = () => outcome === "成功"
+        ? resolve({ items: [], total: 0, offset: 0, limit: 200, deepSynced: false, deepError: null })
+        : reject(new Error("旧搜索失败"));
+    }));
+    prepareMenu();
+    await screen.findByText("账单邮件");
+    const searchBox = screen.getByLabelText("搜索邮件") as HTMLInputElement;
+    fireEvent.change(searchBox, { target: { value: "旧关键词" } });
+    fireEvent.keyDown(searchBox, { key: "Enter" });
+    expect(searchBox.getAttribute("aria-busy")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "清空搜索" }));
+    expect(searchBox.getAttribute("aria-busy")).toBe("false");
+    await act(async () => finish());
+
+    expect(searchBox.value).toBe("");
+    expect(screen.getByText("账单邮件")).toBeTruthy();
+    expect(screen.queryByText("共找到 0 封，当前已显示 0 封")).toBeNull();
+    expect(screen.queryByText(/旧搜索失败/)).toBeNull();
+  });
+
+  it("搜索框使用简短提示，输入 --help 后仍弹窗说明命令且不发搜索请求", async () => {
     render(<InboxPanel />);
 
     const searchBox = screen.getByLabelText("搜索邮件") as HTMLInputElement;
+    expect(searchBox.placeholder).toBe(SEARCH_PLACEHOLDER);
+    expect(SEARCH_PLACEHOLDER).toBe("输入 --help 查看搜索语法");
+    expect(screen.queryByRole("button", { name: "搜索" })).toBeNull();
+    expect(searchBox.parentElement?.querySelector("kbd")?.textContent).toBe("Ctrl+K");
     fireEvent.change(searchBox, { target: { value: "--help" } });
-    fireEvent.keyDown(searchBox, { key: "Enter" });
+    const enter = createEvent.keyDown(searchBox, { key: "Enter", code: "Enter", cancelable: true });
+    fireEvent(searchBox, enter);
 
+    // 浏览器会把未拦截的回车继续交给弹窗里自动聚焦的“知道了”，造成即开即关。
+    expect(enter.defaultPrevented).toBe(true);
     expect(await screen.findByRole("dialog", { name: "搜索命令" })).toBeTruthy();
     expect(screen.getByText("from:发件人")).toBeTruthy();
     expect(vi.mocked(api.searchMessages)).not.toHaveBeenCalled();

@@ -173,10 +173,12 @@ interface ComposePanelProps {
   onSent?: () => void;
   /** 当前有没有启用的 AI 站点；没有时按钮显示「需启用」。 */
   aiEnabled?: boolean;
+  /** 通知读信时暂时隐藏写信窗格，保留草稿并暂停快捷键。 */
+  active?: boolean;
 }
 
 /** 写信窗格。 */
-export default function ComposePanel({ request, accounts, onClose, onSent, aiEnabled = false }: ComposePanelProps) {
+export default function ComposePanel({ request, accounts, onClose, onSent, aiEnabled = false, active = true }: ComposePanelProps) {
   const [accountId, setAccountId] = useState<number>();
   const [toText, setToText] = useState("");
   const [ccText, setCcText] = useState("");
@@ -397,6 +399,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
 
   /** Esc 键：关确认框，或走带保护的关闭流程。 */
   useEffect(() => {
+    if (!active) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (busy) return;
@@ -414,7 +417,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [busy, closePromptOpen, restoredFromBackup, captureSnapshot, clearBackup, onClose]);
+  }, [active, busy, closePromptOpen, restoredFromBackup, captureSnapshot, clearBackup, onClose]);
 
   /**
    * 关闭应用 / 刷新前再拦一道，尽量别丢没保存的内容。
@@ -739,6 +742,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
    * 坐标由外壳按物理像素给，这里换算成网页像素再和窗格矩形比。
    */
   useEffect(() => {
+    if (!active) return;
     return subscribeFileDrop((event) => {
       const pane = paneRef.current;
       const point =
@@ -760,7 +764,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
       }
       setDragActive(inside);
     });
-  }, [addAttachmentPaths]);
+  }, [active, addAttachmentPaths]);
 
   const chooseSuggestion = useCallback(
     (contact: Contact) => {
@@ -807,7 +811,7 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
   }, [clearBackup, onClose]);
 
   return (
-    <section className="compose-pane" aria-label={t("写信窗格")} ref={paneRef}>
+    <section className="compose-pane" aria-label={t("写信窗格")} ref={paneRef} hidden={!active} style={active ? undefined : { display: "none" }}>
       <header className="compose-head">
         <h3>
           {title}

@@ -122,6 +122,7 @@ export default function App() {
   }, []);
 
   const handleComposeSeedConsumed = useCallback(() => setComposeSeed(undefined), []);
+  const handleNotificationOpen = useCallback(() => setMode("inbox"), []);
 
   return (
     <>
@@ -134,6 +135,7 @@ export default function App() {
           <InboxPanel
             composeSeed={composeSeed}
             onComposeSeedConsumed={handleComposeSeedConsumed}
+            onNotificationOpen={handleNotificationOpen}
           />
         }
         contacts={<ContactsWorkspace onCompose={handleComposeToContact} />}

@@ -479,10 +479,22 @@ fn started_by_autostart() -> bool {
 
 /// 显示主窗口并置前。
 pub(crate) fn show_main_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+    // 通知回调来自后台线程；窗口操作排到主线程，保证恢复后再请求焦点。
+    let handle = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || {
+        if let Some(window) = handle.get_webview_window("main") {
+            if let Err(error) = window.show() {
+                tracing::debug!(error = %error, "显示主窗口失败");
+            }
+            if let Err(error) = window.unminimize() {
+                tracing::debug!(error = %error, "恢复主窗口失败");
+            }
+            if let Err(error) = window.set_focus() {
+                tracing::debug!(error = %error, "主窗口置前失败");
+            }
+        }
+    }) {
+        tracing::debug!(error = %error, "调度主窗口置前失败");
     }
 }
 

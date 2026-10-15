@@ -1132,6 +1132,38 @@ textarea:focus {
   background: transparent;
 }
 
+/* 分隔线叠在交界处，不增加栏间空隙；拖动范围仍为原来的 2 像素。 */
+.pane-resizer::before,
+.reader-resizer::before {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  background: var(--line);
+}
+
+.reader-resizer::before {
+  inset-inline: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.pane-resizer::before {
+  inset-block: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+.pane-resizer:hover::before,
+.pane-resizer:focus-visible::before,
+.pane-resizer[data-dragging]::before,
+.reader-resizer:hover::before,
+.reader-resizer:focus-visible::before,
+.reader-resizer[data-dragging]::before {
+  background: color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
 .reader-resizer:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
@@ -1302,9 +1334,84 @@ textarea:focus {
   border-bottom: 1px solid var(--line);
 }
 
-.inbox-search input {
-  flex: 1 1 260px;
-  min-width: 180px;
+.inbox-search-field {
+  display: flex;
+  align-items: center;
+  flex: 1 1 180px;
+  min-width: 0;
+  gap: 10px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
+  cursor: text;
+}
+
+.inbox-search-field:focus-within {
+  border-color: var(--accent);
+  outline: 2px solid var(--state-focus-ring);
+  outline-offset: 1px;
+}
+
+.inbox-search-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--text-muted);
+}
+
+.inbox-search-field input {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  height: var(--input-height);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.inbox-search-field input:focus {
+  outline: none;
+}
+
+.inbox-search-shortcut {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--font-small);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.inbox-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.inbox-search-clear:hover:not(:disabled) {
+  background: var(--state-hover-bg);
+  color: var(--text);
+}
+
+.inbox-search-clear svg {
+  width: 14px;
+  height: 14px;
 }
 
 .inbox-search-note {

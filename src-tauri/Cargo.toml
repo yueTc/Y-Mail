@@ -49,6 +49,8 @@ tauri-plugin-single-instance = "2.5.2"
 # 复制验证码到系统剪贴板（只在 Windows 用到）。
 [target.'cfg(windows)'.dependencies]
 arboard = { version = "3", default-features = false }
+# 直接保留系统点击回调，避免横幅消失后丢失通知中心的点击。
+tauri-winrt-notification = "0.8.1"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

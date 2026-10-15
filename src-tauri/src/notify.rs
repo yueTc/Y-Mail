@@ -337,6 +337,9 @@ fn notify_verification(app: &AppHandle, item: &NewMailEvent, finding: Verificati
 /// 用户点击通知按钮后要执行的动作；只有通过本地校验的值才会走到这里。
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SafeAction {
+    /// 点击通知本身，只打开内部提供编号的邮件。
+    #[cfg(windows)]
+    ReadMessage(i64),
     /// 复制校验通过的验证码。
     Copy(String),
     /// 用系统默认浏览器打开校验通过的验证链接。
@@ -355,59 +358,91 @@ fn safe_action_value(action: &str, code: Option<&str>, link: Option<&str>) -> Op
     }
 }
 
-/// Windows：弹带「复制验证码」「打开验证链接」按钮的原生通知，并请求系统「长」档停留。
-///
-/// 按钮点击才触发动作；动作标识 `copy_code` / `open_link` 只在内部匹配，不展示给用户。
-/// 通知句柄必须留着等事件，所以这里另起线程等用户点击，不阻塞后台轮询。
+/// 两类通知共用响应分流；按钮与通知本身的点击必须分开处理。
+#[cfg(windows)]
+fn notification_response_action(
+    response: &notify_rust::NotificationResponse,
+    message_id: i64,
+    code: Option<&str>,
+    link: Option<&str>,
+) -> Option<SafeAction> {
+    match response {
+        notify_rust::NotificationResponse::Default if message_id > 0 => {
+            Some(SafeAction::ReadMessage(message_id))
+        }
+        notify_rust::NotificationResponse::Action(action) => safe_action_value(action, code, link),
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+fn handle_notification_response(
+    app: &AppHandle,
+    response: &notify_rust::NotificationResponse,
+    message_id: i64,
+    code: Option<&str>,
+    link: Option<&str>,
+) {
+    match notification_response_action(response, message_id, code, link) {
+        Some(SafeAction::ReadMessage(id)) => open_message_from_notification(app, id),
+        Some(SafeAction::Copy(text)) => {
+            if let Err(error) = copy_to_clipboard(&text) {
+                tracing::debug!(error = %error, "复制验证码失败");
+            }
+        }
+        Some(SafeAction::Open(url)) => {
+            if let Err(error) = crate::commands::open_in_browser(&url) {
+                tracing::debug!(error = %error, "打开验证链接失败");
+            }
+        }
+        None => {}
+    }
+}
+
+/// Windows：验证通知保留原生按钮和长档停留，通知本身的点击仍然打开邮件。
 #[cfg(windows)]
 fn show_verification_notification(app: &AppHandle, item: &NewMailEvent, finding: VerificationFinding) {
     let app_id = notification_app_id(app);
     let (first_line, second_line) = verification_lines(&finding);
-    let code = finding.code.clone();
-    let link = finding.link.clone();
-
-    let mut notification = notify_rust::Notification::new();
-    notification
-        .summary(&item.from)
-        .subtitle(&first_line)
-        .body(&second_line)
-        .app_id(&app_id)
-        .timeout(notify_rust::Timeout::Never);
-    if code.is_some() {
-        notification.action("copy_code", "复制验证码");
+    let mut toast = tauri_winrt_notification::Toast::new(&app_id)
+        .title(&item.from)
+        .text1(&first_line)
+        .text2(&second_line)
+        .duration(tauri_winrt_notification::Duration::Long);
+    if finding.code.is_some() {
+        toast = toast.add_button("复制验证码", "copy_code");
     }
-    if link.is_some() {
-        notification.action("open_link", "打开验证链接");
+    if finding.link.is_some() {
+        toast = toast.add_button("打开验证链接", "open_link");
     }
+    show_windows_toast(app, toast, item.message_id, Some(finding));
+}
 
-    let handle = match notification.show() {
-        Ok(handle) => handle,
-        Err(error) => {
-            tracing::debug!(error = %error, "弹验证通知失败");
-            return;
-        }
-    };
-
-    let _ = std::thread::spawn(move || {
-        let _ = handle.wait_for_response(move |response: &notify_rust::NotificationResponse| {
-            if let notify_rust::NotificationResponse::Action(action) = response {
-                // 点击时再校验一遍：只有通过白名单的值才复制或打开，失败只记通用错误。
-                match safe_action_value(action.as_str(), code.as_deref(), link.as_deref()) {
-                    Some(SafeAction::Copy(text)) => {
-                        if let Err(error) = copy_to_clipboard(&text) {
-                            tracing::debug!(error = %error, "复制验证码失败");
-                        }
-                    }
-                    Some(SafeAction::Open(url)) => {
-                        if let Err(error) = crate::commands::open_in_browser(&url) {
-                            tracing::debug!(error = %error, "打开验证链接失败");
-                        }
-                    }
-                    None => {}
-                }
-            }
-        });
+/// 直接注册系统点击回调，不在横幅超时消失时结束监听。
+///
+/// notify-rust 的 wait_for_response 只消费第一个事件；若先收到超时关闭，
+/// 通知中心后续点击就会丢失。底层回调没有这条单次接收限制，也不需要等待线程。
+#[cfg(windows)]
+fn show_windows_toast(
+    app: &AppHandle,
+    toast: tauri_winrt_notification::Toast,
+    message_id: i64,
+    finding: Option<VerificationFinding>,
+) {
+    let app = app.clone();
+    let toast = toast.on_activated(move |action| {
+        let response = action.map_or(
+            notify_rust::NotificationResponse::Default,
+            notify_rust::NotificationResponse::Action,
+        );
+        let code = finding.as_ref().and_then(|item| item.code.as_deref());
+        let link = finding.as_ref().and_then(|item| item.link.as_deref());
+        handle_notification_response(&app, &response, message_id, code, link);
+        Ok(())
     });
+    if let Err(error) = toast.show() {
+        tracing::debug!(error = %error, "弹系统通知失败");
+    }
 }
 
 /// 把文本写进系统剪贴板；只在 Windows 用到。
@@ -471,25 +506,10 @@ pub fn register_notification_identity(_app: &AppHandle) {}
 #[cfg(windows)]
 fn show_system_notification(app: &AppHandle, title: String, body: String, message_id: i64) {
     let app_id = notification_app_id(app);
-    let mut notification = notify_rust::Notification::new();
-    notification.summary(&title).body(&body).app_id(&app_id);
-    let handle = match notification.show() {
-        Ok(handle) => handle,
-        Err(error) => {
-            tracing::debug!(error = %error, "弹系统通知失败");
-            return;
-        }
-    };
-    // 通知句柄必须留着等用户点击，所以另起线程等响应，不阻塞后台轮询。
-    let app = app.clone();
-    let _ = std::thread::spawn(move || {
-        let _ = handle.wait_for_response(move |response: &notify_rust::NotificationResponse| {
-            // 只有点了通知体（Default）才打开邮件；其它响应一律忽略。
-            if matches!(response, notify_rust::NotificationResponse::Default) {
-                open_message_from_notification(&app, message_id);
-            }
-        });
-    });
+    let toast = tauri_winrt_notification::Toast::new(&app_id)
+        .title(&title)
+        .text2(&body);
+    show_windows_toast(app, toast, message_id, None);
 }
 
 /// 用户点了通知体：把主窗口叫回前台，再让界面定位并打开那封邮件。
@@ -518,6 +538,64 @@ mod tests {
     #[cfg(windows)]
     use super::{notification_display_name, DEFAULT_NOTIFICATION_NAME};
     use mail_core::VerificationFinding;
+
+    #[cfg(windows)]
+    #[test]
+    fn 点击两类通知本身都打开内部编号对应的邮件() {
+        use notify_rust::NotificationResponse;
+        assert_eq!(
+            super::notification_response_action(&NotificationResponse::Default, 42, None, None),
+            Some(SafeAction::ReadMessage(42))
+        );
+        assert_eq!(
+            super::notification_response_action(
+                &NotificationResponse::Default,
+                42,
+                Some("482913"),
+                Some("https://example.com/verify")
+            ),
+            Some(SafeAction::ReadMessage(42))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn 通知按钮保留原动作且关闭和无效编号不打开邮件() {
+        use notify_rust::{CloseReason, NotificationResponse};
+        assert_eq!(
+            super::notification_response_action(
+                &NotificationResponse::Action("copy_code".into()),
+                42,
+                Some("482913"),
+                None
+            ),
+            Some(SafeAction::Copy("482913".into()))
+        );
+        assert_eq!(
+            super::notification_response_action(
+                &NotificationResponse::Action("open_link".into()),
+                42,
+                None,
+                Some("https://example.com/verify")
+            ),
+            Some(SafeAction::Open("https://example.com/verify".into()))
+        );
+        for response in [
+            NotificationResponse::Closed(CloseReason::Dismissed),
+            NotificationResponse::Closed(CloseReason::Expired),
+            NotificationResponse::Action("unknown".into()),
+            NotificationResponse::Reply("https://example.com".into()),
+        ] {
+            assert_eq!(
+                super::notification_response_action(&response, 42, Some("482913"), None),
+                None
+            );
+        }
+        assert_eq!(
+            super::notification_response_action(&NotificationResponse::Default, 0, None, None),
+            None
+        );
+    }
 
     #[test]
     fn classify_drain_stops_when_switch_is_off() {

@@ -52,8 +52,8 @@ import { t } from "./i18n";
 /** 每页条数；外壳上限是 500。 */
 const PAGE_SIZE = 200;
 
-/** 搜索框的占位提示；完整命令在输入 --help 后弹窗说明。 */
-export const SEARCH_PLACEHOLDER = "按 Ctrl+K 聚焦，输入 --help 查看命令使用方法";
+/** 搜索框的简短提示；完整命令仍可输入 --help 查看。 */
+export const SEARCH_PLACEHOLDER = "输入 --help 查看搜索语法";
 
 
 /** 列表里的一行：线程、平铺邮件、展开出来的子邮件，或一条搜索命中。 */
@@ -488,10 +488,12 @@ type InboxPanelProps = {
   composeSeed?: InboxComposeSeed;
   /** 请求被消费后的回调，让外壳清空，避免重复打开。 */
   onComposeSeedConsumed?: () => void;
+  /** 系统通知被点击时，让外壳切回收件箱。 */
+  onNotificationOpen?: () => void;
 };
 
 /** 统一收件箱面板。 */
-export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: InboxPanelProps) {
+export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotificationOpen }: InboxPanelProps) {
   const [summary, setSummary] = useState<InboxSummary>();
   const [folders, setFolders] = useState<InboxFolder[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<number>();
@@ -509,11 +511,15 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   const [messages, setMessages] = useState<InboxMessage[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  // 删除账号后，即使查询条件没变，也重新读取列表并清掉会话缓存。
+  const [accountRevision, setAccountRevision] = useState(0);
   const [error, setError] = useState<string>();
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [children, setChildren] = useState<Map<string, InboxMessage[]>>(new Map());
   const [selectedMessage, setSelectedMessage] = useState<InboxMessage>();
+  const readingRequest = useRef(0);
+  const [notificationError, setNotificationError] = useState<string>();
   // 一次性短提示，例如「未读筛选下已移出列表」。
   const [statusNote, setStatusNote] = useState("");
 
@@ -525,21 +531,27 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string>();
   const [searchNote, setSearchNote] = useState("");
-  // 联网补历史必须用户显式点击，单独给一个忙碌标记。
-  const [searchDeepBusy, setSearchDeepBusy] = useState(false);
+  // 清空后忽略尚未返回的旧搜索，避免结果重新出现。
+  const searchRequest = useRef(0);
   // 搜索命令说明弹窗；输入 --help 后打开，不发起搜索请求。
   const [searchHelpOpen, setSearchHelpOpen] = useState(false);
 
   // 写信窗格的打开请求；为空表示当前在收件箱。
   const [composeRequest, setComposeRequest] = useState<ComposeRequest>();
+  // 通知读信期间保留写信组件，避免未保存的正文丢失。
+  const [readingNotification, setReadingNotification] = useState(false);
+  useEffect(() => setReadingNotification(false), [composeRequest]);
   // 有没有启用的 AI 站点；只控制按钮是否可用，不触发任何请求。
   const [aiEnabled, setAiEnabled] = useState(false);
   // 已经消费过的通讯录写信请求，用来挡住重复触发。
   const consumedComposeSeed = useRef<InboxComposeSeed | undefined>(undefined);
   // 邮箱栏「添加邮箱」弹窗；保存成功后选中新账号。
   const [addAccountOpen, setAddAccountOpen] = useState(false);
-  // 邮箱栏右键菜单：落在哪个账号上、鼠标位置在哪。
-  const [accountMenu, setAccountMenu] = useState<{ accountId: number; x: number; y: number }>();
+  // 没有账号表示在邮箱栏空白处打开菜单。
+  const [accountMenu, setAccountMenu] = useState<{ account?: AccountInboxSummary; x: number; y: number }>();
+  const [deleteAccountConfirm, setDeleteAccountConfirm] = useState<AccountInboxSummary>();
+  const [accountDeleteBusy, setAccountDeleteBusy] = useState(false);
+  const [accountDeleteError, setAccountDeleteError] = useState("");
   // 文件夹右键菜单：落在哪个文件夹上、鼠标位置在哪。
   const [folderMenu, setFolderMenu] = useState<{ folder: InboxFolder; x: number; y: number }>();
   // 文件夹操作弹窗：新建根文件夹 / 新建子文件夹 / 重命名 / 删除。
@@ -701,7 +713,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, listThreadMode]);
+  }, [query, listThreadMode, accountRevision]);
 
   /** 总览与文件夹：第一次进来拉一次，之后点刷新再拉。 */
   const refreshSidebar = useCallback(async () => {
@@ -739,10 +751,27 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   }, [accountMenu]);
 
   /** 右键账号：在鼠标位置开菜单。 */
-  const openAccountMenu = useCallback((event: ReactMouseEvent, accountId: number) => {
+  const openAccountMenu = useCallback((event: ReactMouseEvent, account: AccountInboxSummary) => {
     event.preventDefault();
     event.stopPropagation();
-    setAccountMenu({ accountId, x: event.clientX, y: event.clientY });
+    setFolderMenu(undefined);
+    setMessageMenu(undefined);
+    setAccountMenu({ account, x: event.clientX, y: event.clientY });
+  }, []);
+
+  /** 只接收邮箱栏自身的空白，避免覆盖账号、文件夹等按钮的菜单。 */
+  const openSidebarMenu = useCallback((event: ReactMouseEvent) => {
+    if (event.target !== event.currentTarget) return;
+    event.preventDefault();
+    setFolderMenu(undefined);
+    setMessageMenu(undefined);
+    setAccountMenu({ x: event.clientX, y: event.clientY });
+  }, []);
+
+  const openDeleteAccountDialog = useCallback((account: AccountInboxSummary) => {
+    setAccountMenu(undefined);
+    setAccountDeleteError("");
+    setDeleteAccountConfirm(account);
   }, []);
 
   /** 打开账号编辑弹窗：邮箱栏只有账号摘要，先取回完整账号再开。 */
@@ -778,6 +807,8 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   const openFolderMenu = useCallback((event: ReactMouseEvent, folder: InboxFolder) => {
     event.preventDefault();
     event.stopPropagation();
+    setAccountMenu(undefined);
+    setMessageMenu(undefined);
     setFolderMenu({ folder, x: event.clientX, y: event.clientY });
   }, []);
 
@@ -884,6 +915,8 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   const openMessageMenu = useCallback((event: ReactMouseEvent, message: InboxMessage) => {
     event.preventDefault();
     event.stopPropagation();
+    setAccountMenu(undefined);
+    setFolderMenu(undefined);
     const requestId = ++menuRequestId.current;
     setMenuGroups([]);
     setMenuGroupsLoading(true);
@@ -985,7 +1018,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
 
   /**
    * 搜索：默认只查本地，绝不自动联网。
-   * deep=true 时才联网补一批历史，且只能由用户点按钮触发；
+   * deep=true 才允许联网补历史；当前搜索栏不提供该入口。
    * append=true 表示在已有结果后面续一页。
    */
   const runSearch = useCallback(
@@ -996,7 +1029,9 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
         setSearchError(undefined);
         return;
       }
+      const request = ++searchRequest.current;
       if (raw === "") {
+        setSearching(false);
         setSearchRaw("");
         setHits([]);
         setSearchTotal(0);
@@ -1009,7 +1044,6 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
       const offset = append ? hits.length : 0;
       setSearching(true);
       setSearchError(undefined);
-      if (deep) setSearchDeepBusy(true);
       try {
         const page = await api.searchMessages({
           raw,
@@ -1018,6 +1052,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
           limit: PAGE_SIZE,
           deep,
         });
+        if (request !== searchRequest.current) return;
         setSearchRaw(raw);
         setHits((old) => (append ? [...old, ...page.items] : page.items));
         setSearchTotal(page.total);
@@ -1029,10 +1064,9 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
               : "",
         );
       } catch (caught) {
-        setSearchError(describeError(caught));
+        if (request === searchRequest.current) setSearchError(describeError(caught));
       } finally {
-        setSearching(false);
-        if (deep) setSearchDeepBusy(false);
+        if (request === searchRequest.current) setSearching(false);
       }
     },
     [searchInput, selectedAccount, hits.length],
@@ -1083,6 +1117,8 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
 
   /** 退出搜索，回到普通收件箱列表。 */
   const clearSearch = useCallback(() => {
+    searchRequest.current += 1;
+    setSearching(false);
     setSearchInput("");
     setSearchRaw("");
     setHits([]);
@@ -1090,6 +1126,40 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
     setSearchNote("");
     setSearchError(undefined);
   }, []);
+
+  /** 确认后停止该账号同步，再复用现有本机删除功能。 */
+  const confirmDeleteAccount = useCallback(async () => {
+    if (!deleteAccountConfirm || accountDeleteBusy) return;
+    const accountId = deleteAccountConfirm.accountId;
+    setAccountDeleteBusy(true);
+    setAccountDeleteError("");
+    try {
+      await api.stopSync(accountId);
+      await api.deleteAccount(accountId);
+      if (selectedAccount === accountId) {
+        setSelectedAccount(undefined);
+        setSelectedFolder(undefined);
+        setFlaggedView(false);
+        setUnifiedView("inbox");
+      }
+      setSelectedMessage((current) => current?.accountId === accountId ? undefined : current);
+      setExpandedAccounts((current) => {
+        const next = new Set(current);
+        next.delete(accountId);
+        return next;
+      });
+      setSyncStatuses((current) => current.filter((item) => item.accountId !== accountId));
+      clearSearch();
+      setAccountRevision((current) => current + 1);
+      setDeleteAccountConfirm(undefined);
+      setStatusNote(t("已删除账号「{0}」。", [deleteAccountConfirm.displayName || deleteAccountConfirm.email]));
+      await refreshSidebar();
+    } catch (caught) {
+      setAccountDeleteError(describeError(caught));
+    } finally {
+      setAccountDeleteBusy(false);
+    }
+  }, [deleteAccountConfirm, accountDeleteBusy, selectedAccount, clearSearch, refreshSidebar]);
 
   const searchMode = searchRaw !== "";
 
@@ -1196,6 +1266,8 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   /** 打开邮件：本地先乐观标已读，失败回滚并提示；未读筛选下移出列表。 */
   const openMessage = useCallback(
     async (message: InboxMessage) => {
+      const request = ++readingRequest.current;
+      setNotificationError(undefined);
       setSelectedMessage(message.isRead ? message : { ...message, isRead: true });
       if (message.isRead) return;
       setStatusNote("");
@@ -1217,10 +1289,12 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
         await api.setMessageRead(message.id, true);
         await refreshSidebar();
         await load(true);
-        if (unreadOnly) setStatusNote(t("已标为已读，已移出「只看未读」列表"));
+        if (request === readingRequest.current && unreadOnly) setStatusNote(t("已标为已读，已移出「只看未读」列表"));
       } catch (caught) {
-        setSelectedMessage(message);
-        setError(t("标记已读失败：{0}", [describeError(caught)]));
+        if (request === readingRequest.current) {
+          setSelectedMessage(message);
+          setError(t("标记已读失败：{0}", [describeError(caught)]));
+        }
         await load(true);
       }
     },
@@ -1311,32 +1385,42 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
     };
   }, [refreshAll]);
 
-  // 后台弹的系统通知被点击时，外壳会推一条「打开某封邮件」的事件过来；
-  // 收到后按编号取回邮件，刷新列表并定位到它。
+  // 回调跟着当前筛选更新；事件本身只订阅一次，避免刷新时出现监听空档。
+  const notificationHandlers = useRef({ openMessage, onNotificationOpen });
+  useEffect(() => {
+    notificationHandlers.current = { openMessage, onNotificationOpen };
+  }, [openMessage, onNotificationOpen]);
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
+    let latestRequest = 0;
     const start = async () => {
       try {
         const off = await listen<{ messageId: number }>("inbox:open-message", (event) => {
           const messageId = event.payload?.messageId;
-          if (typeof messageId !== "number") return;
+          if (!Number.isSafeInteger(messageId) || messageId <= 0) return;
+          const request = ++latestRequest;
+          setNotificationError(undefined);
+          notificationHandlers.current.onNotificationOpen?.();
           void (async () => {
             try {
               const message = await api.getInboxMessage(messageId);
-              if (!message) return;
-              await refreshAll();
-              await openMessage(message);
+              if (cancelled || request !== latestRequest) return;
+              if (!message) {
+                setNotificationError(t("这封邮件已不存在，可能已被删除或重新同步。"));
+                return;
+              }
+              setReadingNotification(true);
+              setError(undefined);
+              await notificationHandlers.current.openMessage(message);
             } catch (caught) {
-              setError(describeError(caught));
+              if (!cancelled && request === latestRequest) setNotificationError(describeError(caught));
             }
           })();
         });
-        if (cancelled) {
-          off();
-        } else {
-          unlisten = off;
-        }
+        if (cancelled) off();
+        else unlisten = off;
       } catch {
         // 单元测试与浏览器预览里没有 Tauri 事件总线，忽略即可。
       }
@@ -1346,7 +1430,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
       cancelled = true;
       unlisten?.();
     };
-  }, [refreshAll, openMessage]);
+  }, []);
 
   /** 每两秒读一次同步状态；读不到不影响收发，静默即可。 */
   useEffect(() => {
@@ -1382,10 +1466,12 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
 
   /** 统一入口统计所有账号，选中账号后只统计该账号。 */
   const currentSyncStatuses = useMemo(
-    () => selectedAccount === undefined
-      ? syncStatuses
-      : syncStatuses.filter((item) => item.accountId === selectedAccount),
-    [syncStatuses, selectedAccount],
+    // 同步管理器会保留已停止的状态；删除后的账号不再参与数量合计。
+    () => syncStatuses.filter((item) =>
+      summary?.accounts.some((account) => account.accountId === item.accountId)
+      && (selectedAccount === undefined || item.accountId === selectedAccount),
+    ),
+    [syncStatuses, selectedAccount, summary],
   );
   const currentSync = worstSyncStatus(currentSyncStatuses);
 
@@ -1401,6 +1487,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
   }, [selectedAccount]);
 
   const accounts: AccountInboxSummary[] = summary?.accounts ?? [];
+  const menuAccount = accountMenu?.account;
 
   return (
     <>
@@ -1410,7 +1497,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
         gridTemplateColumns: `${widths.sidebar}px ${RESIZER_WIDTH}px ${widths.list}px ${RESIZER_WIDTH}px minmax(0, 1fr)`,
       }}
     >
-      <aside className="inbox-sidebar">
+      <aside className="inbox-sidebar" aria-label={t("邮箱栏")} onContextMenu={openSidebarMenu}>
         {UNIFIED_VIEWS.map((view) => {
           // 收件箱和未读用未读计数；草稿和已发送用本地条数合计；红旗不显示计数。
           const badge =
@@ -1443,7 +1530,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
           <div key={account.accountId} className="sidebar-account">
             <button
               type="button"
-              onContextMenu={(event) => openAccountMenu(event, account.accountId)}
+              onContextMenu={(event) => openAccountMenu(event, account)}
               className={
                 selectedAccount === account.accountId
                   ? "sidebar-item sidebar-account-item active"
@@ -1567,6 +1654,11 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
             }
           >
             {t("转发")}</button>
+          {composeRequest && readingNotification && (
+            <button type="button" onClick={() => setReadingNotification(false)}>
+              {t("继续写信")}
+            </button>
+          )}
           <label
             className="checkbox"
             title={effectiveFlagged ? t("红旗邮件按时间平铺显示，不折会话") : undefined}
@@ -1605,44 +1697,72 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
             <button type="button" onClick={() => void retrySync()}>
               {t("重试")}</button>
           )}
-          <span className="hint">
-            {searchMode
-              ? t("共找到 {0} 封，当前已显示 {1} 封", [searchTotal, hits.length])
-              : t("共 {0} {1}", [total, listThreadMode ? "个会话" : "封邮件"])}
-            {loading || searching ? t("，正在加载……") : ""}
-          </span>
+          {(loading || searching) && <span className="hint">{t("加载中……")}</span>}
         </div>
 
         <div className="inbox-search">
-          <input
-            ref={searchBoxRef}
-            aria-label={t("搜索邮件")}
-            value={searchInput}
-            placeholder={t(SEARCH_PLACEHOLDER)}
-            onChange={(event) => setSearchInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") void runSearch();
-              if (event.key === "Escape" && searchMode) clearSearch();
-            }}
-          />
-          <button type="button" onClick={() => void runSearch()} disabled={searching}>
-            {searching ? t("搜索中……") : t("搜索")}
-          </button>
-          {searchMode && (
-            <>
+          <div className="inbox-search-field">
+            <svg
+              className="inbox-search-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <circle cx="10.5" cy="10.5" r="7" />
+              <path d="m16 16 5 5" />
+            </svg>
+            <input
+              ref={searchBoxRef}
+              aria-label={t("搜索邮件")}
+              aria-keyshortcuts="Control+K Meta+K"
+              aria-busy={searching}
+              title={t("输入 --help 查看命令使用方法")}
+              value={searchInput}
+              placeholder={t(SEARCH_PLACEHOLDER)}
+              onChange={(event) => setSearchInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  // 帮助弹窗会自动聚焦“知道了”；拦住同一次回车继续点击它。
+                  event.preventDefault();
+                  void runSearch();
+                }
+                if (event.key === "Escape" && searchMode) clearSearch();
+              }}
+            />
+            {searchInput.length > 0 ? (
               <button
                 type="button"
-                onClick={() => void runSearch({ deep: true })}
-                disabled={searching}
+                className="inbox-search-clear"
+                aria-label={t("清空搜索")}
+                title={t("清空搜索")}
+                onClick={() => {
+                  clearSearch();
+                  searchBoxRef.current?.focus();
+                }}
               >
-                {searchDeepBusy ? t("联网补历史中……") : t("继续联网补历史")}
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  strokeLinecap="round"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path d="m6 6 12 12M18 6 6 18" />
+                </svg>
               </button>
-              <button type="button" onClick={clearSearch}>
-                {t("退出搜索")}</button>
-            </>
-          )}
+            ) : (
+              <kbd className="inbox-search-shortcut" aria-hidden="true">Ctrl+K</kbd>
+            )}
+          </div>
         </div>
 
+        {notificationError && <p className="error" role="alert">{notificationError}</p>}
         {error && (
           <p className="error" role="alert">
             {t("加载失败：")}{error}
@@ -1755,15 +1875,17 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
       />
 
       <aside className="inbox-reader">
-        {composeRequest ? (
+        {composeRequest && (
           <ComposePanel
             request={composeRequest}
             accounts={accounts}
             onClose={() => setComposeRequest(undefined)}
             onSent={() => void refreshAll()}
             aiEnabled={aiEnabled}
+            active={!readingNotification}
           />
-        ) : (
+        )}
+        {(!composeRequest || readingNotification) && (
           <MessageReader
             message={selectedMessage}
             aiEnabled={aiEnabled}
@@ -1780,24 +1902,46 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
         aria-label={t("邮箱菜单")}
         style={{
           left: Math.min(accountMenu.x, Math.max(8, window.innerWidth - 220)),
-          top: Math.min(accountMenu.y, Math.max(8, window.innerHeight - 120)),
+          top: Math.min(accountMenu.y, Math.max(8, window.innerHeight - (menuAccount ? 140 : 60))),
         }}
         onClick={(event) => event.stopPropagation()}
       >
-        <button
-          type="button"
-          role="menuitem"
-          className="context-menu-item"
-          onClick={() => void editAccount(accountMenu.accountId)}
-        >
-          {t("编辑")}</button>
-        <button
-          type="button"
-          role="menuitem"
-          className="context-menu-item"
-          onClick={() => openCreateFolderDialog(accountMenu.accountId)}
-        >
-          {t("新建文件夹")}</button>
+        {menuAccount ? (
+          <>
+            <button
+              type="button"
+              role="menuitem"
+              className="context-menu-item"
+              onClick={() => void editAccount(menuAccount.accountId)}
+            >
+              {t("编辑")}</button>
+            <button
+              type="button"
+              role="menuitem"
+              className="context-menu-item"
+              onClick={() => openCreateFolderDialog(menuAccount.accountId)}
+            >
+              {t("新建文件夹")}</button>
+            <button
+              type="button"
+              role="menuitem"
+              className="context-menu-item danger"
+              onClick={() => openDeleteAccountDialog(menuAccount)}
+            >
+              {t("删除邮箱")}</button>
+          </>
+        ) : (
+          <button
+            type="button"
+            role="menuitem"
+            className="context-menu-item"
+            onClick={() => {
+              setAccountMenu(undefined);
+              setAddAccountOpen(true);
+            }}
+          >
+            {t("添加邮箱")}</button>
+        )}
       </div>
     )}
 
@@ -2062,6 +2206,44 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed }: Inbox
               onClick={() => setFolderDialog(undefined)}
               disabled={folderBusy}
             >
+              {t("取消")}</button>
+          </div>
+        </section>
+      </div>
+    )}
+
+    {deleteAccountConfirm && (
+      <div className="ai-modal-backdrop" role="presentation">
+        <section
+          className="ai-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("确认删除邮箱")}
+          aria-busy={accountDeleteBusy}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && !accountDeleteBusy) {
+              event.preventDefault();
+              setDeleteAccountConfirm(undefined);
+            }
+            if (event.key === "Tab") {
+              const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not([disabled])"));
+              if (buttons.length === 0) return;
+              const next = event.shiftKey ? buttons[0] : buttons[buttons.length - 1];
+              if (document.activeElement === next) {
+                event.preventDefault();
+                (event.shiftKey ? buttons[buttons.length - 1] : buttons[0]).focus();
+              }
+            }
+          }}
+        >
+          <h3>{t("确认删除邮箱")}</h3>
+          <p>{t("确定删除邮箱「{0}」吗？", [deleteAccountConfirm.displayName || deleteAccountConfirm.email])}</p>
+          <p>{t("将移除本机账号、关联邮件数据和保存的凭据，不会删除服务器上的邮件。")}</p>
+          {accountDeleteError && <p className="error" role="alert">{t("操作失败：")}{accountDeleteError}</p>}
+          <div className="form-actions">
+            <button type="button" className="danger" onClick={() => void confirmDeleteAccount()} disabled={accountDeleteBusy}>
+              {accountDeleteBusy ? t("删除中……") : t("确认删除")}</button>
+            <button type="button" autoFocus onClick={() => setDeleteAccountConfirm(undefined)} disabled={accountDeleteBusy}>
               {t("取消")}</button>
           </div>
         </section>

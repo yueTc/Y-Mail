@@ -112,6 +112,22 @@ afterEach(() => {
 });
 
 describe("写信草稿保护", () => {
+  it("通知读信时暂停写信快捷键，恢复后草稿仍在并重新响应 Esc", async () => {
+    const onClose = vi.fn();
+    const request = { kind: "new" as const };
+    const { rerender } = render(<ComposePanel request={request} accounts={ACCOUNTS} onClose={onClose} />);
+    await waitForReady();
+    fillDraft();
+    rerender(<ComposePanel request={request} accounts={ACCOUNTS} onClose={onClose} active={false} />);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "关闭写信窗格" })).toBeNull();
+    rerender(<ComposePanel request={request} accounts={ACCOUNTS} onClose={onClose} active />);
+    expect((screen.getByLabelText("主题") as HTMLInputElement).value).toBe("季度报告");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(await screen.findByRole("dialog", { name: "关闭写信窗格" })).toBeTruthy();
+  });
+
   it("没有改动时关闭不弹确认框", async () => {
     const onClose = vi.fn();
     renderPanel(onClose);
