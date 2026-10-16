@@ -64,13 +64,8 @@ export type InboxRow =
   | { kind: "search"; key: string; hit: SearchHit };
 
 /**
- * 列表行的像素高度。
- *
- * 行高必须和行里真正渲染的文字对齐：虚拟列表给行盒的高度小于内容时，
- * 多出来的那行会溢到下一行去（会话聚合下「来自 xxx」就是这么溢出来的）。
- * 会话分组标题为单行，使用 40 像素。两行邮件（发件人 + 主题）约 72.7 像素；
- * 会话子邮件多一行「来自 xxx」约
- * 91.9 像素；搜索结果多一行摘要约 95.1 像素。取整后往上留不到 1 像素的余量。
+ * 列表行的初始估值和最小高度，保留现有密度。
+ * 渲染后以实际内容高度更新位置，字号、字体和摘要变化时继续测量。
  */
 export function inboxRowHeight(kind: InboxRow["kind"]): number {
   if (kind === "thread") return 40;
@@ -1195,8 +1190,11 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
     [searchMode, hits, threads, messages, listThreadMode, expanded, children],
   );
 
+  // 普通邮件和搜索结果使用各自的行键，避免按序号复用不同内容的高度。
+  const getRowKey = useCallback((index: number) => rows[index]?.key ?? index, [rows]);
   const virtualizer = useVirtualizer({
     count: rows.length,
+    getItemKey: getRowKey,
     getScrollElement: () => scrollRef.current,
     estimateSize: (index) => {
       const row = rows[index];
@@ -1828,13 +1826,15 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
                 <div
                   key={row.key}
                   className="inbox-virtual-item"
+                  data-index={item.index}
+                  ref={virtualizer.measureElement}
                   style={{
                     position: "absolute",
                     top: 0,
                     left: 0,
                     width: "100%",
                     transform: `translateY(${item.start}px)`,
-                    height: item.size,
+                    minHeight: inboxRowHeight(row.kind),
                   }}
                   onContextMenu={(event) =>
                     openMessageMenu(

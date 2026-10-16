@@ -776,7 +776,7 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 100%;
+  min-height: inherit;
   padding: 8px 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
   cursor: default;
