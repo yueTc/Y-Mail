@@ -191,15 +191,19 @@ describe("按文件夹类型计数", () => {
     childCreateBlocked: false,
   };
 
-  it("草稿和已发送按类型合计，别的类型不算进来", () => {
+  it("草稿、已发送、垃圾邮件和已删除按类型合计，别的类型不算进来", () => {
     const folders = [
       base,
       { ...base, folderId: 2, fullPath: "草稿箱", kind: "draft", messageCount: 3 },
       { ...base, accountId: 2, folderId: 3, fullPath: "草稿箱", kind: "draft", messageCount: 4 },
       { ...base, folderId: 4, fullPath: "已发送", kind: "sent", messageCount: 6 },
+      { ...base, accountId: 2, folderId: 5, fullPath: "垃圾邮件", kind: "junk", messageCount: 8 },
+      { ...base, folderId: 6, fullPath: "已删除", kind: "trash", messageCount: 9 },
     ];
     expect(folderKindMessageCount(folders, "draft")).toBe(7);
     expect(folderKindMessageCount(folders, "sent")).toBe(6);
+    expect(folderKindMessageCount(folders, "junk")).toBe(8);
+    expect(folderKindMessageCount(folders, "trash")).toBe(9);
     expect(folderKindMessageCount(folders, "flagged")).toBe(0);
   });
 });

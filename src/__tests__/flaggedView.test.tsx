@@ -190,6 +190,13 @@ async function openAccount(): Promise<string[]> {
     .map((button) => (button.textContent ?? "").trim());
 }
 
+/** 展开账号后，账号文件夹区里那条「红旗邮件」，避开顶部同名统一入口。 */
+function accountFlaggedButton(): HTMLButtonElement {
+  const folders = document.querySelector(".sidebar-folders");
+  if (!folders) throw new Error("没有找到账号文件夹区");
+  return within(folders as HTMLElement).getByRole("button", { name: /红旗邮件/ });
+}
+
 describe("红旗邮件入口", () => {
   it("排在账号收件箱下面，垃圾邮件之类的照旧跟在后面", async () => {
     const labels = await openAccount();
@@ -202,7 +209,7 @@ describe("红旗邮件入口", () => {
   it("点一下按账号只看标红邮件，并且不折会话", async () => {
     await openAccount();
     const threadsBefore = vi.mocked(api.listInboxThreads).mock.calls.length;
-    fireEvent.click(screen.getByRole("button", { name: /红旗邮件/ }));
+    fireEvent.click(accountFlaggedButton());
 
     await waitFor(() =>
       expect(api.listInboxMessages).toHaveBeenCalledWith(
@@ -219,7 +226,7 @@ describe("红旗邮件入口", () => {
 
   it("一封标红邮件都没有时，给出专门的说法", async () => {
     await openAccount();
-    fireEvent.click(screen.getByRole("button", { name: /红旗邮件/ }));
+    fireEvent.click(accountFlaggedButton());
     await waitFor(() =>
       expect(screen.getByText("还没有标红的邮件。在列表里点星星就能标红。")).toBeTruthy(),
     );
@@ -239,30 +246,44 @@ describe("顶部统一区入口", () => {
     expect(groupingButton.getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("收件箱下面排着未读 / 红旗 / 草稿 / 已发送", async () => {
+  it("写邮件不在统一入口里，七个入口按参考图排列并带图标", async () => {
     render(<InboxPanel />);
     await screen.findByRole("button", { name: /测试账号/ });
+
+    const compose = screen.getByRole("button", { name: "写邮件" });
+    expect(compose.classList.contains("sidebar-compose")).toBe(true);
+
     const labels = Array.from(document.querySelectorAll(".inbox-sidebar .sidebar-item")).map(
       (element) => (element.textContent ?? "").replace(/\d+$/, "").trim(),
     );
     expect(labels).toEqual([
       "收件箱",
-      "所有未读",
-      "所有红旗",
-      "所有草稿",
-      "所有已发送",
+      "未读邮件",
+      "红旗邮件",
+      "草稿箱",
+      "已发送",
+      "垃圾邮件",
+      "已删除",
       "测试账号",
       "＋ 添加邮箱",
     ]);
+
+    const viewButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".sidebar-view-item"));
+    expect(viewButtons).toHaveLength(7);
+    expect(
+      viewButtons.every((button) =>
+        button.querySelector('svg.sidebar-view-icon[aria-hidden="true"]'),
+      ),
+    ).toBe(true);
   });
 
-  it("点「所有草稿」按文件夹类型查，点「所有红旗」按红旗查", async () => {
+  it("点「草稿箱」按文件夹类型查，点「红旗邮件」按红旗查", async () => {
     render(<InboxPanel />);
     await screen.findByRole("button", { name: /测试账号/ });
 
     // 会话聚合默认关闭，这里手动打开，验证草稿在聚合模式下走线程接口。
     fireEvent.click(screen.getByRole("button", { name: "按会话聚合" }));
-    fireEvent.click(screen.getByRole("button", { name: /所有草稿/ }));
+    fireEvent.click(screen.getByRole("button", { name: /草稿箱/ }));
     // 草稿不受红旗影响，会话聚合照用户开关来，所以走线程接口。
     await waitFor(() =>
       expect(api.listInboxThreads).toHaveBeenCalledWith(
@@ -270,7 +291,7 @@ describe("顶部统一区入口", () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /所有红旗/ }));
+    fireEvent.click(screen.getByRole("button", { name: /红旗邮件/ }));
     await waitFor(() =>
       expect(api.listInboxMessages).toHaveBeenCalledWith(
         expect.objectContaining({ flaggedOnly: true }),
@@ -284,7 +305,7 @@ describe("顶部统一区入口", () => {
     );
   });
 
-  it("点「所有未读」只看未读，并把那个开关锁住", async () => {
+  it("点「未读邮件」只看未读，并把那个开关锁住", async () => {
     render(<InboxPanel />);
     await screen.findByRole("button", { name: /测试账号/ });
 
@@ -296,7 +317,7 @@ describe("顶部统一区入口", () => {
 
     // 先手动打开会话聚合，验证未读筛选在聚合模式下走线程接口。
     fireEvent.click(screen.getByRole("button", { name: "按会话聚合" }));
-    fireEvent.click(screen.getByRole("button", { name: /所有未读/ }));
+    fireEvent.click(screen.getByRole("button", { name: /未读邮件/ }));
     await waitFor(() =>
       expect(api.listInboxThreads).toHaveBeenCalledWith(
         expect.objectContaining({ unreadOnly: true }),
@@ -305,6 +326,25 @@ describe("顶部统一区入口", () => {
     const lockedUnreadButton = screen.getByRole("button", { name: "只看未读" }) as HTMLButtonElement;
     expect(lockedUnreadButton.getAttribute("aria-pressed")).toBe("true");
     expect(lockedUnreadButton.disabled).toBe(true);
+  });
+
+  it("「垃圾邮件」和「已删除」都按文件夹类型跨账号查", async () => {
+    render(<InboxPanel />);
+    await screen.findByRole("button", { name: /测试账号/ });
+
+    fireEvent.click(screen.getByRole("button", { name: /垃圾邮件/ }));
+    await waitFor(() =>
+      expect(api.listInboxMessages).toHaveBeenCalledWith(
+        expect.objectContaining({ folderKind: "junk" }),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /已删除/ }));
+    await waitFor(() =>
+      expect(api.listInboxMessages).toHaveBeenCalledWith(
+        expect.objectContaining({ folderKind: "trash" }),
+      ),
+    );
   });
 });
 describe("左侧账号展开", () => {

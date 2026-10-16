@@ -640,6 +640,32 @@ textarea:focus {
   overflow-y: auto;
 }
 
+.sidebar-compose {
+  width: 100%;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
+.sidebar-compose-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .inbox-reader {
   display: flex;
   padding: 0;
@@ -661,6 +687,65 @@ textarea:focus {
 /* 选中态收敛：一层淡淡的底色 + 强调色文字，不再描一圈亮边框。 */
 .sidebar-item.active {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+
+/* 顶部统一入口：普通态灰色，选中态整行和计数胶囊一起跟随主题色。 */
+.sidebar-view-item {
+  min-height: 40px;
+  gap: 10px;
+  margin-bottom: 2px;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.sidebar-view-item:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--state-hover-bg);
+}
+
+.sidebar-view-item.active,
+.sidebar-view-item.active:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+
+.sidebar-view-icon {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-view-icon-flag {
+  stroke: var(--danger);
+}
+
+.sidebar-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-width: 26px;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  color: var(--text-muted);
+  font-size: var(--font-tiny);
+  font-weight: 600;
+  line-height: 1;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-view-item.active .sidebar-count {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--accent);
 }
 

@@ -128,22 +128,96 @@ export function accountSidebarEntries(
 }
 
 /**
- * 顶部统一区的入口：收件箱 / 未读 / 红旗 / 草稿 / 已发送。
+ * 顶部统一区的入口：收件箱 / 未读 / 红旗 / 草稿 / 已发送 / 垃圾邮件 / 已删除。
  *
  * 参考图里的「所有最近查看」按用户要求不做，所以这里没有那一项。
  */
-export type UnifiedView = "inbox" | "unread" | "flagged" | "draft" | "sent";
+export type UnifiedView =
+  | "inbox"
+  | "unread"
+  | "flagged"
+  | "draft"
+  | "sent"
+  | "junk"
+  | "trash";
 
 /** 顶部统一区的入口顺序，照着参考图来。 */
 export const UNIFIED_VIEWS: ReadonlyArray<{ id: UnifiedView; label: string }> = [
   { id: "inbox", label: "收件箱" },
-  { id: "unread", label: "所有未读" },
-  { id: "flagged", label: "所有红旗" },
-  { id: "draft", label: "所有草稿" },
-  { id: "sent", label: "所有已发送" },
+  { id: "unread", label: "未读邮件" },
+  { id: "flagged", label: "红旗邮件" },
+  { id: "draft", label: "草稿箱" },
+  { id: "sent", label: "已发送" },
+  { id: "junk", label: "垃圾邮件" },
+  { id: "trash", label: "已删除" },
 ];
 
-/** 某一类文件夹（草稿、已发送）在各账号下的邮件合计。 */
+/** 统一入口的装饰图标：只负责造型，按钮文字已经给出可读名称。 */
+function UnifiedViewIcon({ view }: { view: UnifiedView }) {
+  const iconProps = {
+    viewBox: "0 0 24 24",
+    className: "sidebar-view-icon",
+    "aria-hidden": "true",
+    focusable: "false",
+  } as const;
+
+  switch (view) {
+    case "inbox":
+      return (
+        <svg {...iconProps}>
+          <path d="M4 5h16v14H4z" />
+          <path d="M4 9h4l2 2h4l2-2h4" />
+        </svg>
+      );
+    case "unread":
+      return (
+        <svg {...iconProps}>
+          <path d="M4 10h16v9H4z" />
+          <path d="m4 10 8 6 8-6" />
+          <path d="m4 10 5-5h6l5 5" />
+        </svg>
+      );
+    case "flagged":
+      return (
+        <svg {...iconProps}>
+          <path d="M6 21V4" />
+          <path d="M6 4h11l-2.5 3.5L17 11H6" />
+          <path className="sidebar-view-icon-flag" d="M14 4h3v4" />
+        </svg>
+      );
+    case "draft":
+      return (
+        <svg {...iconProps}>
+          <path d="M5 3h9l5 5v13H5z" />
+          <path d="M14 3v5h5M8 13h7M8 17h5" />
+        </svg>
+      );
+    case "sent":
+      return (
+        <svg {...iconProps}>
+          <path d="m21 3-7 18-4-7-7-4 18-7Z" />
+          <path d="m10 14 11-11" />
+        </svg>
+      );
+    case "junk":
+      return (
+        <svg {...iconProps}>
+          <path d="M12 3 20 6v5c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6l8-3Z" />
+          <path d="M12 8v5M12 16h.01" />
+        </svg>
+      );
+    case "trash":
+      return (
+        <svg {...iconProps}>
+          <path d="M4 7h16M9 4h6l1 3H8l1-3Z" />
+          <path d="m7 7 1 14h8l1-14" />
+          <path d="M10 11v6M14 11v6" />
+        </svg>
+      );
+  }
+}
+
+/** 某一类文件夹（草稿、已发送、垃圾邮件、已删除）在各账号下的邮件合计。 */
 export function folderKindMessageCount(
   folders: readonly InboxFolder[],
   kind: string,
@@ -610,13 +684,19 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
 
   // 顶部统一区的入口只在没选具体账号 / 文件夹时生效。
   const inUnified = selectedAccount === undefined && selectedFolder === undefined;
-  /** 红旗范围：账号里的「红旗邮件」，或顶部「所有红旗」。 */
+  /** 红旗范围：账号里的「红旗邮件」，或顶部统一入口「红旗邮件」。 */
   const effectiveFlagged = flaggedView || (inUnified && unifiedView === "flagged");
-  /** 未读范围：用户自己的「只看未读」开关，或顶部「所有未读」。 */
+  /** 未读范围：用户自己的「只看未读」开关，或顶部统一入口「未读邮件」。 */
   const effectiveUnread = unreadOnly || (inUnified && unifiedView === "unread");
-  /** 文件夹类型范围：顶部「所有草稿」「所有已发送」。 */
+  /** 文件夹类型范围：顶部草稿箱、已发送、垃圾邮件、已删除。 */
   const effectiveFolderKind =
-    inUnified && (unifiedView === "draft" || unifiedView === "sent") ? unifiedView : undefined;
+    inUnified &&
+    (unifiedView === "draft" ||
+      unifiedView === "sent" ||
+      unifiedView === "junk" ||
+      unifiedView === "trash")
+      ? unifiedView
+      : undefined;
 
   /** 红旗视图按时间平铺，不折会话；其他视图照用户自己的开关来。 */
   const listThreadMode = threadMode && !effectiveFlagged;
@@ -1520,8 +1600,25 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
       }}
     >
       <aside className="inbox-sidebar" aria-label={t("邮箱栏")} onContextMenu={openSidebarMenu}>
+        <button
+          type="button"
+          className="sidebar-compose"
+          onClick={() => setComposeRequest({ kind: "new" })}
+        >
+          <svg
+            className="sidebar-compose-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path d="M4 20h4L18.5 9.5a2.12 2.12 0 0 0-3-3L5 17v3Z" />
+            <path d="m13.5 7.5 3 3" />
+          </svg>
+          <span>{t("写邮件")}</span>
+        </button>
+
         {UNIFIED_VIEWS.map((view) => {
-          // 收件箱和未读用未读计数；草稿和已发送用本地条数合计；红旗不显示计数。
+          // 收件箱和未读用未读计数；草稿、已发送、垃圾邮件和已删除用本地条数合计；红旗不显示计数。
           const badge =
             view.id === "inbox" || view.id === "unread"
               ? (summary?.totalUnread ?? 0)
@@ -1532,8 +1629,8 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
               type="button"
               className={
                 selectedAccount === undefined && unifiedView === view.id
-                  ? "sidebar-item active"
-                  : "sidebar-item"
+                  ? "sidebar-item sidebar-view-item active"
+                  : "sidebar-item sidebar-view-item"
               }
               onClick={() => {
                 setSelectedAccount(undefined);
@@ -1542,8 +1639,9 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
                 setUnifiedView(view.id);
               }}
             >
+              <UnifiedViewIcon view={view.id} />
               <span className="sidebar-item-title">{t(view.label)}</span>
-              {badge > 0 && <span className="unread-badge">{badge}</span>}
+              {badge > 0 && <span className="sidebar-count">{badge}</span>}
             </button>
           );
         })}
@@ -1652,12 +1750,6 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
 
       <section className="inbox-main">
         <div className="inbox-toolbar">
-          <button
-            type="button"
-            className="primary"
-            onClick={() => setComposeRequest({ kind: "new" })}
-          >
-            {t("写邮件")}</button>
           {composeRequest && readingNotification && (
             <button type="button" onClick={() => setReadingNotification(false)}>
               {t("继续写信")}
@@ -1695,7 +1787,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
             aria-pressed={effectiveUnread}
             title={
               inUnified && unifiedView === "unread"
-                ? t("「所有未读」已经只看未读了")
+                ? t("「未读邮件」已经只看未读了")
                 : t("只看未读")
             }
             disabled={inUnified && unifiedView === "unread"}

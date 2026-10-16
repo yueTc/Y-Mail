@@ -85,7 +85,7 @@ describe("多邮箱同步数量", () => {
     await waitFor(() => expect(badge.textContent).toBe("等待新邮件 200/200"));
     expect(badge.title).toContain("mail2@example.com");
     expect(badge.title).not.toContain("mail1@example.com");
-    fireEvent.click(screen.getByRole("button", { name: "所有未读" }));
+    fireEvent.click(screen.getByRole("button", { name: /未读邮件/ }));
     await waitFor(() => expect(badge.textContent).toBe("等待新邮件 1536/1556"));
   });
 

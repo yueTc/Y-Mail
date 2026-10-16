@@ -195,7 +195,13 @@ async function openAccount(): Promise<void> {
   render(<InboxPanel />);
   const accountButton = await screen.findByRole("button", { name: /测试账号/ });
   fireEvent.click(accountButton);
-  await screen.findByText("红旗邮件");
+  await waitFor(() =>
+    expect(
+      Array.from(document.querySelectorAll(".sidebar-folders .sidebar-folder")).some(
+        (element) => element.textContent?.includes("红旗邮件"),
+      ),
+    ).toBe(true),
+  );
 }
 
 /** 账号下那条「收件箱」文件夹按钮；统一入口也叫「收件箱」，这里按文件夹类名挑。 */
