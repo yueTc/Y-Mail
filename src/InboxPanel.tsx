@@ -533,6 +533,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
   const [searchNote, setSearchNote] = useState("");
   // 清空后忽略尚未返回的旧搜索，避免结果重新出现。
   const searchRequest = useRef(0);
+  const searchInFlight = useRef(false);
   // 搜索命令说明弹窗；输入 --help 后打开，不发起搜索请求。
   const [searchHelpOpen, setSearchHelpOpen] = useState(false);
 
@@ -1025,10 +1026,11 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
   /**
    * 搜索：默认只查本地，绝不自动联网。
    * deep=true 才允许联网补历史；当前搜索栏不提供该入口。
-   * append=true 表示在已有结果后面续一页。
+   * append=true 表示继续加载未显示的结果，追加到已有列表。
    */
   const runSearch = useCallback(
     async (options?: { deep?: boolean; append?: boolean; raw?: string }) => {
+      if (options?.append && searchInFlight.current) return;
       const raw = (options?.raw ?? searchInput).trim();
       if (raw.toLowerCase() === "--help") {
         setSearchHelpOpen(true);
@@ -1037,6 +1039,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
       }
       const request = ++searchRequest.current;
       if (raw === "") {
+        searchInFlight.current = false;
         setSearching(false);
         setSearchRaw("");
         setHits([]);
@@ -1048,6 +1051,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
       const deep = options?.deep === true;
       const append = options?.append === true;
       const offset = append ? hits.length : 0;
+      searchInFlight.current = true;
       setSearching(true);
       setSearchError(undefined);
       try {
@@ -1072,11 +1076,24 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
       } catch (caught) {
         if (request === searchRequest.current) setSearchError(describeError(caught));
       } finally {
-        if (request === searchRequest.current) setSearching(false);
+        if (request === searchRequest.current) {
+          searchInFlight.current = false;
+          setSearching(false);
+        }
       }
     },
     [searchInput, selectedAccount, hits.length],
   );
+
+  /** 搜索结果滚到列表底部附近时，继续加载未显示的结果。 */
+  const loadMoreSearch = useCallback(() => {
+    if (searchRaw === "" || searching || hits.length >= searchTotal) return;
+    const element = scrollRef.current;
+    if (!element) return;
+    const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    if (distanceToBottom > 240) return;
+    void runSearch({ append: true, raw: searchRaw });
+  }, [searchRaw, searching, hits.length, searchTotal, runSearch]);
 
   /** Ctrl + K（macOS 为 Cmd + K）把焦点送到搜索框。 */
   useEffect(() => {
@@ -1124,6 +1141,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
   /** 退出搜索，回到普通收件箱列表。 */
   const clearSearch = useCallback(() => {
     searchRequest.current += 1;
+    searchInFlight.current = false;
     setSearching(false);
     setSearchInput("");
     setSearchRaw("");
@@ -1189,7 +1207,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
 
   const virtualItems = virtualizer.getVirtualItems();
 
-  /** 滚到接近底部就补下一页；搜索模式下结果已经取全，不再补。 */
+  /** 普通列表按可见行补充邮件；搜索结果由列表滚动事件继续加载。 */
   useEffect(() => {
     if (searchMode) return;
     const last = virtualItems[virtualItems.length - 1];
@@ -1789,21 +1807,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
             {statusNote}
           </p>
         )}
-        {searchMode && hits.length > 0 && hits.length < searchTotal && (
-          <div className="inbox-search-more">
-            <button
-              type="button"
-              onClick={() => void runSearch({ append: true })}
-              disabled={searching}
-            >
-              {searching
-                ? t("加载中……")
-                : t("继续加载（已显示 {0} / {1}）", [hits.length, searchTotal])}
-            </button>
-          </div>
-        )}
-
-        <div className="inbox-scroll" ref={scrollRef}>
+        <div className="inbox-scroll" ref={scrollRef} onScroll={loadMoreSearch}>
           {rows.length === 0 && !loading && !searching && (
             <p className="hint inbox-empty">
               {inboxEmptyHint({

@@ -1115,6 +1115,105 @@ describe("收件箱右键按组修改", () => {
     expect(searchBox.parentElement?.querySelector("kbd")?.textContent).toBe("Ctrl+K");
   });
 
+  it.each([
+    { scenario: "正常续载", failFirst: false },
+    { scenario: "续载失败后重试", failFirst: true },
+  ])("搜索结果滚到列表底部附近继续加载未显示的结果：$scenario", async ({ failFirst }) => {
+    const searchMessage = (id: number, subject: string): InboxMessage => ({
+      id,
+      accountId: 1,
+      folderId: 10,
+      uid: id,
+      threadKey: `search-${id}`,
+      subject,
+      fromName: "张三",
+      fromAddr: "z@example.com",
+      dateUtc: "2026-10-04T02:00:00Z",
+      size: 1000,
+      hasAttachments: false,
+      isRead: false,
+      isFlagged: false,
+      snippet: "",
+      accountEmail: "a@example.com",
+      accountName: "测试账号",
+      accountColor: "#3366ff",
+      folderPath: "INBOX",
+      groupResults: [],
+    });
+    const first = searchMessage(101, "第一封结果");
+    const second = searchMessage(102, "第二封结果");
+    const remaining = {
+      items: [{ message: second, snippet: [] }],
+      total: 2,
+      offset: 1,
+      limit: 200,
+      deepSynced: false,
+      deepError: null,
+    };
+    let finish!: (value: typeof remaining) => void;
+    let fail!: (reason: Error) => void;
+    const pending = new Promise<typeof remaining>((resolve, reject) => {
+      finish = resolve;
+      fail = reject;
+    });
+    vi.mocked(api.searchMessages)
+      .mockResolvedValueOnce({
+        ...remaining,
+        items: [{ message: first, snippet: [] }],
+        offset: 0,
+      })
+      .mockReturnValueOnce(pending);
+    if (failFirst) vi.mocked(api.searchMessages).mockResolvedValueOnce(remaining);
+    render(<InboxPanel />);
+    const searchBox = screen.getByLabelText("搜索邮件") as HTMLInputElement;
+    fireEvent.change(searchBox, { target: { value: "关键词" } });
+    fireEvent.keyDown(searchBox, { key: "Enter" });
+    await screen.findByText("第一封结果");
+
+    expect(screen.queryByRole("button", { name: /继续加载/ })).toBeNull();
+    expect(api.searchMessages).toHaveBeenCalledTimes(1);
+    const scroll = document.querySelector(".inbox-scroll") as HTMLDivElement;
+    Object.defineProperties(scroll, {
+      scrollHeight: { configurable: true, value: 1000 },
+      scrollTop: { configurable: true, writable: true, value: 559 },
+      clientHeight: { configurable: true, value: 200 },
+    });
+    fireEvent.scroll(scroll);
+    expect(api.searchMessages).toHaveBeenCalledTimes(1);
+
+    // 未按回车的新输入不能混进当前搜索结果。
+    fireEvent.change(searchBox, { target: { value: "尚未提交的新词" } });
+    scroll.scrollTop = 560;
+    act(() => {
+      fireEvent.scroll(scroll);
+      fireEvent.scroll(scroll);
+    });
+    expect(api.searchMessages).toHaveBeenCalledTimes(2);
+    expect(api.searchMessages).toHaveBeenLastCalledWith({
+      raw: "关键词", offset: 1, limit: 200, deep: false,
+    });
+    fireEvent.scroll(scroll);
+    expect(api.searchMessages).toHaveBeenCalledTimes(2);
+
+    if (failFirst) {
+      await act(async () => fail(new Error("续载失败")));
+      await screen.findByText(/续载失败/);
+      expect(screen.getByText("第一封结果")).toBeTruthy();
+      fireEvent.scroll(scroll);
+      await waitFor(() => expect(api.searchMessages).toHaveBeenCalledTimes(3));
+      expect(api.searchMessages).toHaveBeenLastCalledWith({
+        raw: "关键词", offset: 1, limit: 200, deep: false,
+      });
+    } else {
+      await act(async () => finish(remaining));
+    }
+
+    await screen.findByText("第二封结果");
+    expect(screen.getByText("第一封结果")).toBeTruthy();
+    fireEvent.scroll(scroll);
+    expect(api.searchMessages).toHaveBeenCalledTimes(failFirst ? 3 : 2);
+  });
+
   it("有内容时用小叉替换快捷键，清空后返回普通列表并聚焦搜索框", async () => {
     vi.mocked(api.searchMessages).mockResolvedValue({
       items: [], total: 0, offset: 0, limit: 200, deepSynced: false, deepError: null,
