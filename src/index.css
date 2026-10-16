@@ -2065,11 +2065,17 @@ textarea:focus {
   gap: 14px;
 }
 
-/* 「拦截远程图片」后面的说明图标：鼠标移上去看浏览器自带提示。 */
+/* 「拦截远程图片」后面的说明图标：黑色圆圈感叹号，鼠标移上去看浏览器自带提示。 */
 .field-help {
+  order: 1;
+  flex: 0 0 auto;
   cursor: help;
-  opacity: 0.6;
-  font-size: 0.9em;
+  color: currentColor;
+  opacity: 0.75;
+}
+
+.field-help:hover {
+  opacity: 1;
 }
 
 .settings-form .field {
