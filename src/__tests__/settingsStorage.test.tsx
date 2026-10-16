@@ -197,6 +197,15 @@ describe("设置页通用分组", () => {
     );
   });
 
+  it("拦截远程图片后面有感叹号提示，悬停能看到说明", async () => {
+    renderSettings();
+
+    const help = await screen.findByRole("img", { name: "远程图片说明" });
+    expect(help.getAttribute("title")).toBe(
+      "远程图片默认拦截。被记住的发件人会直接显示图片，要恢复拦截就在「读信与远程图片」里移除。",
+    );
+  });
+
   it("邮件系统通知默认打开，点一下立即保存", async () => {
     renderSettings();
 

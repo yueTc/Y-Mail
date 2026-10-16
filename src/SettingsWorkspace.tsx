@@ -648,6 +648,14 @@ export default function SettingsWorkspace({
                       onChange={(event) => void saveBlockRemoteImages(event.target.checked)}
                     />
                     <span>{t("拦截远程图片")}</span>
+                    <span
+                      className="field-help"
+                      role="img"
+                      aria-label={t("远程图片说明")}
+                      title={t("远程图片默认拦截。被记住的发件人会直接显示图片，要恢复拦截就在「读信与远程图片」里移除。")}
+                    >
+                      ❗
+                    </span>
                   </label>
                   {generalSaveError && (
                     <p className="error" role="alert">

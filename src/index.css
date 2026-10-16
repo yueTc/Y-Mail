@@ -2065,6 +2065,13 @@ textarea:focus {
   gap: 14px;
 }
 
+/* 「拦截远程图片」后面的说明图标：鼠标移上去看浏览器自带提示。 */
+.field-help {
+  cursor: help;
+  opacity: 0.6;
+  font-size: 0.9em;
+}
+
 .settings-form .field {
   display: flex;
   flex-direction: column;

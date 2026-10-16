@@ -45,17 +45,11 @@ export default function ReaderSettingsPanel() {
       <div className="panel-head">
         <div>
           <h2>{t("读信与远程图片")}</h2>
-          <p className="hint">
-            {t("远程图片默认拦截。被记住的发件人会直接显示图片，要恢复拦截就在下面移除。")}</p>
         </div>
       </div>
 
       {error && <p className="error" role="alert">{t("操作失败：")}{error}</p>}
       {loading && <p className="hint" role="status">{t("正在读取……")}</p>}
-      {!loading && senders.length === 0 && (
-        <p className="hint">
-          {t("还没有记住的发件人。在读信页点「以后这个发件人都自动显示」即可添加。")}</p>
-      )}
 
       {senders.length > 0 && (
         <ul className="trusted-senders">
