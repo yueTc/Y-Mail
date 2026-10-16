@@ -18,6 +18,14 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
 }));
 
+vi.mock("../ComposePanel", () => ({
+  default: ({ request }: { request: { kind: string; sourceMessageId?: number } }) => (
+    <div role="region" aria-label="写信窗格">
+      {request.kind}:{request.sourceMessageId ?? ""}
+    </div>
+  ),
+}));
+
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: ({
     count,
@@ -205,7 +213,7 @@ describe("红旗邮件入口", () => {
     const call = vi.mocked(api.listInboxMessages).mock.calls.at(-1)?.[0];
     expect(call?.folderId).toBeUndefined();
     // 会话聚合开关在这个视图里是禁用状态。
-    expect((screen.getByLabelText("按会话聚合") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "按会话聚合" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("一封标红邮件都没有时，给出专门的说法", async () => {
@@ -218,6 +226,18 @@ describe("红旗邮件入口", () => {
 });
 
 describe("顶部统一区入口", () => {
+  it("按会话聚合用线程列表图标在两种状态间切换", async () => {
+    render(<InboxPanel />);
+    await screen.findByRole("button", { name: /测试账号/ });
+    const groupingButton = screen.getByRole("button", { name: "按会话聚合" });
+    expect(groupingButton.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(groupingButton);
+    expect(groupingButton.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(groupingButton);
+    expect(groupingButton.getAttribute("aria-pressed")).toBe("false");
+  });
+
   it("统一收件箱下面排着未读 / 红旗 / 草稿 / 已发送", async () => {
     render(<InboxPanel />);
     await screen.findByRole("button", { name: /测试账号/ });
@@ -240,7 +260,7 @@ describe("顶部统一区入口", () => {
     await screen.findByRole("button", { name: /测试账号/ });
 
     // 会话聚合默认关闭，这里手动打开，验证草稿在聚合模式下走线程接口。
-    fireEvent.click(screen.getByLabelText("按会话聚合"));
+    fireEvent.click(screen.getByRole("button", { name: "按会话聚合" }));
     fireEvent.click(screen.getByRole("button", { name: /所有草稿/ }));
     // 草稿不受红旗影响，会话聚合照用户开关来，所以走线程接口。
     await waitFor(() =>
@@ -268,7 +288,7 @@ describe("顶部统一区入口", () => {
     await screen.findByRole("button", { name: /测试账号/ });
 
     // 先手动打开会话聚合，验证未读筛选在聚合模式下走线程接口。
-    fireEvent.click(screen.getByLabelText("按会话聚合"));
+    fireEvent.click(screen.getByRole("button", { name: "按会话聚合" }));
     fireEvent.click(screen.getByRole("button", { name: /所有未读/ }));
     await waitFor(() =>
       expect(api.listInboxThreads).toHaveBeenCalledWith(
@@ -366,7 +386,7 @@ describe("左侧账号展开", () => {
     fireEvent.click(screen.getByRole("button", { name: /第二个账号/ }));
 
     // 手动打开会话聚合，验证按账号 / 文件夹过滤时走线程接口。
-    fireEvent.click(screen.getByLabelText("按会话聚合"));
+    fireEvent.click(screen.getByRole("button", { name: "按会话聚合" }));
 
     const secondAccountFolder = Array.from(
       document.querySelectorAll<HTMLButtonElement>(".sidebar-folder"),
@@ -694,7 +714,7 @@ describe("列表标签胶囊", () => {
       limit: 200,
     });
     render(<InboxPanel />);
-    fireEvent.click(await screen.findByLabelText("按会话聚合"));
+    fireEvent.click(await screen.findByRole("button", { name: "按会话聚合" }));
 
     const row = await screen.findByRole("button", { name: `${expected} 共 ${count} 封` });
     expect(row.getAttribute("aria-expanded")).toBe("false");
@@ -727,7 +747,7 @@ describe("列表标签胶囊", () => {
       labelledMessage({ id: 11, uid: 11 }),
     ]);
     render(<InboxPanel />);
-    fireEvent.click(await screen.findByLabelText("按会话聚合"));
+    fireEvent.click(await screen.findByRole("button", { name: "按会话聚合" }));
 
     const row = await screen.findByRole("button", { name: "张三 共 1 封" });
     fireEvent.click(row);
@@ -773,7 +793,7 @@ describe("列表标签胶囊", () => {
     vi.mocked(api.listThreadMessages).mockResolvedValue([child]);
     vi.mocked(api.setMessageFlagged).mockResolvedValue({ changed: true, synced: true });
     render(<InboxPanel />);
-    fireEvent.click(await screen.findByLabelText("按会话聚合"));
+    fireEvent.click(await screen.findByRole("button", { name: "按会话聚合" }));
 
     const row = await screen.findByRole("button", { name: "张三 共 2 封" });
     row.focus();
@@ -849,6 +869,28 @@ describe("收件箱右键立即分类", () => {
     ]);
     return render(<InboxPanel />);
   }
+
+  it("邮件右键菜单提供回复和转发，并针对点中的邮件打开写信窗格", async () => {
+    prepare();
+    const toolbar = document.querySelector(".inbox-toolbar");
+    expect(toolbar).toBeTruthy();
+    expect(within(toolbar as HTMLElement).queryByRole("button", { name: "回复" })).toBeNull();
+    expect(within(toolbar as HTMLElement).queryByRole("button", { name: "转发" })).toBeNull();
+
+    const subject = await screen.findByText("账单邮件");
+    fireEvent.contextMenu(subject);
+    const menu = await screen.findByRole("menu", { name: "邮件菜单" });
+    expect(within(menu).getByRole("menuitem", { name: "回复" })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: "转发" })).toBeTruthy();
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "回复" }));
+    expect((await screen.findByRole("region", { name: "写信窗格" })).textContent).toBe("reply:42");
+
+    fireEvent.contextMenu(subject);
+    const forwardMenu = await screen.findByRole("menu", { name: "邮件菜单" });
+    fireEvent.click(within(forwardMenu).getByRole("menuitem", { name: "转发" }));
+    expect((await screen.findByRole("region", { name: "写信窗格" })).textContent).toBe("forward:42");
+  });
 
   it("右键出「立即分类」，确认后才外发，且只传点中的那一封", async () => {
     prepare();

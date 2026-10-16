@@ -934,6 +934,12 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
       });
   }, []);
 
+  /** 从邮件右键菜单打开回复或转发，并关闭菜单。 */
+  const composeFromMessage = useCallback((kind: "reply" | "forward", message: InboxMessage) => {
+    setMessageMenu(undefined);
+    setComposeRequest({ kind, sourceMessageId: message.id });
+  }, []);
+
   /**
    * 点「立即分类」：先拿外发预览。没开「下次不要提醒」就弹一次确认；
    * 开了就按用户偏好直接外发，不再逐封确认。取消时不外发、不写分类结果，但正文本地没有时可能已先下载到本机。
@@ -1636,40 +1642,36 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
             onClick={() => setComposeRequest({ kind: "new" })}
           >
             {t("写邮件")}</button>
-          <button
-            type="button"
-            disabled={selectedMessage === undefined}
-            onClick={() =>
-              selectedMessage &&
-              setComposeRequest({ kind: "reply", sourceMessageId: selectedMessage.id })
-            }
-          >
-            {t("回复")}</button>
-          <button
-            type="button"
-            disabled={selectedMessage === undefined}
-            onClick={() =>
-              selectedMessage &&
-              setComposeRequest({ kind: "forward", sourceMessageId: selectedMessage.id })
-            }
-          >
-            {t("转发")}</button>
           {composeRequest && readingNotification && (
             <button type="button" onClick={() => setReadingNotification(false)}>
               {t("继续写信")}
             </button>
           )}
-          <label
-            className="checkbox"
-            title={effectiveFlagged ? t("红旗邮件按时间平铺显示，不折会话") : undefined}
+          <button
+            type="button"
+            className={threadMode ? "inbox-icon-button is-active" : "inbox-icon-button"}
+            aria-label={t("按会话聚合")}
+            aria-pressed={threadMode}
+            title={t("按会话聚合")}
+            disabled={effectiveFlagged}
+            onClick={() => setThreadMode((current) => !current)}
           >
-            <input
-              type="checkbox"
-              checked={threadMode}
-              disabled={effectiveFlagged}
-              onChange={(event) => setThreadMode(event.target.checked)}
-            />
-            {t("按会话聚合")}</label>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              {threadMode ? (
+                <>
+                  <path d="M7 4v16" />
+                  <path d="M7 6h4a3 3 0 0 1 3 3v8" />
+                  <path d="M7 12h4a3 3 0 0 1 3 3v2" />
+                  <path d="M17 7h3M17 12h3M17 17h3" />
+                </>
+              ) : (
+                <>
+                  <path d="M5 5h14M5 10h14M5 15h14M5 20h14" />
+                  <path d="M3 5h.01M3 10h.01M3 15h.01M3 20h.01" />
+                </>
+              )}
+            </svg>
+          </button>
           <label
             className="checkbox"
             title={inUnified && unifiedView === "unread" ? t("「所有未读」已经只看未读了") : undefined}
@@ -2001,10 +2003,24 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
         aria-label={t("邮件菜单")}
         style={{
           left: Math.min(messageMenu.x, Math.max(8, window.innerWidth - 220)),
-          top: Math.min(messageMenu.y, Math.max(8, window.innerHeight - 120)),
+          top: Math.min(messageMenu.y, Math.max(8, window.innerHeight - 220)),
         }}
         onClick={(event) => event.stopPropagation()}
       >
+        <button
+          type="button"
+          role="menuitem"
+          className="context-menu-item"
+          onClick={() => composeFromMessage("reply", messageMenu.message)}
+        >
+          {t("回复")}</button>
+        <button
+          type="button"
+          role="menuitem"
+          className="context-menu-item"
+          onClick={() => composeFromMessage("forward", messageMenu.message)}
+        >
+          {t("转发")}</button>
         <button
           type="button"
           role="menuitem"
