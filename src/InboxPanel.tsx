@@ -1677,7 +1677,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
                 {account.displayName || account.email}
               </span>
               {account.unreadCount > 0 && (
-                <span className="unread-badge">{account.unreadCount}</span>
+                <span className="sidebar-count">{account.unreadCount}</span>
               )}
             </button>
 
