@@ -83,7 +83,7 @@ describe("通知点击直达邮件", () => {
   it("通知邮件不在当前列表时也能打开，并标记已读", async () => {
     vi.mocked(api.getInboxMessage).mockResolvedValue({ ...message(42), isRead: false });
     await start();
-    fireEvent.click(screen.getByRole("checkbox", { name: "只看未读" }));
+    fireEvent.click(screen.getByRole("button", { name: "只看未读" }));
     await clickNotification(42);
     await waitFor(() => expect(screen.getByTestId("notification-reader").textContent).toBe("通知邮件 42"));
     expect(api.setMessageRead).toHaveBeenCalledWith(42, true);
@@ -93,7 +93,7 @@ describe("通知点击直达邮件", () => {
     await start();
     const count = () => vi.mocked(listen).mock.calls.filter(([name]) => name === "inbox:open-message").length;
     expect(count()).toBe(1);
-    fireEvent.click(screen.getByRole("checkbox", { name: "只看未读" }));
+    fireEvent.click(screen.getByRole("button", { name: "只看未读" }));
     await clickNotification(42);
     expect(count()).toBe(1);
   });

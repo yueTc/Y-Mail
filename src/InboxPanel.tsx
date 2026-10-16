@@ -1672,17 +1672,25 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
               )}
             </svg>
           </button>
-          <label
-            className="checkbox"
-            title={inUnified && unifiedView === "unread" ? t("「所有未读」已经只看未读了") : undefined}
+          <button
+            type="button"
+            className={effectiveUnread ? "inbox-icon-button is-active" : "inbox-icon-button"}
+            aria-label={t("只看未读")}
+            aria-pressed={effectiveUnread}
+            title={
+              inUnified && unifiedView === "unread"
+                ? t("「所有未读」已经只看未读了")
+                : t("只看未读")
+            }
+            disabled={inUnified && unifiedView === "unread"}
+            onClick={() => setUnreadOnly((current) => !current)}
           >
-            <input
-              type="checkbox"
-              checked={effectiveUnread}
-              disabled={inUnified && unifiedView === "unread"}
-              onChange={(event) => setUnreadOnly(event.target.checked)}
-            />
-            {t("只看未读")}</label>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <rect x="3" y="5" width="18" height="14" rx="2" />
+              <path d="m4 7 8 6 8-6" />
+              {effectiveUnread && <circle cx="19" cy="5" r="2.5" fill="currentColor" stroke="none" />}
+            </svg>
+          </button>
           <button type="button" onClick={() => void refreshAll()} disabled={loading}>
             {t("刷新")}</button>
           {currentSync && (

@@ -287,6 +287,12 @@ describe("顶部统一区入口", () => {
     render(<InboxPanel />);
     await screen.findByRole("button", { name: /测试账号/ });
 
+    const unreadButton = screen.getByRole("button", { name: "只看未读" });
+    expect(unreadButton.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(unreadButton);
+    expect(unreadButton.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(unreadButton);
+
     // 先手动打开会话聚合，验证未读筛选在聚合模式下走线程接口。
     fireEvent.click(screen.getByRole("button", { name: "按会话聚合" }));
     fireEvent.click(screen.getByRole("button", { name: /所有未读/ }));
@@ -295,9 +301,9 @@ describe("顶部统一区入口", () => {
         expect.objectContaining({ unreadOnly: true }),
       ),
     );
-    const checkbox = screen.getByLabelText("只看未读") as HTMLInputElement;
-    expect(checkbox.checked).toBe(true);
-    expect(checkbox.disabled).toBe(true);
+    const lockedUnreadButton = screen.getByRole("button", { name: "只看未读" }) as HTMLButtonElement;
+    expect(lockedUnreadButton.getAttribute("aria-pressed")).toBe("true");
+    expect(lockedUnreadButton.disabled).toBe(true);
   });
 });
 describe("左侧账号展开", () => {
