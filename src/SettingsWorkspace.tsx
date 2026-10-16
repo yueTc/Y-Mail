@@ -130,11 +130,9 @@ export default function SettingsWorkspace({
   const [contactNotice, setContactNotice] = useState("");
   const [contactBusy, setContactBusy] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  // 「通用」里的远程图片开关单独一份提示，别和存储分组互相串。
-  const [generalNotice, setGeneralNotice] = useState<string | null>(null);
+  // 「通用」里的远程图片开关保存失败时单独一份提示，别和存储分组互相串。
   const [generalSaveError, setGeneralSaveError] = useState<string | null>(null);
-  // 「通用」里的通知开关单独一份提示，别和别的分组互相串。
-  const [notifyNotice, setNotifyNotice] = useState<string | null>(null);
+  // 「通用」里的通知开关保存失败时单独一份提示，别和别的分组互相串。
   const [notifySaveError, setNotifySaveError] = useState<string | null>(null);
   const [dirError, setDirError] = useState<string | null>(null);
   // 开机启动：状态以后端真实状态为准，不落本地设置。
@@ -280,7 +278,6 @@ export default function SettingsWorkspace({
     const previous = blockRemoteImagesByDefault;
     setBlockRemoteImagesByDefault(next);
     setSaving(true);
-    setGeneralNotice(null);
     setGeneralSaveError(null);
     try {
       const saved = await api.saveAppSettings({
@@ -296,7 +293,6 @@ export default function SettingsWorkspace({
       setNotifyAiEnabled(saved.notifyAiEnabled);
       setNotifyNewMailWhen(saved.notifyNewMailWhen);
       setBlockRemoteImagesByDefault(saved.blockRemoteImagesByDefault);
-      setGeneralNotice(t("设置已保存。"));
     } catch (error: unknown) {
       setBlockRemoteImagesByDefault(previous);
       setGeneralSaveError(describeError(error));
@@ -311,7 +307,6 @@ export default function SettingsWorkspace({
     const previous = notifyNewMail;
     setNotifyNewMail(next);
     setSaving(true);
-    setNotifyNotice(null);
     setNotifySaveError(null);
     try {
       const saved = await api.saveAppSettings({
@@ -327,7 +322,6 @@ export default function SettingsWorkspace({
       setNotifyAiEnabled(saved.notifyAiEnabled);
       setNotifyNewMailWhen(saved.notifyNewMailWhen);
       setBlockRemoteImagesByDefault(saved.blockRemoteImagesByDefault);
-      setNotifyNotice(t("设置已保存。"));
     } catch (error: unknown) {
       setNotifyNewMail(previous);
       setNotifySaveError(describeError(error));
@@ -342,7 +336,6 @@ export default function SettingsWorkspace({
     const previous = notifyNewMailWhen;
     setNotifyNewMailWhen(next);
     setSaving(true);
-    setNotifyNotice(null);
     setNotifySaveError(null);
     try {
       const saved = await api.saveAppSettings({
@@ -358,7 +351,6 @@ export default function SettingsWorkspace({
       setNotifyAiEnabled(saved.notifyAiEnabled);
       setNotifyNewMailWhen(saved.notifyNewMailWhen);
       setBlockRemoteImagesByDefault(saved.blockRemoteImagesByDefault);
-      setNotifyNotice(t("设置已保存。"));
     } catch (error: unknown) {
       setNotifyNewMailWhen(previous);
       setNotifySaveError(describeError(error));
@@ -657,11 +649,6 @@ export default function SettingsWorkspace({
                     />
                     <span>{t("拦截远程图片")}</span>
                   </label>
-                  {generalNotice && (
-                    <p className="hint" role="status">
-                      {generalNotice}
-                    </p>
-                  )}
                   {generalSaveError && (
                     <p className="error" role="alert">
                       {t("保存失败：")}{generalSaveError}
@@ -703,11 +690,6 @@ export default function SettingsWorkspace({
                       <option value="background">{t("仅在后台通知")}</option>
                     </select>
                   </label>
-                  {notifyNotice && (
-                    <p className="hint" role="status">
-                      {notifyNotice}
-                    </p>
-                  )}
                   {notifySaveError && (
                     <p className="error" role="alert">
                       {t("保存失败：")}{notifySaveError}

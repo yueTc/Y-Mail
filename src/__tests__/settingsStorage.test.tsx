@@ -195,7 +195,6 @@ describe("设置页通用分组", () => {
         blockRemoteImagesByDefault: false,
       }),
     );
-    expect(await screen.findByText("设置已保存。")).toBeTruthy();
   });
 
   it("邮件系统通知默认打开，点一下立即保存", async () => {
@@ -218,7 +217,6 @@ describe("设置页通用分组", () => {
         blockRemoteImagesByDefault: true,
       }),
     );
-    expect(await screen.findByText("设置已保存。")).toBeTruthy();
   });
 
   it("通知时机默认不聚焦，三个选项齐全，切换后立即保存", async () => {
@@ -252,7 +250,6 @@ describe("设置页通用分组", () => {
       }),
     );
     await waitFor(() => expect(select.value).toBe("background"));
-    expect(await screen.findByText("设置已保存。")).toBeTruthy();
   });
 
   it("通知开关关闭时，通知时机下拉置灰但保留选择", async () => {
@@ -480,7 +477,8 @@ describe("主导航账号入口", () => {
     await waitFor(() =>
       expect(within(account).getByRole("img").getAttribute("src")).toBe(profile.avatarDataUrl),
     );
-    fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
+    // 头像与退出按钮分属两层状态，等退出按钮真正渲染出来再点，避免时序不稳。
+    fireEvent.click(await screen.findByRole("button", { name: "退出登录" }));
     await waitFor(() => expect(within(account).queryByRole("img")).toBeNull());
     expect(await screen.findByRole("button", { name: "用 GitHub 登录" })).toBeTruthy();
 
