@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listen } from "@tauri-apps/api/event";
 import App from "../App";
@@ -74,7 +74,10 @@ describe("通知点击直达邮件", () => {
     await start();
     fireEvent.click(screen.getByRole("button", { name: page }));
     await clickNotification(42);
-    await waitFor(() => expect(screen.getByRole("button", { name: "收件箱" }).getAttribute("aria-current")).toBe("page"));
+    const nav = screen.getByRole("navigation", { name: "主导航" });
+    await waitFor(() =>
+      expect(within(nav).getByRole("button", { name: "收件箱" }).getAttribute("aria-current")).toBe("page"),
+    );
     expect(api.getInboxMessage).toHaveBeenCalledWith(42);
     expect(screen.getByTestId("notification-reader").textContent).toBe("通知邮件 42");
     expect(screen.getByTestId("notification-reader").closest("[hidden]")).toBeNull();

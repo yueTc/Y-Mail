@@ -197,6 +197,15 @@ async function openAccount(): Promise<void> {
   await screen.findByText("红旗邮件");
 }
 
+/** 账号下那条「收件箱」文件夹按钮；统一入口也叫「收件箱」，这里按文件夹类名挑。 */
+function accountInboxFolder(): HTMLElement {
+  const button = Array.from(document.querySelectorAll<HTMLElement>(".sidebar-folder")).find(
+    (element) => element.textContent?.startsWith("收件箱"),
+  );
+  if (!button) throw new Error("找不到账号下的收件箱文件夹");
+  return button;
+}
+
 describe("文件夹右键菜单", () => {
   it("服务器不让分层的系统文件夹只给一条禁用说明", async () => {
     vi.mocked(api.listInboxFolders).mockResolvedValue([
@@ -204,7 +213,7 @@ describe("文件夹右键菜单", () => {
     ]);
     await openAccount();
 
-    fireEvent.contextMenu(screen.getByText("收件箱"));
+    fireEvent.contextMenu(accountInboxFolder());
     const menu = await screen.findByRole("menu", { name: "文件夹菜单" });
 
     expect(within(menu).queryByRole("menuitem", { name: "重命名" })).toBeNull();
@@ -220,7 +229,7 @@ describe("文件夹右键菜单", () => {
     ]);
     await openAccount();
 
-    fireEvent.contextMenu(screen.getByText("收件箱"));
+    fireEvent.contextMenu(accountInboxFolder());
     const menu = await screen.findByRole("menu", { name: "文件夹菜单" });
 
     expect(within(menu).getByRole("menuitem", { name: "新建子文件夹" })).toBeTruthy();

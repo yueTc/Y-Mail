@@ -238,14 +238,14 @@ describe("顶部统一区入口", () => {
     expect(groupingButton.getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("统一收件箱下面排着未读 / 红旗 / 草稿 / 已发送", async () => {
+  it("收件箱下面排着未读 / 红旗 / 草稿 / 已发送", async () => {
     render(<InboxPanel />);
     await screen.findByRole("button", { name: /测试账号/ });
     const labels = Array.from(document.querySelectorAll(".inbox-sidebar .sidebar-item")).map(
       (element) => (element.textContent ?? "").replace(/\d+$/, "").trim(),
     );
     expect(labels).toEqual([
-      "统一收件箱",
+      "收件箱",
       "所有未读",
       "所有红旗",
       "所有草稿",
@@ -444,7 +444,7 @@ describe("邮箱栏右键添加和删除", () => {
   it("统一入口不触发空白菜单，邮箱右键保留原有操作", async () => {
     render(<InboxPanel />);
     const account = await screen.findByRole("button", { name: /测试账号/ });
-    expect(fireEvent.contextMenu(screen.getByRole("button", { name: /统一收件箱/ }))).toBe(true);
+    expect(fireEvent.contextMenu(screen.getByRole("button", { name: /收件箱/ }))).toBe(true);
     expect(screen.queryByRole("menu")).toBeNull();
     fireEvent.contextMenu(account);
     const menu = screen.getByRole("menu", { name: "邮箱菜单" });
@@ -480,7 +480,7 @@ describe("邮箱栏右键添加和删除", () => {
     expect(api.stopSync).not.toHaveBeenCalled();
   });
 
-  it("删除当前邮箱时先停止该账号同步，成功后刷新并返回统一收件箱", async () => {
+  it("删除当前邮箱时先停止该账号同步，成功后刷新并返回收件箱", async () => {
     render(<InboxPanel />);
     fireEvent.click(await screen.findByRole("button", { name: /测试账号/ }));
     await waitFor(() => expect(api.listInboxMessages).toHaveBeenLastCalledWith(expect.objectContaining({ accountId: 1 })));
@@ -492,7 +492,7 @@ describe("邮箱栏右键添加和删除", () => {
     expect(api.stopSync).toHaveBeenCalledWith(1);
     expect(vi.mocked(api.stopSync).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(api.deleteAccount).mock.invocationCallOrder[0]);
     await waitFor(() => expect(screen.queryByRole("button", { name: /测试账号/ })).toBeNull());
-    expect(screen.getByRole("button", { name: "统一收件箱" }).classList.contains("active")).toBe(true);
+    expect(screen.getByRole("button", { name: "收件箱" }).classList.contains("active")).toBe(true);
     await waitFor(() => {
       const query = vi.mocked(api.listInboxMessages).mock.calls.at(-1)?.[0];
       expect(query).toBeTruthy();
@@ -509,7 +509,7 @@ describe("邮箱栏右键添加和删除", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "确认删除邮箱" })).toBeNull());
     await waitFor(() => expect(vi.mocked(api.listInboxMessages).mock.calls.length).toBeGreaterThan(previousLoads));
-    expect(screen.getByRole("button", { name: /统一收件箱/ }).classList.contains("active")).toBe(true);
+    expect(screen.getByRole("button", { name: /收件箱/ }).classList.contains("active")).toBe(true);
   });
 
   it("删除其他邮箱时继续停留在当前邮箱", async () => {
@@ -551,7 +551,11 @@ describe("邮箱栏右键添加和删除", () => {
     fireEvent.click(await screen.findByRole("button", { name: /测试账号/ }));
     fireEvent.contextMenu(screen.getByRole("complementary", { name: "邮箱栏" }));
     expect(screen.getByRole("menu", { name: "邮箱菜单" })).toBeTruthy();
-    fireEvent.contextMenu(screen.getByText("收件箱", { exact: true }));
+    const inboxFolder = Array.from(document.querySelectorAll<HTMLElement>(".sidebar-folder")).find(
+      (element) => element.textContent?.startsWith("收件箱"),
+    );
+    expect(inboxFolder).toBeTruthy();
+    fireEvent.contextMenu(inboxFolder!);
     expect(screen.queryByRole("menu", { name: "邮箱菜单" })).toBeNull();
     expect(screen.getByRole("menu", { name: "文件夹菜单" })).toBeTruthy();
   });

@@ -136,7 +136,7 @@ export type UnifiedView = "inbox" | "unread" | "flagged" | "draft" | "sent";
 
 /** 顶部统一区的入口顺序，照着参考图来。 */
 export const UNIFIED_VIEWS: ReadonlyArray<{ id: UnifiedView; label: string }> = [
-  { id: "inbox", label: "统一收件箱" },
+  { id: "inbox", label: "收件箱" },
   { id: "unread", label: "所有未读" },
   { id: "flagged", label: "所有红旗" },
   { id: "draft", label: "所有草稿" },

@@ -633,7 +633,6 @@ export const EN: Record<string, string> = {
   "拉信间隔要填 10 到 3600 之间的整数秒。": "The mail check interval must be a whole number of seconds between 10 and 3600.",
   "保存拉信间隔失败：{0}": "Failed to save the mail check interval: {0}",
   "拉信间隔已保存，改完立刻生效。": "Mail check interval saved; it takes effect immediately.",
-  "统一收件箱": "Unified inbox",
   "图片": "Image",
   "退出批量": "Exit bulk mode",
   "退出搜索": "Exit search",
