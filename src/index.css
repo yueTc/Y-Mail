@@ -652,7 +652,7 @@ textarea:focus {
   border-radius: 10px;
   background: var(--accent);
   color: var(--accent-fg);
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .sidebar-compose-icon {
@@ -661,7 +661,7 @@ textarea:focus {
   flex: none;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.8;
+  stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
