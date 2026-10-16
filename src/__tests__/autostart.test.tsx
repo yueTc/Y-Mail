@@ -45,6 +45,7 @@ const SETTINGS: AppSettings = {
   dataDir: "",
   attachmentDir: "",
   notifyNewMail: true,
+  notifyNewMailWhen: "unfocused",
   notifyAiEnabled: false,
   blockRemoteImagesByDefault: true,
   minimizeToTrayOnClose: true,

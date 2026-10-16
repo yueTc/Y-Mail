@@ -45,9 +45,10 @@ pub use reading::{
 };
 pub use search::{SearchHit, SearchPage, SearchQuery, SnippetSegment};
 pub use settings_import::{
-    AccountImport, AiModelMapImport, AiProviderImport, GlobalProxyImport, ProxyImport, SettingsImportPlan,
-    SettingsImportValues, SignatureImport, SETTING_BLOCK_REMOTE_IMAGES, SETTING_MINIMIZE_TO_TRAY,
-    SETTING_NOTIFY_AI_ENABLED, SETTING_NOTIFY_NEW_MAIL, SETTING_START_MINIMIZED,
+    AccountImport, AiModelMapImport, AiProviderImport, GlobalProxyImport, NotifyNewMailWhen, ProxyImport,
+    SettingsImportPlan, SettingsImportValues, SignatureImport, SETTING_BLOCK_REMOTE_IMAGES,
+    SETTING_MINIMIZE_TO_TRAY, SETTING_NOTIFY_AI_ENABLED, SETTING_NOTIFY_NEW_MAIL,
+    SETTING_NOTIFY_NEW_MAIL_WHEN, SETTING_START_MINIMIZED,
 };
 pub use sync::{NewFolder, NewMessage, PendingFlag, StoredFolder, StoredSyncJob};
 

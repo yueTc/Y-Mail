@@ -59,9 +59,10 @@ pub use mail_store::{
     AccountInboxSummary, AiFunction, AiModelMapEntry, AiProviderKind, AiThinkingLevel, AttachmentState,
     BodyState, ContactDraft, ContactImportRow, ContactImportStats, ContactScope, ContactSource, InboxFolder,
     InboxMessage, InboxQuery, InboxThread, LabelGroup, LabelGroupKind, MailLabel, MailLabelSource,
-    McpAuditRecord, MessageGroupResult, MessageLocation, NewAiAudit, NewAiProvider, NewOutbox, OutboxKind,
-    OutboxState, SearchHit, SearchPage, SearchQuery, SnippetSegment, Store, StoredAiAudit, StoredAiCache,
-    StoredAiProvider, StoredAttachment, StoredContact, StoredContactGroup, StoredOutbox, StoredSignature,
+    McpAuditRecord, MessageGroupResult, MessageLocation, NewAiAudit, NewAiProvider, NewOutbox,
+    NotifyNewMailWhen, OutboxKind, OutboxState, SearchHit, SearchPage, SearchQuery, SnippetSegment, Store,
+    StoredAiAudit, StoredAiCache, StoredAiProvider, StoredAttachment, StoredContact, StoredContactGroup,
+    StoredOutbox, StoredSignature, SETTING_NOTIFY_NEW_MAIL_WHEN,
 };
 pub use paths::SqlitePaths;
 pub use secrets::{ChunkedSecretStore, KeyringSecretStore, MemorySecretStore, SecretStore, SecretStoreError};

@@ -18,8 +18,9 @@ use std::time::Duration;
 use mail_domain::account::AccountProxyMode;
 use mail_domain::proxy::{ProxyRoute, Secret};
 use mail_store::{
-    Store, SETTING_BLOCK_REMOTE_IMAGES, SETTING_MINIMIZE_TO_TRAY, SETTING_NOTIFY_AI_ENABLED,
-    SETTING_NOTIFY_NEW_MAIL, SETTING_START_MINIMIZED,
+    NotifyNewMailWhen, Store, SETTING_BLOCK_REMOTE_IMAGES, SETTING_MINIMIZE_TO_TRAY,
+    SETTING_NOTIFY_AI_ENABLED, SETTING_NOTIFY_NEW_MAIL, SETTING_NOTIFY_NEW_MAIL_WHEN,
+    SETTING_START_MINIMIZED,
 };
 use mail_sync::crypto::{decrypt, derive_key, encrypt, random_bytes, KdfParams, NONCE_LEN, SALT_LEN};
 use mail_sync::envelope::{
@@ -76,6 +77,8 @@ pub struct SyncedToggles {
     pub notify_new_mail: bool,
     /// 通知智能识别。
     pub notify_ai_enabled: bool,
+    /// 通知触发时机；`None` 表示表里没有这个值，读回时让外壳保持本机选择。
+    pub notify_new_mail_when: Option<NotifyNewMailWhen>,
     /// 默认拦截远程图片。
     pub block_remote_images_by_default: bool,
     /// 关闭键收托盘。
@@ -386,15 +389,28 @@ impl MailEngine {
                 changed = true;
             }
         }
+        // 提醒时机单独处理：带值才写，`None` 表示这次不碰表里的旧值。
+        if let Some(when) = toggles.notify_new_mail_when {
+            let current = guard.get_setting(SETTING_NOTIFY_NEW_MAIL_WHEN)?;
+            if current.as_deref() != Some(when.as_str()) {
+                guard.set_setting(SETTING_NOTIFY_NEW_MAIL_WHEN, when.as_str())?;
+                changed = true;
+            }
+        }
         Ok(changed)
     }
 
     /// 读回会同步的界面开关；导入远端快照后外壳调用，让界面与行为跟上。
     pub fn read_synced_toggles(&self) -> Result<SyncedToggles, EngineError> {
         let guard = self.store();
+        let notify_new_mail_when = guard
+            .get_setting(SETTING_NOTIFY_NEW_MAIL_WHEN)?
+            .as_deref()
+            .map(NotifyNewMailWhen::parse);
         Ok(SyncedToggles {
             notify_new_mail: toggle_bool(guard.get_setting(SETTING_NOTIFY_NEW_MAIL)?, true),
             notify_ai_enabled: toggle_bool(guard.get_setting(SETTING_NOTIFY_AI_ENABLED)?, false),
+            notify_new_mail_when,
             block_remote_images_by_default: toggle_bool(
                 guard.get_setting(SETTING_BLOCK_REMOTE_IMAGES)?,
                 true,
@@ -1114,7 +1130,7 @@ mod tests {
     use std::sync::Arc;
 
     use mail_domain::proxy::Secret;
-    use mail_store::SETTING_NOTIFY_NEW_MAIL;
+    use mail_store::{NotifyNewMailWhen, SETTING_NOTIFY_NEW_MAIL};
     use mail_sync::envelope::{EnvelopeKdfParams, SyncEnvelope, FORMAT_NAME, KDF_ARGON2ID, SCHEMA_VERSION};
     use mail_sync::gist::{self, GistSummary};
     use mail_sync::github::GitHubProfile;
@@ -1294,6 +1310,7 @@ mod tests {
         let toggles = SyncedToggles {
             notify_new_mail: false,
             notify_ai_enabled: true,
+            notify_new_mail_when: Some(NotifyNewMailWhen::Background),
             block_remote_images_by_default: false,
             minimize_to_tray_on_close: false,
             start_minimized_to_tray: true,
@@ -1307,6 +1324,21 @@ mod tests {
         assert!(
             !engine.store_synced_toggles(&toggles).expect("再次写入"),
             "值没变不该算变化"
+        );
+
+        // `None` 表示这次不带这个值：表里旧值原样保留。
+        let untouched = SyncedToggles {
+            notify_new_mail_when: None,
+            ..toggles
+        };
+        assert!(
+            !engine.store_synced_toggles(&untouched).expect("带空值写入"),
+            "空值不动表里旧值，不该算变化"
+        );
+        assert_eq!(
+            engine.read_synced_toggles().expect("读回").notify_new_mail_when,
+            Some(NotifyNewMailWhen::Background),
+            "本机选择要保住"
         );
     }
 

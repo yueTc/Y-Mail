@@ -56,6 +56,7 @@ const SETTINGS: AppSettings = {
   dataDir: "",
   attachmentDir: "",
   notifyNewMail: true,
+  notifyNewMailWhen: "unfocused",
   notifyAiEnabled: false,
   blockRemoteImagesByDefault: true,
   minimizeToTrayOnClose: true,
@@ -173,11 +174,11 @@ describe("设置页分类栏", () => {
 });
 
 describe("设置页通用分组", () => {
-  it("默认拦截远程图片默认打开，点一下立即保存", async () => {
+  it("拦截远程图片默认打开，点一下立即保存", async () => {
     renderSettings();
 
     const box = (await screen.findByRole("checkbox", {
-      name: /默认拦截邮件里的远程图片/,
+      name: /拦截远程图片/,
     })) as HTMLInputElement;
     expect(box.checked).toBe(true);
     expect(screen.queryByRole("button", { name: "保存设置" })).toBeNull();
@@ -189,6 +190,7 @@ describe("设置页通用分组", () => {
         dataDir: "",
         attachmentDir: "",
         notifyNewMail: true,
+        notifyNewMailWhen: "unfocused",
         notifyAiEnabled: false,
         blockRemoteImagesByDefault: false,
       }),
@@ -196,11 +198,11 @@ describe("设置页通用分组", () => {
     expect(await screen.findByText("设置已保存。")).toBeTruthy();
   });
 
-  it("新邮件系统通知默认打开，点一下立即保存", async () => {
+  it("邮件系统通知默认打开，点一下立即保存", async () => {
     renderSettings();
 
     const box = (await screen.findByRole("checkbox", {
-      name: /新邮件用 Windows 系统通知提醒/,
+      name: /启用邮件系统通知/,
     })) as HTMLInputElement;
     expect(box.checked).toBe(true);
 
@@ -211,14 +213,69 @@ describe("设置页通用分组", () => {
         dataDir: "",
         attachmentDir: "",
         notifyNewMail: false,
+        notifyNewMailWhen: "unfocused",
         notifyAiEnabled: false,
         blockRemoteImagesByDefault: true,
       }),
     );
     expect(await screen.findByText("设置已保存。")).toBeTruthy();
   });
-});
 
+  it("通知时机默认不聚焦，三个选项齐全，切换后立即保存", async () => {
+    const backgroundSettings: AppSettings = {
+      ...SETTINGS,
+      notifyNewMailWhen: "background",
+    };
+    vi.mocked(api.saveAppSettings).mockResolvedValue(backgroundSettings);
+    renderSettings();
+
+    const select = (await screen.findByRole("combobox", {
+      name: "通知时机",
+    })) as HTMLSelectElement;
+    expect(select.value).toBe("unfocused");
+    expect(Array.from(select.options).map((option) => option.textContent)).toEqual([
+      "不聚焦时通知",
+      "任何时刻都通知",
+      "仅在后台通知",
+    ]);
+
+    fireEvent.change(select, { target: { value: "background" } });
+
+    await waitFor(() =>
+      expect(api.saveAppSettings).toHaveBeenCalledWith({
+        dataDir: "",
+        attachmentDir: "",
+        notifyNewMail: true,
+        notifyAiEnabled: false,
+        notifyNewMailWhen: "background",
+        blockRemoteImagesByDefault: true,
+      }),
+    );
+    await waitFor(() => expect(select.value).toBe("background"));
+    expect(await screen.findByText("设置已保存。")).toBeTruthy();
+  });
+
+  it("通知开关关闭时，通知时机下拉置灰但保留选择", async () => {
+    const disabledSettings: AppSettings = {
+      ...SETTINGS,
+      notifyNewMail: false,
+      notifyNewMailWhen: "background",
+    };
+    vi.mocked(api.getAppSettings).mockResolvedValue(disabledSettings);
+    renderSettings();
+
+    const box = (await screen.findByRole("checkbox", {
+      name: /启用邮件系统通知/,
+    })) as HTMLInputElement;
+    const select = (await screen.findByRole("combobox", {
+      name: "通知时机",
+    })) as HTMLSelectElement;
+
+    expect(box.checked).toBe(false);
+    expect(select.disabled).toBe(true);
+    expect(select.value).toBe("background");
+  });
+});
 describe("设置页存储目录", () => {
   it("只显示一个可编辑目录输入框，并只读展示当前生效目录", async () => {
     renderSettings();
@@ -242,6 +299,7 @@ describe("设置页存储目录", () => {
         dataDir: "",
         attachmentDir: "",
         notifyNewMail: true,
+        notifyNewMailWhen: "unfocused",
         notifyAiEnabled: false,
         blockRemoteImagesByDefault: true,
       }),

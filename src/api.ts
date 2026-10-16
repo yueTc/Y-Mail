@@ -164,6 +164,9 @@ export interface ConnectionReport {
   smtpMechanism: string;
 }
 
+/** 新邮件提醒在什么时候弹。 */
+export type NotifyNewMailWhen = "unfocused" | "always" | "background";
+
 /** 存储目录与通知开关快照。 */
 export interface AppSettings {
   /** 已保存的邮件数据目录；空字符串表示用默认。 */
@@ -174,6 +177,8 @@ export interface AppSettings {
   notifyNewMail: boolean;
   /** 通知智能识别开关；默认关，开启后新邮件正文会自动发往所选 AI。 */
   notifyAiEnabled: boolean;
+  /** 新邮件提醒时机；默认「不聚焦时通知」。 */
+  notifyNewMailWhen: NotifyNewMailWhen;
   /** 读信是否默认拦截远程图片；出厂与默认都是拦。 */
   blockRemoteImagesByDefault: boolean;
   /** 关闭主窗口时收进托盘还是退出应用；默认收。 */
@@ -210,6 +215,7 @@ export interface AppSettingsInput {
   attachmentDir: string;
   notifyNewMail: boolean;
   notifyAiEnabled: boolean;
+  notifyNewMailWhen: NotifyNewMailWhen;
   blockRemoteImagesByDefault: boolean;
 }
 

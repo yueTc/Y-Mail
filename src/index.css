@@ -2081,6 +2081,9 @@ textarea:focus {
   width: 100%;
   font-family: Consolas, "Cascadia Mono", monospace;
 }
+.settings-form .field select {
+  width: 100%;
+}
 
 .settings-form .field .hint {
   margin: 0;

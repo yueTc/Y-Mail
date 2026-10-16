@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
-import { api, describeError, type AppSettings, type GitHubLoginView } from "./api";
+import { api, describeError, type AppSettings, type GitHubLoginView, type NotifyNewMailWhen } from "./api";
 import AboutPanel from "./AboutPanel";
 import AccountPanel from "./AccountPanel";
 import AiPanel from "./AiPanel";
@@ -117,6 +117,7 @@ export default function SettingsWorkspace({
   const [storage, setStorage] = useState<StorageState>({ kind: "loading" });
   const [dataDir, setDataDir] = useState("");
   const [notifyNewMail, setNotifyNewMail] = useState(true);
+  const [notifyNewMailWhen, setNotifyNewMailWhen] = useState<NotifyNewMailWhen>("unfocused");
   // 通知智能识别开关；由「AI功能」页负责开关，状态放在这里统一保存，避免两处设置互相覆盖。
   const [notifyAiEnabled, setNotifyAiEnabled] = useState(false);
   // 读信是否默认拦住远程图片；默认拦，勾选后立即保存。
@@ -171,6 +172,7 @@ export default function SettingsWorkspace({
         setStorage({ kind: "ready", settings });
         setDataDir(settings.dataDir);
         setNotifyNewMail(settings.notifyNewMail);
+        setNotifyNewMailWhen(settings.notifyNewMailWhen);
         setNotifyAiEnabled(settings.notifyAiEnabled);
         setBlockRemoteImagesByDefault(settings.blockRemoteImagesByDefault);
         setMinimizeToTrayOnClose(settings.minimizeToTrayOnClose);
@@ -255,12 +257,14 @@ export default function SettingsWorkspace({
         dataDir: storage.settings.dataDir,
         attachmentDir: "",
         notifyNewMail,
+        notifyNewMailWhen,
         notifyAiEnabled,
         blockRemoteImagesByDefault,
       });
       setStorage({ kind: "ready", settings: saved });
       setNotifyNewMail(saved.notifyNewMail);
       setNotifyAiEnabled(saved.notifyAiEnabled);
+      setNotifyNewMailWhen(saved.notifyNewMailWhen);
       setBlockRemoteImagesByDefault(saved.blockRemoteImagesByDefault);
       setNotice(t("设置已保存。"));
     } catch (error: unknown) {
@@ -283,12 +287,14 @@ export default function SettingsWorkspace({
         dataDir: storage.settings.dataDir,
         attachmentDir: "",
         notifyNewMail,
+        notifyNewMailWhen,
         notifyAiEnabled,
         blockRemoteImagesByDefault: next,
       });
       setStorage({ kind: "ready", settings: saved });
       setNotifyNewMail(saved.notifyNewMail);
       setNotifyAiEnabled(saved.notifyAiEnabled);
+      setNotifyNewMailWhen(saved.notifyNewMailWhen);
       setBlockRemoteImagesByDefault(saved.blockRemoteImagesByDefault);
       setGeneralNotice(t("设置已保存。"));
     } catch (error: unknown) {
@@ -312,12 +318,14 @@ export default function SettingsWorkspace({
         dataDir: storage.settings.dataDir,
         attachmentDir: "",
         notifyNewMail: next,
+        notifyNewMailWhen,
         notifyAiEnabled,
         blockRemoteImagesByDefault,
       });
       setStorage({ kind: "ready", settings: saved });
       setNotifyNewMail(saved.notifyNewMail);
       setNotifyAiEnabled(saved.notifyAiEnabled);
+      setNotifyNewMailWhen(saved.notifyNewMailWhen);
       setBlockRemoteImagesByDefault(saved.blockRemoteImagesByDefault);
       setNotifyNotice(t("设置已保存。"));
     } catch (error: unknown) {
@@ -328,6 +336,36 @@ export default function SettingsWorkspace({
     }
   }
 
+  /** 保存通知触发时机；即使总开关关着，也保留用户选择。 */
+  async function saveNotifyNewMailWhen(next: NotifyNewMailWhen): Promise<void> {
+    if (storage.kind !== "ready") return;
+    const previous = notifyNewMailWhen;
+    setNotifyNewMailWhen(next);
+    setSaving(true);
+    setNotifyNotice(null);
+    setNotifySaveError(null);
+    try {
+      const saved = await api.saveAppSettings({
+        dataDir: storage.settings.dataDir,
+        attachmentDir: "",
+        notifyNewMail,
+        notifyAiEnabled,
+        notifyNewMailWhen: next,
+        blockRemoteImagesByDefault,
+      });
+      setStorage({ kind: "ready", settings: saved });
+      setNotifyNewMail(saved.notifyNewMail);
+      setNotifyAiEnabled(saved.notifyAiEnabled);
+      setNotifyNewMailWhen(saved.notifyNewMailWhen);
+      setBlockRemoteImagesByDefault(saved.blockRemoteImagesByDefault);
+      setNotifyNotice(t("设置已保存。"));
+    } catch (error: unknown) {
+      setNotifyNewMailWhen(previous);
+      setNotifySaveError(describeError(error));
+    } finally {
+      setSaving(false);
+    }
+  }
   /**
    * 保存「通知智能识别」开关。
    *
@@ -342,11 +380,13 @@ export default function SettingsWorkspace({
       dataDir: storage.settings.dataDir,
       attachmentDir: "",
       notifyNewMail,
+      notifyNewMailWhen,
       notifyAiEnabled: next,
       blockRemoteImagesByDefault,
     });
     setStorage({ kind: "ready", settings: saved });
     setNotifyAiEnabled(saved.notifyAiEnabled);
+    setNotifyNewMailWhen(saved.notifyNewMailWhen);
   }
   /** 先弹系统目录选择框，选完再复制、校验；全部通过以后后端才写设置。 */
   async function changeDirectory() {
@@ -605,7 +645,7 @@ export default function SettingsWorkspace({
 
             <ReaderSettingsPanel />
 
-            <section className="panel" aria-label={t("默认拦截远程图片")}>
+            <section className="panel" aria-label={t("拦截远程图片")}>
               {storage.kind === "ready" ? (
                 <div className="settings-form">
                   <label className="checkbox">
@@ -615,7 +655,7 @@ export default function SettingsWorkspace({
                       disabled={saving}
                       onChange={(event) => void saveBlockRemoteImages(event.target.checked)}
                     />
-                    <span>{t("默认拦截邮件里的远程图片")}</span>
+                    <span>{t("拦截远程图片")}</span>
                   </label>
                   {generalNotice && (
                     <p className="hint" role="status">
@@ -645,7 +685,23 @@ export default function SettingsWorkspace({
                       disabled={saving}
                       onChange={(event) => void saveNotifyNewMail(event.target.checked)}
                     />
-                    <span>{t("新邮件用 Windows 系统通知提醒（窗口切到后台时才弹）")}</span>
+                    <span>{t("启用邮件系统通知")}</span>
+                  </label>
+
+                  <label className="field">
+                    <span>{t("通知时机")}</span>
+                    <select
+                      aria-label={t("通知时机")}
+                      value={notifyNewMailWhen}
+                      disabled={saving || !notifyNewMail}
+                      onChange={(event) =>
+                        void saveNotifyNewMailWhen(event.target.value as NotifyNewMailWhen)
+                      }
+                    >
+                      <option value="unfocused">{t("不聚焦时通知")}</option>
+                      <option value="always">{t("任何时刻都通知")}</option>
+                      <option value="background">{t("仅在后台通知")}</option>
+                    </select>
                   </label>
                   {notifyNotice && (
                     <p className="hint" role="status">

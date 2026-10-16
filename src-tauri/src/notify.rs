@@ -15,11 +15,11 @@
 //! [`register_notification_identity`]。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use mail_core::{InboxQuery, VerificationFinding};
+use mail_core::{InboxQuery, NotifyNewMailWhen, VerificationFinding};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 #[cfg(not(windows))]
@@ -81,6 +81,7 @@ pub fn spawn(
     app: AppHandle,
     enabled: Arc<AtomicBool>,
     ai_enabled: Arc<AtomicBool>,
+    notify_when: Arc<AtomicU8>,
     classify_enabled: Arc<AtomicBool>,
 ) {
     tauri::async_runtime::spawn(async move {
@@ -121,9 +122,14 @@ pub fn spawn(
             }
             fresh.sort_by_key(|item| item.message_id);
 
-            // 一批只判断一次前台状态：判定用的就是这一刻的焦点，之后不再变。
-            let pop_system_notification =
-                should_pop_system_notification(enabled.load(Ordering::Relaxed), main_window_focused(&app));
+            // 一批只判断一次窗口状态：判定用的就是这一刻的焦点与可见性，之后不再变。
+            let mode = NotifyNewMailWhen::from_code(notify_when.load(Ordering::Relaxed));
+            let pop_system_notification = should_pop_system_notification(
+                enabled.load(Ordering::Relaxed),
+                mode,
+                main_window_focused(&app),
+                main_window_in_background(&app),
+            );
 
             for (index, item) in fresh.iter().enumerate() {
                 let notify_this = index < MAX_NOTIFICATIONS && pop_system_notification;
@@ -252,10 +258,25 @@ fn display_name(name: &str, address: &str) -> String {
 
 /// 决定这一批要不要弹系统通知。
 ///
-/// `enabled` 是设置页的开关；`focused` 是主窗口焦点。`None` 表示窗口还没建好或焦点读不出来，
-/// 这种情况按「不在前台」处理：宁可多弹一条，也别在用户切走之后漏掉新邮件。
-fn should_pop_system_notification(enabled: bool, focused: Option<bool>) -> bool {
-    enabled && focused != Some(true)
+/// `enabled` 是设置页的总开关；`when` 是用户选的提醒时机；`focused` 是主窗口焦点；
+/// `background` 是主窗口是不是「最小化或看不见」。
+///
+/// `None` 表示窗口还没建好或状态读不出来。除了 `Background` 需要窗口确实在背景才弹之外，
+/// 一律按「宁可多弹一条，也别漏掉新邮件」处理。
+fn should_pop_system_notification(
+    enabled: bool,
+    when: NotifyNewMailWhen,
+    focused: Option<bool>,
+    background: Option<bool>,
+) -> bool {
+    if !enabled {
+        return false;
+    }
+    match when {
+        NotifyNewMailWhen::Always => true,
+        NotifyNewMailWhen::Unfocused => focused != Some(true),
+        NotifyNewMailWhen::Background => background != Some(false),
+    }
 }
 /// 这封新邮件要不要走 AI 识别：只有「系统通知要弹」且「通知识别开关开着」才发正文。
 ///
@@ -274,6 +295,28 @@ fn main_window_focused(app: &AppHandle) -> Option<bool> {
             None
         }
     }
+}
+
+/// 读主窗口是不是在「后台」：最小化了，或者收进托盘、根本看不见。
+///
+/// 窗口不可用或状态读不出来返回 `None`，交给判定函数按「宁可多弹」处理。
+fn main_window_in_background(app: &AppHandle) -> Option<bool> {
+    let window = app.get_webview_window(MAIN_WINDOW_LABEL)?;
+    let visible = match window.is_visible() {
+        Ok(visible) => visible,
+        Err(error) => {
+            tracing::debug!(error = %error, "读取主窗口可见状态失败，按看不见处理");
+            return None;
+        }
+    };
+    let minimized = match window.is_minimized() {
+        Ok(minimized) => minimized,
+        Err(error) => {
+            tracing::debug!(error = %error, "读取主窗口最小化状态失败，按看不见处理");
+            return None;
+        }
+    };
+    Some(minimized || !visible)
 }
 
 /// 尝试用 AI 识别这封新邮件里的验证码和验证链接。
@@ -537,6 +580,7 @@ mod tests {
     };
     #[cfg(windows)]
     use super::{notification_display_name, DEFAULT_NOTIFICATION_NAME};
+    use mail_core::NotifyNewMailWhen;
     use mail_core::VerificationFinding;
 
     #[cfg(windows)]
@@ -642,25 +686,108 @@ mod tests {
     }
 
     #[test]
-    fn 窗口在前台时不弹系统通知() {
-        assert!(!should_pop_system_notification(true, Some(true)));
+    fn 不聚焦时通知遇上前台窗口就不弹() {
+        assert!(!should_pop_system_notification(
+            true,
+            NotifyNewMailWhen::Unfocused,
+            Some(true),
+            Some(false),
+        ));
     }
 
     #[test]
-    fn 窗口不在前台时才弹系统通知() {
-        assert!(should_pop_system_notification(true, Some(false)));
+    fn 不聚焦时通知遇上失焦窗口就弹() {
+        assert!(should_pop_system_notification(
+            true,
+            NotifyNewMailWhen::Unfocused,
+            Some(false),
+            Some(false),
+        ));
     }
 
     #[test]
-    fn 焦点读不出来时按不在前台处理() {
-        assert!(should_pop_system_notification(true, None));
+    fn 不聚焦时通知遇上最小化窗口也弹() {
+        assert!(should_pop_system_notification(
+            true,
+            NotifyNewMailWhen::Unfocused,
+            Some(false),
+            Some(true),
+        ));
+    }
+
+    #[test]
+    fn 任何时刻都通知在前台也弹() {
+        assert!(should_pop_system_notification(
+            true,
+            NotifyNewMailWhen::Always,
+            Some(true),
+            Some(false),
+        ));
+    }
+
+    #[test]
+    fn 仅在后台通知时窗口看得见但失焦不弹() {
+        assert!(!should_pop_system_notification(
+            true,
+            NotifyNewMailWhen::Background,
+            Some(false),
+            Some(false),
+        ));
+    }
+
+    #[test]
+    fn 仅在后台通知时最小化或收托盘才弹() {
+        assert!(should_pop_system_notification(
+            true,
+            NotifyNewMailWhen::Background,
+            Some(false),
+            Some(true),
+        ));
+    }
+
+    #[test]
+    fn 焦点和可见状态读不出来时按宁可多弹处理() {
+        assert!(should_pop_system_notification(
+            true,
+            NotifyNewMailWhen::Unfocused,
+            None,
+            None,
+        ));
+        assert!(should_pop_system_notification(
+            true,
+            NotifyNewMailWhen::Always,
+            None,
+            None,
+        ));
+        assert!(should_pop_system_notification(
+            true,
+            NotifyNewMailWhen::Background,
+            None,
+            None,
+        ));
     }
 
     #[test]
     fn 设置里关掉通知后前台后台都不弹() {
-        assert!(!should_pop_system_notification(false, Some(true)));
-        assert!(!should_pop_system_notification(false, Some(false)));
-        assert!(!should_pop_system_notification(false, None));
+        for when in [
+            NotifyNewMailWhen::Unfocused,
+            NotifyNewMailWhen::Always,
+            NotifyNewMailWhen::Background,
+        ] {
+            assert!(!should_pop_system_notification(false, when, None, None));
+            assert!(!should_pop_system_notification(
+                false,
+                when,
+                Some(true),
+                Some(false)
+            ));
+            assert!(!should_pop_system_notification(
+                false,
+                when,
+                Some(false),
+                Some(true)
+            ));
+        }
     }
 
     #[test]

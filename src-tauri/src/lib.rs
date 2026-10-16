@@ -246,6 +246,7 @@ pub fn run() {
             if let Err(error) = engine.store_synced_toggles(&mail_core::SyncedToggles {
                 notify_new_mail: settings.notify_new_mail,
                 notify_ai_enabled: settings.notify_ai_enabled,
+                notify_new_mail_when: Some(settings.notify_new_mail_when),
                 block_remote_images_by_default: settings.block_remote_images_by_default,
                 minimize_to_tray_on_close: settings.minimize_to_tray_on_close,
                 start_minimized_to_tray: settings.start_minimized_to_tray,
@@ -281,6 +282,7 @@ pub fn run() {
             // 6) 把引擎、设置与摘要交给命令层；日志句柄随之进入应用状态，保证写线程存活。
             let notify_enabled = Arc::new(AtomicBool::new(settings.notify_new_mail));
             let notify_ai_enabled = Arc::new(AtomicBool::new(settings.notify_ai_enabled));
+            let notify_new_mail_when = Arc::new(AtomicU8::new(settings.notify_new_mail_when.code()));
             let classify_enabled = Arc::new(AtomicBool::new(settings.classify_enabled));
             let classify_confidence_percent = Arc::new(AtomicU8::new(
                 settings.normalized_classify_confidence_percent(),
@@ -292,6 +294,7 @@ pub fn run() {
                 settings,
                 notify_enabled.clone(),
                 notify_ai_enabled.clone(),
+                notify_new_mail_when.clone(),
                 classify_enabled.clone(),
                 classify_confidence_percent.clone(),
                 first_run,
@@ -391,6 +394,7 @@ pub fn run() {
                 app.handle().clone(),
                 notify_enabled,
                 notify_ai_enabled,
+                notify_new_mail_when,
                 classify_enabled,
             );
 
@@ -421,8 +425,13 @@ pub fn run() {
 /// 把同步回来的界面开关落到外壳设置、原子开关与磁盘；没变化就什么都不做。
 fn apply_synced_toggles(state: &AppState, toggles: mail_core::SyncedToggles) {
     let mut settings = state.settings_snapshot();
+    // 提醒时机是可选值：同步包里没有时保持本机选择，别被默认值顶掉。
+    let when_change = toggles
+        .notify_new_mail_when
+        .filter(|when| settings.notify_new_mail_when != *when);
     let unchanged = settings.notify_new_mail == toggles.notify_new_mail
         && settings.notify_ai_enabled == toggles.notify_ai_enabled
+        && when_change.is_none()
         && settings.block_remote_images_by_default == toggles.block_remote_images_by_default
         && settings.minimize_to_tray_on_close == toggles.minimize_to_tray_on_close
         && settings.start_minimized_to_tray == toggles.start_minimized_to_tray;
@@ -431,6 +440,9 @@ fn apply_synced_toggles(state: &AppState, toggles: mail_core::SyncedToggles) {
     }
     settings.notify_new_mail = toggles.notify_new_mail;
     settings.notify_ai_enabled = toggles.notify_ai_enabled;
+    if let Some(when) = toggles.notify_new_mail_when {
+        settings.notify_new_mail_when = when;
+    }
     settings.block_remote_images_by_default = toggles.block_remote_images_by_default;
     settings.minimize_to_tray_on_close = toggles.minimize_to_tray_on_close;
     settings.start_minimized_to_tray = toggles.start_minimized_to_tray;

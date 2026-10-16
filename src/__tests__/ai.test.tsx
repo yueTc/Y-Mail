@@ -34,6 +34,7 @@ vi.mock("../api", () => {
     dataDir: "",
     attachmentDir: "",
     notifyNewMail: true,
+    notifyNewMailWhen: "unfocused",
     notifyAiEnabled: false,
     blockRemoteImagesByDefault: true,
     minimizeToTrayOnClose: true,

@@ -15,9 +15,10 @@ use mail_domain::account::{AccountDraft, AccountProxyMode, AuthType, OAuthProvid
 use mail_domain::proxy::{GlobalProxyMode, Secret};
 use mail_store::{
     AccountImport, AiFunction, AiModelMapImport, AiProviderImport, AiProviderKind, AiThinkingLevel,
-    GlobalProxyImport, NewAiProvider, ProxyImport, SettingsImportPlan, SettingsImportValues, SignatureImport,
-    SETTING_BLOCK_REMOTE_IMAGES, SETTING_MINIMIZE_TO_TRAY, SETTING_NOTIFY_AI_ENABLED,
-    SETTING_NOTIFY_NEW_MAIL, SETTING_START_MINIMIZED,
+    GlobalProxyImport, NewAiProvider, NotifyNewMailWhen, ProxyImport, SettingsImportPlan,
+    SettingsImportValues, SignatureImport, SETTING_BLOCK_REMOTE_IMAGES, SETTING_MINIMIZE_TO_TRAY,
+    SETTING_NOTIFY_AI_ENABLED, SETTING_NOTIFY_NEW_MAIL, SETTING_NOTIFY_NEW_MAIL_WHEN,
+    SETTING_START_MINIMIZED,
 };
 use mail_sync::crypto::random_bytes;
 use mail_sync::github::{self, Endpoints, GitHubProfile, DEFAULT_CLIENT_ID, SCOPE_LOGIN, SCOPE_SYNC};
@@ -569,6 +570,9 @@ pub struct SnapshotSettings {
     pub notify_new_mail: bool,
     /// 新邮件 AI 智能识别通知。
     pub notify_ai_enabled: bool,
+    /// 通知触发时机；旧同步包缺这个字段时为 `None`，导入时不覆盖本机选择。
+    #[serde(default)]
+    pub notify_new_mail_when: Option<NotifyNewMailWhen>,
     /// 默认拦截远程图片。
     pub block_remote_images_by_default: bool,
     /// 关闭主窗口时最小化到托盘。
@@ -923,6 +927,10 @@ fn read_snapshot_settings(store: &mail_store::Store) -> Result<SnapshotSettings,
     Ok(SnapshotSettings {
         notify_new_mail: setting_bool(store.get_setting(SETTING_NOTIFY_NEW_MAIL)?, true),
         notify_ai_enabled: setting_bool(store.get_setting(SETTING_NOTIFY_AI_ENABLED)?, false),
+        notify_new_mail_when: store
+            .get_setting(SETTING_NOTIFY_NEW_MAIL_WHEN)?
+            .as_deref()
+            .map(NotifyNewMailWhen::parse),
         block_remote_images_by_default: setting_bool(store.get_setting(SETTING_BLOCK_REMOTE_IMAGES)?, true),
         minimize_to_tray_on_close: setting_bool(store.get_setting(SETTING_MINIMIZE_TO_TRAY)?, true),
         start_minimized_to_tray: setting_bool(store.get_setting(SETTING_START_MINIMIZED)?, false),
@@ -1031,6 +1039,7 @@ fn build_import_plan(snapshot: &SettingsSnapshot) -> SettingsImportPlan {
         settings: SettingsImportValues {
             notify_new_mail: snapshot.settings.notify_new_mail,
             notify_ai_enabled: snapshot.settings.notify_ai_enabled,
+            notify_new_mail_when: snapshot.settings.notify_new_mail_when,
             block_remote_images_by_default: snapshot.settings.block_remote_images_by_default,
             minimize_to_tray_on_close: snapshot.settings.minimize_to_tray_on_close,
             start_minimized_to_tray: snapshot.settings.start_minimized_to_tray,

@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
+use mail_core::NotifyNewMailWhen;
 use serde::{Deserialize, Serialize};
 
 use crate::storage_dir::DATABASE_NAME;
@@ -42,6 +43,8 @@ pub struct AppSettings {
     pub notify_new_mail: bool,
     /// 通知智能识别（高级功能）：开启后新邮件正文会自动发往所选 AI；默认关。
     pub notify_ai_enabled: bool,
+    /// 新邮件提醒在什么时候弹；默认「主窗口不聚焦时」。
+    pub notify_new_mail_when: NotifyNewMailWhen,
     /// 是不是默认拦截邮件里的远程图片；默认拦（true）。
     /// 关掉之后，读信时远程图片会直接放行；本封放行与「信任发件人」仍各自有效。
     pub block_remote_images_by_default: bool,
@@ -79,6 +82,7 @@ impl Default for AppSettings {
             attachment_dir: None,
             notify_new_mail: true,
             notify_ai_enabled: false,
+            notify_new_mail_when: NotifyNewMailWhen::Unfocused,
             block_remote_images_by_default: true,
             minimize_to_tray_on_close: true,
             start_minimized_to_tray: false,
@@ -184,7 +188,10 @@ pub fn is_first_run(base_dir: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, SYNC_POLL_INTERVAL_DEFAULT_SECONDS, UPDATE_CHECK_INTERVAL_DEFAULT_HOURS};
+    use super::{
+        AppSettings, NotifyNewMailWhen, SYNC_POLL_INTERVAL_DEFAULT_SECONDS,
+        UPDATE_CHECK_INTERVAL_DEFAULT_HOURS,
+    };
     #[test]
     fn defaults_keep_current_behaviour() {
         let settings = AppSettings::default();
@@ -192,6 +199,11 @@ mod tests {
         assert_eq!(settings.attachment_dir, None);
         assert!(settings.notify_new_mail);
         assert!(!settings.notify_ai_enabled);
+        assert_eq!(
+            settings.notify_new_mail_when,
+            NotifyNewMailWhen::Unfocused,
+            "默认按「主窗口不聚焦时通知」"
+        );
         assert!(settings.block_remote_images_by_default);
         assert!(settings.minimize_to_tray_on_close, "默认按关闭键收进托盘");
         assert!(!settings.start_minimized_to_tray, "默认启动时显示主窗口");
@@ -219,6 +231,7 @@ mod tests {
             attachment_dir: Some(std::path::PathBuf::from("E:/OldFiles")),
             notify_new_mail: false,
             notify_ai_enabled: false,
+            notify_new_mail_when: NotifyNewMailWhen::Unfocused,
             block_remote_images_by_default: true,
             minimize_to_tray_on_close: true,
             start_minimized_to_tray: false,
@@ -290,6 +303,7 @@ mod tests {
             attachment_dir: Some(std::path::PathBuf::from("E:/Files")),
             notify_new_mail: false,
             notify_ai_enabled: true,
+            notify_new_mail_when: NotifyNewMailWhen::Background,
             block_remote_images_by_default: false,
             minimize_to_tray_on_close: false,
             start_minimized_to_tray: true,
@@ -308,6 +322,10 @@ mod tests {
             raw.contains("pendingCleanupDir"),
             "待清理字段要按 camelCase 落盘：{raw}"
         );
+        assert!(
+            raw.contains("\"notifyNewMailWhen\": \"background\""),
+            "提醒时机要按 camelCase 落盘：{raw}"
+        );
         let loaded = AppSettings::load(&dir);
         assert_eq!(loaded, settings);
         // 缺失的字段走默认：只写一个开关也能读出来。
@@ -319,6 +337,11 @@ mod tests {
             "老配置里缺这个字段时要按默认拦截处理"
         );
         assert!(!partial.notify_ai_enabled, "老配置里缺通知识别开关时要按关闭处理");
+        assert_eq!(
+            partial.notify_new_mail_when,
+            NotifyNewMailWhen::Unfocused,
+            "老配置里缺提醒时机时要按「不聚焦时通知」处理"
+        );
         assert!(
             !partial.classify_skip_manual_confirm,
             "老配置里缺手动分类免确认开关时按「仍要确认」处理"
@@ -343,6 +366,16 @@ mod tests {
         assert_eq!(partial.data_dir, None);
         assert_eq!(partial.attachment_dir, None);
         assert_eq!(partial.pending_cleanup_dir, None);
+        // 认不出来的旧值要回退默认，别让一个坏字段连累整份设置。
+        std::fs::write(
+            dir.join(super::SETTINGS_FILE),
+            "{ \"notifyNewMail\": false, \"notifyNewMailWhen\": \"\" }",
+        )
+        .expect("写文件");
+        assert_eq!(
+            AppSettings::load(&dir).notify_new_mail_when,
+            NotifyNewMailWhen::Unfocused
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

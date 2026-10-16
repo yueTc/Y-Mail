@@ -9,10 +9,84 @@ use std::collections::HashMap;
 use mail_domain::account::{AccountDraft, AccountId};
 use mail_domain::proxy::{GlobalProxyMode, ProxyConfig, ProxyId};
 use rusqlite::{OptionalExtension, Transaction};
+use serde::{Deserialize, Serialize};
 
 use crate::ai::{AiFunction, AiThinkingLevel, NewAiProvider};
 use crate::connection::Store;
 use crate::error::StoreError;
+
+/// 新邮件提醒在什么时候弹。
+///
+/// 这个值既写进 `settings.json`，也写进设置同步包；旧数据缺字段时统一按
+/// `Unfocused` 处理，保持升级前「窗口不在前台才弹」的行为。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NotifyNewMailWhen {
+    /// 主窗口没有焦点就弹。
+    #[default]
+    Unfocused,
+    /// 不管前台后台都弹。
+    Always,
+    /// 仅最小化或收进托盘、窗口不可见时弹。
+    Background,
+}
+
+impl Serialize for NotifyNewMailWhen {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for NotifyNewMailWhen {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // 认不出来的旧值一律回退 `Unfocused`，别让一个坏字段连累整份设置。
+        let raw = String::deserialize(deserializer)?;
+        Ok(Self::parse(&raw))
+    }
+}
+
+impl NotifyNewMailWhen {
+    /// 存进设置文件和同步表时用的稳定文本。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unfocused => "unfocused",
+            Self::Always => "always",
+            Self::Background => "background",
+        }
+    }
+
+    /// 读旧配置或同步包；缺字段、空值、未知值都回退到 `Unfocused`。
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "always" => Self::Always,
+            "background" => Self::Background,
+            _ => Self::Unfocused,
+        }
+    }
+
+    /// 存进外壳共享原子值的编号；后台通知循环按它判断时机。
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::Unfocused => 0,
+            Self::Always => 1,
+            Self::Background => 2,
+        }
+    }
+
+    /// 从共享原子值读回；认不出来的编号按 `Unfocused` 处理。
+    pub fn from_code(code: u8) -> Self {
+        match code {
+            1 => Self::Always,
+            2 => Self::Background,
+            _ => Self::Unfocused,
+        }
+    }
+}
 
 /// 全局代理导入意图；自定义代理只带快照逻辑键，落库时换成本机主键。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -113,6 +187,8 @@ pub struct SettingsImportValues {
     pub notify_new_mail: bool,
     /// 新邮件 AI 智能识别通知。
     pub notify_ai_enabled: bool,
+    /// 新邮件提醒时机；`None` 表示这次导入不带这个值，本机保持原样。
+    pub notify_new_mail_when: Option<NotifyNewMailWhen>,
     /// 默认拦截远程图片。
     pub block_remote_images_by_default: bool,
     /// 关闭主窗口时最小化到托盘。
@@ -125,6 +201,8 @@ pub struct SettingsImportValues {
 pub const SETTING_NOTIFY_NEW_MAIL: &str = "ui.notifyNewMail";
 /// 新邮件 AI 智能识别通知的键名。
 pub const SETTING_NOTIFY_AI_ENABLED: &str = "ui.notifyAiEnabled";
+/// 新邮件提醒时机的键名。
+pub const SETTING_NOTIFY_NEW_MAIL_WHEN: &str = "ui.notifyNewMailWhen";
 /// 默认拦截远程图片的键名。
 pub const SETTING_BLOCK_REMOTE_IMAGES: &str = "ui.blockRemoteImagesByDefault";
 /// 关闭主窗口最小化到托盘的键名。
@@ -248,6 +326,10 @@ impl Store {
         // 7) 界面开关。
         let settings = &plan.settings;
         set_setting_in(tx, SETTING_NOTIFY_NEW_MAIL, bool_str(settings.notify_new_mail))?;
+        // 提醒时机带值才写：旧同步包缺这个字段时保留本机已有选择。
+        if let Some(when) = settings.notify_new_mail_when {
+            set_setting_in(tx, SETTING_NOTIFY_NEW_MAIL_WHEN, when.as_str())?;
+        }
         set_setting_in(
             tx,
             SETTING_NOTIFY_AI_ENABLED,
@@ -706,6 +788,7 @@ mod tests {
             settings: SettingsImportValues {
                 notify_new_mail: true,
                 notify_ai_enabled: false,
+                notify_new_mail_when: Some(NotifyNewMailWhen::Always),
                 block_remote_images_by_default: true,
                 minimize_to_tray_on_close: true,
                 start_minimized_to_tray: false,
@@ -747,6 +830,37 @@ mod tests {
                 .expect("读开关")
                 .as_deref(),
             Some("true")
+        );
+        assert_eq!(
+            store
+                .get_setting(SETTING_NOTIFY_NEW_MAIL_WHEN)
+                .expect("读提醒时机")
+                .as_deref(),
+            Some("always")
+        );
+    }
+
+    #[test]
+    fn 提醒时机缺省时不覆盖本机已有值() {
+        let store = store();
+        store
+            .set_setting(SETTING_NOTIFY_NEW_MAIL_WHEN, "background")
+            .expect("先写本机值");
+        let plan = SettingsImportPlan {
+            settings: SettingsImportValues {
+                notify_new_mail_when: None,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        store.apply_settings_import(&plan).expect("导入");
+        assert_eq!(
+            store
+                .get_setting(SETTING_NOTIFY_NEW_MAIL_WHEN)
+                .expect("读提醒时机")
+                .as_deref(),
+            Some("background"),
+            "同步包不带字段时本机选择要保住"
         );
     }
     #[test]

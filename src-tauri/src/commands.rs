@@ -567,6 +567,8 @@ pub struct AppSettingsDto {
     /// 通知智能识别开关；默认关，前端必须显式带上。
     #[serde(default)]
     pub notify_ai_enabled: bool,
+    /// 新邮件提醒时机；默认「不聚焦时通知」。
+    pub notify_new_mail_when: mail_core::NotifyNewMailWhen,
     /// 读信是否默认拦截远程图片；出厂与默认都是拦。
     pub block_remote_images_by_default: bool,
     /// 按关闭键时是收进托盘还是退出应用；默认收。
@@ -611,6 +613,9 @@ pub struct AppSettingsInputDto {
     /// 通知智能识别开关；默认关，前端必须显式带上。
     #[serde(default)]
     pub notify_ai_enabled: bool,
+    /// 新邮件提醒时机；默认「不聚焦时通知」，旧调用不带时按默认处理。
+    #[serde(default)]
+    pub notify_new_mail_when: mail_core::NotifyNewMailWhen,
     /// 读信是否默认拦截远程图片；前端必须显式带上，防止旧调用悄悄变成放行。
     pub block_remote_images_by_default: bool,
 }
@@ -665,6 +670,7 @@ pub async fn set_app_settings(
         attachment_dir: None,
         notify_new_mail: input.notify_new_mail,
         notify_ai_enabled: input.notify_ai_enabled,
+        notify_new_mail_when: input.notify_new_mail_when,
         block_remote_images_by_default: input.block_remote_images_by_default,
         // 这两个开关由「启动与托盘」分组单独维护，这里从旧值原样带过。
         minimize_to_tray_on_close: previous.minimize_to_tray_on_close,
@@ -1066,6 +1072,7 @@ fn synced_toggles(settings: &AppSettings) -> mail_core::SyncedToggles {
     mail_core::SyncedToggles {
         notify_new_mail: settings.notify_new_mail,
         notify_ai_enabled: settings.notify_ai_enabled,
+        notify_new_mail_when: Some(settings.notify_new_mail_when),
         block_remote_images_by_default: settings.block_remote_images_by_default,
         minimize_to_tray_on_close: settings.minimize_to_tray_on_close,
         start_minimized_to_tray: settings.start_minimized_to_tray,
@@ -1090,6 +1097,7 @@ fn build_settings_dto(state: &AppState) -> AppSettingsDto {
         attachment_dir: path_text(settings.attachment_dir.as_deref()),
         notify_new_mail: settings.notify_new_mail,
         notify_ai_enabled: settings.notify_ai_enabled,
+        notify_new_mail_when: settings.notify_new_mail_when,
         block_remote_images_by_default: settings.block_remote_images_by_default,
         minimize_to_tray_on_close: settings.minimize_to_tray_on_close,
         start_minimized_to_tray: settings.start_minimized_to_tray,

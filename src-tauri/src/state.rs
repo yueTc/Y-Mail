@@ -34,6 +34,8 @@ pub struct AppState {
     notify_enabled: Arc<AtomicBool>,
     /// 通知智能识别开关；后台轮询线程直接读它，改了立刻生效。
     notify_ai_enabled: Arc<AtomicBool>,
+    /// 新邮件提醒时机（`NotifyNewMailWhen` 的编号）；后台轮询线程直接读它。
+    notify_new_mail_when: Arc<AtomicU8>,
     /// 邮件自动分类开关；后台轮询线程直接读它，关了立刻停止外发。
     classify_enabled: Arc<AtomicBool>,
     /// 分类把握程度门槛（百分数，50–99）；后台轮询线程直接读它。
@@ -58,6 +60,7 @@ impl AppState {
         settings: AppSettings,
         notify_enabled: Arc<AtomicBool>,
         notify_ai_enabled: Arc<AtomicBool>,
+        notify_new_mail_when: Arc<AtomicU8>,
         classify_enabled: Arc<AtomicBool>,
         classify_confidence_percent: Arc<AtomicU8>,
         first_run: bool,
@@ -74,6 +77,7 @@ impl AppState {
             settings: StdMutex::new(settings),
             notify_enabled,
             notify_ai_enabled,
+            notify_new_mail_when,
             classify_enabled,
             classify_confidence_percent,
             block_remote_images,
@@ -115,6 +119,8 @@ impl AppState {
             .store(settings.notify_new_mail, Ordering::Relaxed);
         self.notify_ai_enabled
             .store(settings.notify_ai_enabled, Ordering::Relaxed);
+        self.notify_new_mail_when
+            .store(settings.notify_new_mail_when.code(), Ordering::Relaxed);
         let classify_percent = settings.normalized_classify_confidence_percent();
         self.classify_enabled
             .store(settings.classify_enabled, Ordering::Relaxed);
@@ -162,6 +168,11 @@ impl AppState {
     /// 清掉暂存的旧数据目录。
     pub fn clear_pending_cleanup_dir(&self) {
         self.set_pending_cleanup_dir(None);
+    }
+
+    /// 当前新邮件提醒时机。
+    pub fn notify_new_mail_when(&self) -> mail_core::NotifyNewMailWhen {
+        mail_core::NotifyNewMailWhen::from_code(self.notify_new_mail_when.load(Ordering::Relaxed))
     }
 
     /// 当前「邮件自动分类」开关状态。
