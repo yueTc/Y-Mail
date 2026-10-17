@@ -152,8 +152,8 @@ export const UNIFIED_VIEWS: ReadonlyArray<{ id: UnifiedView; label: string }> = 
   { id: "trash", label: "已删除" },
 ];
 
-/** 统一入口的装饰图标：只负责造型，按钮文字已经给出可读名称。 */
-function UnifiedViewIcon({ view }: { view: UnifiedView }) {
+/** 统一入口和账号文件夹共用装饰图标：未知类型显示普通文件夹。 */
+function SidebarEntryIcon({ kind }: { kind: string }) {
   const iconProps = {
     viewBox: "0 0 24 24",
     className: "sidebar-view-icon",
@@ -161,7 +161,7 @@ function UnifiedViewIcon({ view }: { view: UnifiedView }) {
     focusable: "false",
   } as const;
 
-  switch (view) {
+  switch (kind) {
     case "inbox":
       return (
         <svg {...iconProps}>
@@ -212,6 +212,13 @@ function UnifiedViewIcon({ view }: { view: UnifiedView }) {
           <path d="M4 7h16M9 4h6l1 3H8l1-3Z" />
           <path d="m7 7 1 14h8l1-14" />
           <path d="M10 11v6M14 11v6" />
+        </svg>
+      );
+    default:
+      return (
+        <svg {...iconProps}>
+          <path d="M3 7V5h6l2 2h10v13H3V7Z" />
+          <path d="M3 10h18" />
         </svg>
       );
   }
@@ -1639,7 +1646,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
                 setUnifiedView(view.id);
               }}
             >
-              <UnifiedViewIcon view={view.id} />
+              <SidebarEntryIcon kind={view.id} />
               <span className="sidebar-item-title">{t(view.label)}</span>
               {badge > 0 && <span className="sidebar-count">{badge}</span>}
             </button>
@@ -1700,6 +1707,7 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
                         setFlaggedView(true);
                       }}
                     >
+                      <SidebarEntryIcon kind="flagged" />
                       <span className="sidebar-item-title">{t("红旗邮件")}</span>
                     </button>
                   ) : (
@@ -1718,9 +1726,10 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
                         setFlaggedView(false);
                       }}
                     >
+                      <SidebarEntryIcon kind={entry.folder.kind} />
                       <span className="sidebar-item-title">{folderLabel(entry.folder)}</span>
                       {entry.folder.unreadCount > 0 && (
-                        <span className="unread-badge">{entry.folder.unreadCount}</span>
+                        <span className="sidebar-count">{entry.folder.unreadCount}</span>
                       )}
                     </button>
                   ),
@@ -1799,8 +1808,21 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
               {effectiveUnread && <circle cx="19" cy="5" r="2.5" fill="currentColor" stroke="none" />}
             </svg>
           </button>
-          <button type="button" onClick={() => void refreshAll()} disabled={loading}>
-            {t("刷新")}</button>
+          <button
+            type="button"
+            className="inbox-icon-button"
+            aria-label={t("刷新")}
+            title={t("刷新")}
+            onClick={() => void refreshAll()}
+            disabled={loading}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M3 11a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 7" />
+              <path d="M21 2v5h-5" />
+              <path d="M21 13a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 17" />
+              <path d="M3 22v-5h5" />
+            </svg>
+          </button>
           {currentSync && (
             <span
               className={syncBadgeClass(currentSync)}
