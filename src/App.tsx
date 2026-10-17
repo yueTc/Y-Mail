@@ -122,25 +122,34 @@ export default function App() {
   }, []);
 
   const handleComposeSeedConsumed = useCallback(() => setComposeSeed(undefined), []);
-  const handleNotificationOpen = useCallback(() => setMode("inbox"), []);
+  const handleBackToInbox = useCallback(() => setMode("inbox"), []);
+  const handleOpenContacts = useCallback(() => setMode("contacts"), []);
+  const handleOpenSettings = useCallback(() => setMode("settings"), []);
 
   return (
     <>
       <WorkspaceShell
         mode={mode}
-        onModeChange={setMode}
-        githubProfile={githubProfile}
-        onAccountClick={openSyncSettings}
         inbox={
           <InboxPanel
             composeSeed={composeSeed}
             onComposeSeedConsumed={handleComposeSeedConsumed}
-            onNotificationOpen={handleNotificationOpen}
+            onNotificationOpen={handleBackToInbox}
+            githubProfile={githubProfile}
+            onOpenContacts={handleOpenContacts}
+            onOpenSettings={handleOpenSettings}
+            onOpenSyncSettings={openSyncSettings}
           />
         }
-        contacts={<ContactsWorkspace onCompose={handleComposeToContact} />}
+        contacts={
+          <ContactsWorkspace
+            onCompose={handleComposeToContact}
+            onBackToInbox={handleBackToInbox}
+          />
+        }
         settings={
           <SettingsWorkspace
+            onBackToInbox={handleBackToInbox}
             proxiesVersion={proxiesVersion}
             syncOpenRequest={syncOpenRequest}
             onGitHubProfileChanged={setGitHubProfile}

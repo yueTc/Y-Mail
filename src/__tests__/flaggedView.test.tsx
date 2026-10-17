@@ -571,19 +571,19 @@ describe("邮箱栏右键添加和删除", () => {
   it("下一次状态轮询也不会把已删除邮箱的数量算回来", async () => {
     const intervalSpy = vi.spyOn(window, "setInterval");
     vi.mocked(api.syncStatus).mockResolvedValue([{
-      accountId: 1, email: "a@example.com", state: "idle", stateLabel: "实时等待",
+      accountId: 1, email: "a@example.com", state: "syncing", stateLabel: "同步中",
       progress: 3, total: 3, message: "", needsReauth: false, updatedAt: "",
     }]);
     render(<InboxPanel />);
     const dialog = await openDelete();
-    expect(await screen.findByText("实时等待 3/3")).toBeTruthy();
+    expect(await screen.findByText("同步中 3/3")).toBeTruthy();
     vi.mocked(api.inboxSummary).mockResolvedValue({ accounts: [], totalMessages: 0, totalUnread: 0 });
     fireEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: /测试账号/ })).toBeNull());
     const poll = intervalSpy.mock.calls.find((call) => call[1] === 2000)?.[0];
     expect(typeof poll).toBe("function");
     await act(async () => { if (typeof poll === "function") await poll(); });
-    expect(screen.queryByText("实时等待 3/3")).toBeNull();
+    expect(screen.queryByText("同步中 3/3")).toBeNull();
     intervalSpy.mockRestore();
   });
 
@@ -923,10 +923,10 @@ describe("收件箱右键立即分类", () => {
 
   it("邮件右键菜单提供回复和转发，并针对点中的邮件打开写信窗格", async () => {
     prepare();
-    const toolbar = document.querySelector(".inbox-toolbar");
-    expect(toolbar).toBeTruthy();
-    expect(within(toolbar as HTMLElement).queryByRole("button", { name: "回复" })).toBeNull();
-    expect(within(toolbar as HTMLElement).queryByRole("button", { name: "转发" })).toBeNull();
+    const titlebarActions = document.querySelector(".app-titlebar-actions");
+    expect(titlebarActions).toBeTruthy();
+    expect(within(titlebarActions as HTMLElement).queryByRole("button", { name: "回复" })).toBeNull();
+    expect(within(titlebarActions as HTMLElement).queryByRole("button", { name: "转发" })).toBeNull();
 
     const subject = await screen.findByText("账单邮件");
     fireEvent.contextMenu(subject);

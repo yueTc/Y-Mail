@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import SettingsWorkspace from "../SettingsWorkspace";
 import App from "../App";
-import { api, type AppSettings, type GroupResult, type InboxMessage } from "../api";
+import { api, type AppSettings, type GitHubLoginView, type GroupResult, type InboxMessage } from "../api";
 import { open } from "@tauri-apps/plugin-dialog";
 
 vi.mock("../api", () => ({
@@ -37,7 +37,26 @@ vi.mock("../api", () => ({
 }));
 
 // 设置页复用了其它面板；这里只测存储分组，把它们替换成空壳。
-vi.mock("../InboxPanel", () => ({ default: () => null }));
+vi.mock("../InboxPanel", () => ({
+  default: ({
+    githubProfile,
+    onOpenSettings,
+    onOpenSyncSettings,
+  }: {
+    githubProfile?: GitHubLoginView | null;
+    onOpenSettings?: () => void;
+    onOpenSyncSettings?: () => void;
+  }) => (
+    <div>
+      <button type="button" aria-label="GitHub 账号" onClick={onOpenSyncSettings}>
+        {githubProfile?.avatarDataUrl ? (
+          <img src={githubProfile.avatarDataUrl} alt="GitHub 头像" />
+        ) : null}
+      </button>
+      <button type="button" aria-label="设置" onClick={onOpenSettings} />
+    </div>
+  ),
+}));
 vi.mock("../ContactsWorkspace", () => ({ default: () => null }));
 vi.mock("../FirstRunWizard", () => ({ default: () => null }));
 vi.mock("../SyncPanel", () => ({ default: () => null }));
@@ -450,8 +469,8 @@ describe("收件箱消息的标签组结果", () => {
   });
 });
 
-describe("主导航账号入口", () => {
-  it("每次点击都打开同步，登录和退出后头像立即跟随变化", async () => {
+describe("邮箱栏底部账号与设置入口", () => {
+  it("账号打开同步，设置打开设置页，登录和退出后头像跟随变化", async () => {
     const profile = {
       login: "octocat", name: "八爪猫", scope: "sync" as const,
       avatarDataUrl: "data:image/png;base64,iVBORw0KGgo=",
@@ -469,8 +488,7 @@ describe("主导航账号入口", () => {
     });
     render(<App />);
 
-    const nav = within(screen.getByRole("navigation", { name: "主导航" }));
-    const account = nav.getByRole("button", { name: "GitHub 账号" });
+    const account = await screen.findByRole("button", { name: "GitHub 账号" });
     expect(within(account).queryByRole("img")).toBeNull();
     fireEvent.click(account);
     expect(await screen.findByRole("button", { name: "用 GitHub 登录" })).toBeTruthy();
@@ -480,23 +498,27 @@ describe("主导航账号入口", () => {
     await openCategory("存储");
     const dataDir = await screen.findByRole("textbox");
     fireEvent.change(dataDir, { target: { value: "D:/未保存目录" } });
+    fireEvent.click(screen.getByRole("button", { name: "返回收件箱" }));
     fireEvent.click(account);
     expect(screen.getByRole("button", { name: "同步" }).getAttribute("aria-current")).toBe("true");
 
     fireEvent.click(screen.getByRole("button", { name: "用 GitHub 登录" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回收件箱" }));
     await waitFor(() =>
       expect(within(account).getByRole("img").getAttribute("src")).toBe(profile.avatarDataUrl),
     );
-    // 头像与退出按钮分属两层状态，等退出按钮真正渲染出来再点，避免时序不稳。
+
+    fireEvent.click(account);
     fireEvent.click(await screen.findByRole("button", { name: "退出登录" }));
     await waitFor(() => expect(within(account).queryByRole("img")).toBeNull());
     expect(await screen.findByRole("button", { name: "用 GitHub 登录" })).toBeTruthy();
 
     await openCategory("存储");
     expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe("D:/未保存目录");
-    fireEvent.click(nav.getByRole("button", { name: "收件箱" }));
-    fireEvent.click(nav.getByRole("button", { name: "设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回收件箱" }));
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
     expect(screen.getByRole("button", { name: "存储" }).getAttribute("aria-current")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "返回收件箱" }));
     fireEvent.click(account);
     expect(screen.getByRole("button", { name: "同步" }).getAttribute("aria-current")).toBe("true");
   });

@@ -817,8 +817,18 @@ export default function ComposePanel({ request, accounts, onClose, onSent, aiEna
           {title}
           {restoredFromBackup && <span className="compose-draft-badge">{t("草稿")}</span>}
         </h3>
-        <button type="button" onClick={handleCloseRequest} disabled={busy}>
-          {t("关闭")}</button>
+        <button
+          type="button"
+          className="compose-close-button"
+          onClick={handleCloseRequest}
+          disabled={busy}
+          aria-label={t("关闭")}
+          title={t("关闭写信窗格")}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        </button>
       </header>
 
       {closePromptOpen && (

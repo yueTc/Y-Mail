@@ -11,6 +11,7 @@
   --panel-bg: rgba(255, 255, 255, 0.72);
   --panel-solid: #ffffff;
   --field-bg: rgba(255, 255, 255, 0.9);
+  --inbox-highlight-bg: #f3f5fa;
   --line: rgba(128, 128, 128, 0.35);
   --border: var(--line);
   --text: #1f2328;
@@ -90,6 +91,7 @@ body {
     --panel-bg: rgba(255, 255, 255, 0.04);
     --panel-solid: #23272c;
     --field-bg: rgba(255, 255, 255, 0.06);
+    --inbox-highlight-bg: var(--panel-solid);
     --line: rgba(160, 170, 185, 0.28);
     --border: var(--line);
     --text: #e6e8ea;
@@ -118,6 +120,7 @@ body {
   --panel-bg: rgba(255, 255, 255, 0.04);
   --panel-solid: #23272c;
   --field-bg: rgba(255, 255, 255, 0.06);
+  --inbox-highlight-bg: var(--panel-solid);
   --line: rgba(160, 170, 185, 0.28);
   --border: var(--line);
   --text: #e6e8ea;
@@ -583,7 +586,203 @@ textarea:focus {
   margin: 0;
   word-break: break-all;
 }
-/* ---------- Wave 3 统一收件箱三栏布局 ---------- */
+/* ---------- 应用标题栏与统一收件箱三栏布局 ---------- */
+
+.app-titlebar {
+  display: flex;
+  flex: 0 0 46px;
+  align-items: stretch;
+  width: 100%;
+  height: 46px;
+  min-height: 46px;
+  overflow: hidden;
+  background: var(--panel-bg);
+  color: var(--text);
+  user-select: none;
+}
+
+.app-titlebar-leading {
+  display: flex;
+  flex: none;
+  align-items: center;
+  min-width: 0;
+  padding: 0 10px 0 12px;
+}
+
+/* 标题栏不再单独画右边线，由下方拖动条统一向上延伸，避免双线和错位。 */
+.inbox-titlebar .app-titlebar-leading {
+  border-right: 0;
+  background: var(--inbox-highlight-bg);
+}
+
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.app-brand-icon {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.app-brand-name {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 1.02rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-titlebar-center {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: stretch;
+  min-width: 220px;
+  overflow: hidden;
+}
+
+.app-titlebar-drag {
+  flex: 1 1 auto;
+  min-width: 24px;
+}
+
+.app-titlebar-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding-left: 8px;
+}
+
+.titlebar-contact-button,
+.titlebar-back,
+.titlebar-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-small);
+  white-space: nowrap;
+}
+
+.titlebar-back {
+  padding-inline: 7px 10px;
+}
+
+.titlebar-contact-button svg,
+.titlebar-back svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.titlebar-contact-button:hover:not(:disabled),
+.titlebar-back:hover:not(:disabled),
+.titlebar-retry:hover:not(:disabled) {
+  background: var(--state-hover-bg);
+  color: var(--text);
+}
+
+.titlebar-retry {
+  color: var(--danger);
+}
+
+.titlebar-icon-button {
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.titlebar-icon-button:hover:not(:disabled) {
+  background: var(--state-hover-bg);
+  color: var(--text);
+}
+
+.titlebar-icon-button.is-active,
+.titlebar-icon-button.is-active:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.titlebar-loading {
+  margin: 0 3px;
+  white-space: nowrap;
+}
+
+.window-controls {
+  display: flex;
+  align-self: stretch;
+  height: 100%;
+  margin-left: 6px;
+  border-left: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+}
+
+.window-control-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.window-control-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.window-control-button:hover {
+  background: var(--state-hover-bg);
+  color: var(--text);
+}
+
+.window-control-button.window-control-close:hover {
+  background: #c42b1c;
+  color: #ffffff;
+}
+
+.inbox-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
 
 .app-head {
   display: flex;
@@ -617,10 +816,11 @@ textarea:focus {
 
 .inbox-layout {
   display: grid;
+  flex: 1 1 auto;
   /* 列宽由 InboxPanel 内联样式给出；拖动条列为 0，组件叠在交界线上。 */
   gap: 0;
   align-items: stretch;
-  height: 100%;
+  height: auto;
   min-height: 0;
 }
 
@@ -636,8 +836,85 @@ textarea:focus {
 }
 
 .inbox-sidebar {
-  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px 8px;
+  background: var(--inbox-highlight-bg);
+  overflow: hidden;
+}
+
+.inbox-sidebar-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0 1px;
   overflow-y: auto;
+}
+
+.mailbox-footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 4px 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.mailbox-account-button,
+.mailbox-settings-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.mailbox-account-button {
+  border-radius: 50%;
+}
+
+.mailbox-account-button:hover,
+.mailbox-settings-button:hover {
+  background: var(--state-hover-bg);
+  color: var(--text);
+}
+
+.mailbox-account-button:focus-visible,
+.mailbox-settings-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mailbox-avatar {
+  display: block;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--surface);
+  object-fit: cover;
+}
+
+.mailbox-account-icon {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mailbox-settings-button svg {
+  width: 18px;
+  height: 18px;
 }
 
 .sidebar-compose {
@@ -795,18 +1072,6 @@ textarea:focus {
   flex-direction: column;
 }
 
-.inbox-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
-}
-
-.inbox-toolbar .hint {
-  margin: 0;
-}
 
 .inbox-icon-button {
   display: inline-flex;
@@ -1256,6 +1521,11 @@ textarea:focus {
   transform: translateX(-50%);
 }
 
+/* 收件箱分栏线从窗口顶部起画，和标题栏融成同一块连续表面。 */
+.inbox-layout > .pane-resizer::before {
+  inset-block: -46px 0;
+}
+
 .pane-resizer:hover::before,
 .pane-resizer:focus-visible::before,
 .pane-resizer[data-dragging]::before,
@@ -1430,21 +1700,26 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--line);
+  flex-wrap: nowrap;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  padding: 0 10px;
+  border-bottom: 0;
 }
 
 .inbox-search-field {
   display: flex;
   align-items: center;
-  flex: 1 1 180px;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 32px;
   min-width: 0;
   gap: 10px;
   padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
-  background: var(--field-bg);
+  background: var(--inbox-highlight-bg);
   cursor: text;
 }
 
@@ -1465,7 +1740,7 @@ textarea:focus {
   flex: 1;
   width: 0;
   min-width: 0;
-  height: var(--input-height);
+  height: 100%;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -1614,6 +1889,36 @@ textarea:focus {
 .compose-head h3 {
   margin: 0;
   font-size: 1.05rem;
+}
+
+.compose-close-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.compose-close-button:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--state-hover-bg);
+  color: var(--text);
+}
+
+.compose-close-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
 }
 
 .compose-form {
@@ -1856,86 +2161,13 @@ textarea:focus {
   margin-top: 10px;
 }
 
-/* ===== 双模式工作区外壳（最左设置栏 + 收件箱/设置切换） ===== */
+/* ===== 三页面工作区外壳（页面自己带标题栏和返回入口） ===== */
 
 .workspace {
   display: flex;
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
-}
-
-.workspace-rail {
-  flex: 0 0 60px;
-  width: 60px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 6px;
-  border-right: 1px solid var(--line);
-  background: var(--panel-bg);
-}
-
-.workspace-rail-main,
-.workspace-rail-bottom {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 100%;
-}
-
-.workspace-rail-bottom {
-  margin-top: auto;
-}
-
-.rail-button {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  min-height: 44px;
-  padding: 10px 2px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: transparent;
-  color: inherit;
-}
-
-.rail-button:hover:not(.active) {
-  background: var(--state-hover-bg);
-}
-
-/* 同上：选中态只留淡底和强调色图标文字，去掉亮边框。 */
-.rail-button.active {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--accent);
-}
-
-.rail-button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.rail-icon {
-  width: 22px;
-  height: 22px;
-}
-
-.rail-button.rail-account-button {
-  height: 44px;
-  padding: 6px 2px;
-}
-
-.rail-avatar {
-  display: block;
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  object-fit: cover;
-  background: var(--surface);
 }
 
 .workspace-body {
@@ -1994,28 +2226,25 @@ textarea:focus {
 
 /* ===== 设置页（两栏：左分类 / 右内容） ===== */
 
-.settings-workspace {
+.settings-page,
+.contacts-page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.settings-workspace {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 16px;
+  height: auto;
   min-height: 0;
   padding: 22px 24px 18px;
   overflow: hidden;
 }
-
-.settings-head {
-  display: flex;
-  flex: none;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.settings-head h1 {
-  margin: 0;
-}
-
 
 /* 左栏宽度和拖动条宽度都由界面按当前窗口算，写进 grid 模板。 */
 .settings-columns {
@@ -2184,11 +2413,160 @@ textarea:focus {
   margin-top: 4px;
 }
 
+/* 设置页排版收口：正文保持可读宽度，卡片内控件按行对齐，不铺满整块窗口。 */
+.settings-workspace .settings-content {
+  padding: 2px 28px 32px 18px;
+  scrollbar-gutter: stable;
+}
+
+.settings-workspace .settings-group {
+  width: min(100%, 960px);
+  gap: 14px;
+}
+
+.settings-workspace .settings-group-title {
+  padding-bottom: 0;
+  border-bottom: 0;
+  font-size: 1.08rem;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+.settings-workspace .settings-group .panel {
+  min-width: 0;
+  padding: 18px 20px;
+}
+
+.settings-workspace .settings-subtitle {
+  margin-bottom: 8px;
+}
+
+.settings-workspace .switch-rows {
+  width: 100%;
+}
+
+.settings-workspace .switch-row {
+  gap: 24px;
+  padding: 12px 0;
+}
+
+.settings-workspace .switch-row:first-child {
+  padding-top: 0;
+}
+
+.settings-workspace .switch-row:last-child {
+  padding-bottom: 0;
+}
+
+.settings-workspace .switch-row-text {
+  flex: 1 1 auto;
+}
+
+.settings-workspace .switch-row-title {
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.settings-workspace .switch-row-sub {
+  line-height: 1.45;
+}
+
+.settings-workspace .switch-input {
+  order: 2;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.settings-row-title-with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+}
+
+.settings-workspace .settings-row-title-with-help .field-help {
+  order: initial;
+  flex: 0 0 auto;
+}
+
+.settings-workspace .settings-row-control {
+  order: 2;
+  flex: 0 1 220px;
+  width: min(100%, 220px);
+  min-width: 160px;
+  max-width: 220px;
+  margin-left: auto;
+}
+
+/* 外观页选项改成统一的“左侧标签、右侧选择”，避免一列窄表单显得散。 */
+.settings-workspace .appearance-fieldset {
+  max-width: none;
+  margin-bottom: 4px;
+}
+
+.settings-workspace .appearance-setting {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 220px);
+  align-items: center;
+  gap: 20px;
+  max-width: none;
+  min-height: 44px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.settings-workspace .appearance-setting > select {
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-workspace .appearance-setting .hint {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 980px) {
+  .settings-workspace .settings-content {
+    padding-right: 16px;
+  }
+
+  .settings-workspace .settings-row-control {
+    flex-basis: 200px;
+    max-width: 200px;
+  }
+}
+
+@media (max-width: 760px) {
+  .settings-workspace {
+    padding: 14px 16px 16px;
+  }
+
+  .settings-workspace .settings-content {
+    padding-right: 12px;
+  }
+
+  .settings-workspace .switch-row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .settings-workspace .settings-row-control {
+    flex: 1 0 100%;
+    width: 100%;
+    max-width: none;
+  }
+
+  .settings-workspace .appearance-setting {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+}
 /* ===== 通讯录页（三栏：分组栏 / 列表栏 / 详情栏） ===== */
 
 .contacts-workspace {
   display: grid;
-  height: 100%;
+  flex: 1 1 auto;
+  height: auto;
   min-height: 0;
   overflow: hidden;
 }
@@ -2753,14 +3131,12 @@ textarea:disabled {
   cursor: not-allowed;
 }
 
-/* 筛选器与工具栏：底色和分隔线跟随令牌。 */
-.inbox-search,
-.inbox-toolbar {
+/* 筛选器：底色和分隔线跟随令牌。 */
+.inbox-search {
   border-bottom-color: var(--line);
 }
 
-.inbox-search select,
-.inbox-toolbar select {
+.inbox-search select {
   background: var(--field-bg);
   border-color: var(--line);
 }

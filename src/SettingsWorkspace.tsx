@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { api, describeError, type AppSettings, type GitHubLoginView, type NotifyNewMailWhen } from "./api";
 import AboutPanel from "./AboutPanel";
+import AppTitleBar, { BackToInboxButton } from "./AppTitleBar";
 import AccountPanel from "./AccountPanel";
 import AiPanel from "./AiPanel";
 import AppearanceSettingsPanel from "./AppearanceSettingsPanel";
@@ -14,7 +15,7 @@ import SettingsSyncPanel from "./SettingsSyncPanel";
 import SyncPollSettingsPanel from "./SyncPollSettingsPanel";
 import RestartChoiceDialog from "./RestartChoiceDialog";
 import SyncPanel from "./SyncPanel";
-import { RAIL_WIDTH, RESIZER_WIDTH } from "./usePaneWidths";
+import { RESIZER_WIDTH } from "./usePaneWidths";
 import { t } from "./i18n";
 
 type StorageState =
@@ -84,6 +85,8 @@ function persistNavWidth(value: number): void {
 }
 
 type SettingsWorkspaceProps = {
+  /** 顶部返回入口；直接渲染设置页的测试可以不传。 */
+  onBackToInbox?: () => void;
   proxiesVersion: number;
   /** 账号入口每次点击递增，确保重复点击仍能跳回同步分类。 */
   syncOpenRequest?: number;
@@ -105,6 +108,7 @@ type SettingsWorkspaceProps = {
  * 切换分类只隐藏面板、不卸载，避免丢掉没保存的表单内容。
  */
 export default function SettingsWorkspace({
+  onBackToInbox,
   proxiesVersion,
   syncOpenRequest = 0,
   onGitHubProfileChanged,
@@ -213,7 +217,7 @@ export default function SettingsWorkspace({
     SETTINGS_NAV_MIN,
     Math.min(
       SETTINGS_NAV_MAX,
-      windowWidth - RAIL_WIDTH - SETTINGS_PADDING_X - RESIZER_WIDTH - SETTINGS_CONTENT_MIN,
+      windowWidth - SETTINGS_PADDING_X - RESIZER_WIDTH - SETTINGS_CONTENT_MIN,
     ),
   );
   const effectiveNavWidth = Math.min(navMax, clampNavWidth(navWidth));
@@ -516,15 +520,11 @@ export default function SettingsWorkspace({
   };
 
   return (
-    <div className="settings-workspace">
-      <header className="settings-head">
-        <div>
-          <h1>{t("设置")}</h1>
-        </div>
-      </header>
-
-      <div
-        className="settings-columns"
+    <div className="settings-page">
+      <AppTitleBar leading={<BackToInboxButton onClick={() => onBackToInbox?.()} />} />
+      <div className="settings-workspace">
+        <div
+          className="settings-columns"
         style={{
           gridTemplateColumns: `${effectiveNavWidth}px ${RESIZER_WIDTH}px minmax(0, 1fr)`,
         }}
@@ -639,36 +639,41 @@ export default function SettingsWorkspace({
 
             <section className="panel" aria-label={t("拦截远程图片")}>
               {storage.kind === "ready" ? (
-                <div className="settings-form">
-                  <label className="checkbox">
+                <div className="switch-rows">
+                  <label className="switch-row">
+                    <span className="switch-row-text">
+                      <span className="switch-row-title settings-row-title-with-help">
+                        {t("拦截远程图片")}
+                        <svg
+                          className="field-help"
+                          role="img"
+                          aria-label={t("远程图片说明")}
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                        >
+                          <title>
+                            {t("远程图片默认拦截。被记住的发件人会直接显示图片，要恢复拦截就在「读信与远程图片」里移除。")}
+                          </title>
+                          <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.4" />
+                          <path
+                            d="M8 4.2v4.6"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.6"
+                            strokeLinecap="round"
+                          />
+                          <circle cx="8" cy="11.6" r="0.9" fill="currentColor" />
+                        </svg>
+                      </span>
+                    </span>
                     <input
                       type="checkbox"
+                      className="switch-input"
                       checked={blockRemoteImagesByDefault}
                       disabled={saving}
                       onChange={(event) => void saveBlockRemoteImages(event.target.checked)}
                     />
-                    <span>{t("拦截远程图片")}</span>
-                    <svg
-                      className="field-help"
-                      role="img"
-                      aria-label={t("远程图片说明")}
-                      width="16"
-                      height="16"
-                      viewBox="0 0 16 16"
-                    >
-                      <title>
-                        {t("远程图片默认拦截。被记住的发件人会直接显示图片，要恢复拦截就在「读信与远程图片」里移除。")}
-                      </title>
-                      <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.4" />
-                      <path
-                        d="M8 4.2v4.6"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.6"
-                        strokeLinecap="round"
-                      />
-                      <circle cx="8" cy="11.6" r="0.9" fill="currentColor" />
-                    </svg>
                   </label>
                   {generalSaveError && (
                     <p className="error" role="alert">
@@ -685,20 +690,26 @@ export default function SettingsWorkspace({
             <section className="panel" aria-label={t("通知")}>
               <h3 className="settings-subtitle">{t("通知")}</h3>
               {storage.kind === "ready" ? (
-                <div className="settings-form">
-                  <label className="checkbox">
+                <div className="switch-rows">
+                  <label className="switch-row">
+                    <span className="switch-row-text">
+                      <span className="switch-row-title">{t("启用邮件系统通知")}</span>
+                    </span>
                     <input
                       type="checkbox"
+                      className="switch-input"
                       checked={notifyNewMail}
                       disabled={saving}
                       onChange={(event) => void saveNotifyNewMail(event.target.checked)}
                     />
-                    <span>{t("启用邮件系统通知")}</span>
                   </label>
 
-                  <label className="field">
-                    <span>{t("通知时机")}</span>
+                  <label className="switch-row">
+                    <span className="switch-row-text">
+                      <span className="switch-row-title">{t("通知时机")}</span>
+                    </span>
                     <select
+                      className="settings-row-control"
                       aria-label={t("通知时机")}
                       value={notifyNewMailWhen}
                       disabled={saving || !notifyNewMail}
@@ -914,6 +925,7 @@ export default function SettingsWorkspace({
           onChoose={(cleanup) => void restart(cleanup)}
         />
       )}
+      </div>
     </div>
   );
 }

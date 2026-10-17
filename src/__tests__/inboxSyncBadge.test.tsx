@@ -35,8 +35,8 @@ function status(accountId: number, progress: number, total = progress): SyncStat
   return {
     accountId,
     email: `mail${accountId}@example.com`,
-    state: "idle_waiting",
-    stateLabel: "等待新邮件",
+    state: "syncing",
+    stateLabel: "同步中",
     progress,
     total,
     message: "",
@@ -71,7 +71,7 @@ describe("多邮箱同步数量", () => {
   it("统一入口合计每个邮箱的已同步数和总数，悬停说明逐账号列出", async () => {
     render(<InboxPanel />);
     const badge = await screen.findByRole("status");
-    expect(badge.textContent).toBe("等待新邮件 1536/1556");
+    expect(badge.textContent).toBe("同步中 1536/1556");
     for (const [accountId, progress, total] of [[1, 1306, 1306], [2, 200, 200], [3, 30, 50]]) {
       expect(badge.title).toContain(`mail${accountId}@example.com`);
       expect(badge.title).toContain(`进度 ${progress}/${total}`);
@@ -82,11 +82,11 @@ describe("多邮箱同步数量", () => {
     render(<InboxPanel />);
     const badge = await screen.findByRole("status");
     fireEvent.click(await screen.findByRole("button", { name: "邮箱2" }));
-    await waitFor(() => expect(badge.textContent).toBe("等待新邮件 200/200"));
+    await waitFor(() => expect(badge.textContent).toBe("同步中 200/200"));
     expect(badge.title).toContain("mail2@example.com");
     expect(badge.title).not.toContain("mail1@example.com");
     fireEvent.click(screen.getByRole("button", { name: /未读邮件/ }));
-    await waitFor(() => expect(badge.textContent).toBe("等待新邮件 1536/1556"));
+    await waitFor(() => expect(badge.textContent).toBe("同步中 1536/1556"));
   });
 
   it("其他邮箱出错时仍显示错误和重试入口，数量继续合计", async () => {
@@ -106,14 +106,24 @@ describe("多邮箱同步数量", () => {
     vi.mocked(api.syncStatus).mockResolvedValue([status(1, 1306), status(2, 20, 0)]);
     render(<InboxPanel />);
     const badge = await screen.findByRole("status");
-    expect(badge.textContent).toBe("等待新邮件");
+    expect(badge.textContent).toBe("同步中");
     expect(badge.title).toContain("已处理 20 封");
+  });
+
+  it("空闲或等待新邮件时不显示徽标", async () => {
+    vi.mocked(api.syncStatus).mockResolvedValue([
+      { ...status(1, 1306), state: "idle", stateLabel: "空闲" },
+      { ...status(2, 200), state: "idle_waiting", stateLabel: "等待新邮件" },
+    ]);
+    const { container } = render(<InboxPanel />);
+    await screen.findByRole("button", { name: "邮箱1" });
+    expect(container.querySelector(".sync-badge")).toBeNull();
   });
 
   it("没有同步状态时不显示徽标", async () => {
     vi.mocked(api.syncStatus).mockResolvedValue([]);
-    render(<InboxPanel />);
+    const { container } = render(<InboxPanel />);
     await screen.findByRole("button", { name: "邮箱1" });
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(container.querySelector(".sync-badge")).toBeNull();
   });
 });

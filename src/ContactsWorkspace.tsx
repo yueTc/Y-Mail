@@ -27,6 +27,7 @@ import {
   type ContactGroup,
   type ContactImportPreview,
 } from "./api";
+import AppTitleBar, { BackToInboxButton } from "./AppTitleBar";
 import PaneResizer from "./PaneResizer";
 import { CONTACTS_PANE_PROFILE, RESIZER_WIDTH, usePaneWidths } from "./usePaneWidths";
 import { t } from "./i18n";
@@ -41,6 +42,8 @@ const CONTACT_ROW_HEIGHT = 58;
 type ContactsWorkspaceProps = {
   /** 点「写邮件」时把联系人交给外壳，由外壳切回收件箱并预填收件人。 */
   onCompose: (contact: Contact) => void;
+  /** 顶部返回入口；直接渲染通讯录的测试可以不传。 */
+  onBackToInbox?: () => void;
 };
 
 /** 左侧当前选中哪一项。 */
@@ -204,7 +207,7 @@ function draftOf(contact: Contact): ContactDraft {
 }
 
 /** 通讯录三栏页。 */
-export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps) {
+export default function ContactsWorkspace({ onCompose, onBackToInbox }: ContactsWorkspaceProps) {
   const [view, setView] = useState<ContactsView>({ kind: "all" });
   const [keyword, setKeyword] = useState("");
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -615,8 +618,10 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
   const menuTarget = menu;
 
   return (
-    <div
-      className="contacts-workspace"
+    <div className="contacts-page">
+      <AppTitleBar leading={<BackToInboxButton onClick={() => onBackToInbox?.()} />} />
+      <div
+        className="contacts-workspace"
       style={{
         gridTemplateColumns: `${widths.sidebar}px ${RESIZER_WIDTH}px ${widths.list}px ${RESIZER_WIDTH}px minmax(0, 1fr)`,
       }}
@@ -1137,6 +1142,7 @@ export default function ContactsWorkspace({ onCompose }: ContactsWorkspaceProps)
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }

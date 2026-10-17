@@ -27,6 +27,7 @@ import {
   type InboxFolder,
   type InboxMessage,
   type InboxQuery,
+  type GitHubLoginView,
   type InboxSummary,
   type InboxThread,
   type LabelGroup,
@@ -34,6 +35,8 @@ import {
   type SnippetSegment,
   type SyncStatus,
 } from "./api";
+import AccountRailButton from "./AccountRailButton";
+import AppTitleBar, { AppBrand } from "./AppTitleBar";
 import ComposePanel, { type ComposeRequest } from "./ComposePanel";
 import MessageReader from "./MessageReader";
 import { GroupPills } from "./labelPill";
@@ -566,10 +569,26 @@ type InboxPanelProps = {
   onComposeSeedConsumed?: () => void;
   /** 系统通知被点击时，让外壳切回收件箱。 */
   onNotificationOpen?: () => void;
+  /** 邮箱栏底部账号入口的资料。 */
+  githubProfile?: GitHubLoginView | null;
+  /** 顶栏「通讯录」入口。 */
+  onOpenContacts?: () => void;
+  /** 邮箱栏底部设置齿轮。 */
+  onOpenSettings?: () => void;
+  /** 邮箱栏底部账号头像；打开「同步」分类。 */
+  onOpenSyncSettings?: () => void;
 };
 
 /** 统一收件箱面板。 */
-export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotificationOpen }: InboxPanelProps) {
+export default function InboxPanel({
+  composeSeed,
+  onComposeSeedConsumed,
+  onNotificationOpen,
+  githubProfile = null,
+  onOpenContacts,
+  onOpenSettings,
+  onOpenSyncSettings,
+}: InboxPanelProps) {
   const [summary, setSummary] = useState<InboxSummary>();
   const [folders, setFolders] = useState<InboxFolder[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<number>();
@@ -1582,7 +1601,14 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
     ),
     [syncStatuses, selectedAccount, summary],
   );
-  const currentSync = worstSyncStatus(currentSyncStatuses);
+  // 空闲不等于正在工作，不把「等待新邮件」这类常驻状态塞进顶栏。
+  const visibleSyncStatuses = useMemo(
+    () => currentSyncStatuses.filter(
+      (status) => status.state !== "idle" && status.state !== "idle_waiting",
+    ),
+    [currentSyncStatuses],
+  );
+  const currentSync = worstSyncStatus(visibleSyncStatuses);
 
   /** 同步失败或需要重新授权时的重试入口。 */
   const retrySync = useCallback(async () => {
@@ -1600,13 +1626,193 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
 
   return (
     <>
-    <div
-      className="inbox-layout"
-      style={{
-        gridTemplateColumns: `${widths.sidebar}px ${RESIZER_WIDTH}px ${widths.list}px ${RESIZER_WIDTH}px minmax(0, 1fr)`,
-      }}
-    >
-      <aside className="inbox-sidebar" aria-label={t("邮箱栏")} onContextMenu={openSidebarMenu}>
+      <div className="inbox-shell">
+        <AppTitleBar
+          leading={<AppBrand />}
+          leadingWidth={widths.sidebar}
+          className="inbox-titlebar"
+          center={
+            <div className="inbox-search">
+              {composeRequest && readingNotification && (
+                <button
+                  type="button"
+                  className="inbox-continue-compose"
+                  onClick={() => setReadingNotification(false)}
+                >
+                  {t("继续写信")}
+                </button>
+              )}
+              <div className="inbox-search-field">
+                <svg
+                  className="inbox-search-icon"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  strokeLinecap="round"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <circle cx="10.5" cy="10.5" r="7" />
+                  <path d="m16 16 5 5" />
+                </svg>
+                <input
+                  ref={searchBoxRef}
+                  aria-label={t("搜索邮件")}
+                  aria-keyshortcuts="Control+K Meta+K"
+                  aria-busy={searching}
+                  title={t("输入 --help 查看命令使用方法")}
+                  value={searchInput}
+                  placeholder={t(SEARCH_PLACEHOLDER)}
+                  onChange={(event) => setSearchInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      // 帮助弹窗会自动聚焦“知道了”；拦住同一次回车继续点击它。
+                      event.preventDefault();
+                      void runSearch();
+                    }
+                    if (event.key === "Escape" && searchMode) clearSearch();
+                  }}
+                />
+                {searchInput.length > 0 ? (
+                  <button
+                    type="button"
+                    className="inbox-search-clear"
+                    aria-label={t("清空搜索")}
+                    title={t("清空搜索")}
+                    onClick={() => {
+                      clearSearch();
+                      searchBoxRef.current?.focus();
+                    }}
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.75"
+                      strokeLinecap="round"
+                      aria-hidden="true"
+                      focusable="false"
+                    >
+                      <path d="m6 6 12 12M18 6 6 18" />
+                    </svg>
+                  </button>
+                ) : (
+                  <kbd className="inbox-search-shortcut" aria-hidden="true">Ctrl+K</kbd>
+                )}
+              </div>
+            </div>
+          }
+          centerWidth={widths.list}
+          actions={
+            <>
+              <button
+                type="button"
+                className="titlebar-contact-button"
+                aria-label={t("通讯录")}
+                title={t("通讯录")}
+                onClick={() => onOpenContacts?.()}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                </svg>
+                <span>{t("通讯录")}</span>
+              </button>
+              <button
+                type="button"
+                className={threadMode ? "inbox-icon-button titlebar-icon-button is-active" : "inbox-icon-button titlebar-icon-button"}
+                aria-label={t("按会话聚合")}
+                aria-pressed={threadMode}
+                title={t("按会话聚合")}
+                disabled={effectiveFlagged}
+                onClick={() => setThreadMode((current) => !current)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  {threadMode ? (
+                    <>
+                      <path d="M7 4v16" />
+                      <path d="M7 6h4a3 3 0 0 1 3 3v8" />
+                      <path d="M7 12h4a3 3 0 0 1 3 3v2" />
+                      <path d="M17 7h3M17 12h3M17 17h3" />
+                    </>
+                  ) : (
+                    <>
+                      <path d="M5 5h14M5 10h14M5 15h14M5 20h14" />
+                      <path d="M3 5h.01M3 10h.01M3 15h.01M3 20h.01" />
+                    </>
+                  )}
+                </svg>
+              </button>
+              <button
+                type="button"
+                className={effectiveUnread ? "inbox-icon-button titlebar-icon-button is-active" : "inbox-icon-button titlebar-icon-button"}
+                aria-label={t("只看未读")}
+                aria-pressed={effectiveUnread}
+                title={
+                  inUnified && unifiedView === "unread"
+                    ? t("「未读邮件」已经只看未读了")
+                    : t("只看未读")
+                }
+                disabled={inUnified && unifiedView === "unread"}
+                onClick={() => setUnreadOnly((current) => !current)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <rect x="3" y="5" width="18" height="14" rx="2" />
+                  <path d="m4 7 8 6 8-6" />
+                  {effectiveUnread && <circle cx="19" cy="5" r="2.5" fill="currentColor" stroke="none" />}
+                </svg>
+              </button>
+              {currentSync && (
+                <span
+                  className={syncBadgeClass(currentSync)}
+                  tabIndex={0}
+                  role="status"
+                  title={visibleSyncStatuses.map(syncBadgeTitle).join("\n")}
+                >
+                  {syncBadgeText(currentSync, visibleSyncStatuses)}
+                </span>
+              )}
+              {currentSync && (currentSync.needsReauth || currentSync.state === "error") && (
+                <button
+                  type="button"
+                  className="titlebar-retry"
+                  onClick={() => void retrySync()}
+                >
+                  {t("重试")}
+                </button>
+              )}
+              {(loading || searching) && (
+                <span className="hint titlebar-loading">{t("加载中……")}</span>
+              )}
+              <button
+                type="button"
+                className="inbox-icon-button titlebar-icon-button"
+                aria-label={t("刷新")}
+                title={t("刷新")}
+                onClick={() => void refreshAll()}
+                disabled={loading}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M3 11a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 7" />
+                  <path d="M21 2v5h-5" />
+                  <path d="M21 13a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 17" />
+                  <path d="M3 22v-5h5" />
+                </svg>
+              </button>
+            </>
+          }
+        />
+        <div
+          className="inbox-layout"
+          style={{
+            gridTemplateColumns: `${widths.sidebar}px ${RESIZER_WIDTH}px ${widths.list}px ${RESIZER_WIDTH}px minmax(0, 1fr)`,
+          }}
+        >
+          <aside className="inbox-sidebar" aria-label={t("邮箱栏")} onContextMenu={openSidebarMenu}>
+            <div className="inbox-sidebar-scroll">
         <button
           type="button"
           className="sidebar-compose"
@@ -1738,14 +1944,41 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
             )}
           </div>
         ))}
-        <button
-          type="button"
-          className="sidebar-item sidebar-add-account"
-          onClick={() => setAddAccountOpen(true)}
-        >
-          <span className="sidebar-item-title">{t("＋ 添加邮箱")}</span>
-        </button>
-      </aside>
+            <button
+              type="button"
+              className="sidebar-item sidebar-add-account"
+              onClick={() => setAddAccountOpen(true)}
+            >
+              <span className="sidebar-item-title">{t("＋ 添加邮箱")}</span>
+            </button>
+            </div>
+            <div className="mailbox-footer">
+              <AccountRailButton
+                profile={githubProfile}
+                onClick={() => onOpenSyncSettings?.()}
+              />
+              <button
+                type="button"
+                className="mailbox-settings-button"
+                aria-label={t("设置")}
+                title={t("设置")}
+                onClick={() => onOpenSettings?.()}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+              </button>
+            </div>
+          </aside>
 
       <PaneResizer
         label={t("邮箱栏宽度")}
@@ -1758,150 +1991,6 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
       />
 
       <section className="inbox-main">
-        <div className="inbox-toolbar">
-          {composeRequest && readingNotification && (
-            <button type="button" onClick={() => setReadingNotification(false)}>
-              {t("继续写信")}
-            </button>
-          )}
-          <button
-            type="button"
-            className={threadMode ? "inbox-icon-button is-active" : "inbox-icon-button"}
-            aria-label={t("按会话聚合")}
-            aria-pressed={threadMode}
-            title={t("按会话聚合")}
-            disabled={effectiveFlagged}
-            onClick={() => setThreadMode((current) => !current)}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              {threadMode ? (
-                <>
-                  <path d="M7 4v16" />
-                  <path d="M7 6h4a3 3 0 0 1 3 3v8" />
-                  <path d="M7 12h4a3 3 0 0 1 3 3v2" />
-                  <path d="M17 7h3M17 12h3M17 17h3" />
-                </>
-              ) : (
-                <>
-                  <path d="M5 5h14M5 10h14M5 15h14M5 20h14" />
-                  <path d="M3 5h.01M3 10h.01M3 15h.01M3 20h.01" />
-                </>
-              )}
-            </svg>
-          </button>
-          <button
-            type="button"
-            className={effectiveUnread ? "inbox-icon-button is-active" : "inbox-icon-button"}
-            aria-label={t("只看未读")}
-            aria-pressed={effectiveUnread}
-            title={
-              inUnified && unifiedView === "unread"
-                ? t("「未读邮件」已经只看未读了")
-                : t("只看未读")
-            }
-            disabled={inUnified && unifiedView === "unread"}
-            onClick={() => setUnreadOnly((current) => !current)}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <rect x="3" y="5" width="18" height="14" rx="2" />
-              <path d="m4 7 8 6 8-6" />
-              {effectiveUnread && <circle cx="19" cy="5" r="2.5" fill="currentColor" stroke="none" />}
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="inbox-icon-button"
-            aria-label={t("刷新")}
-            title={t("刷新")}
-            onClick={() => void refreshAll()}
-            disabled={loading}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M3 11a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 7" />
-              <path d="M21 2v5h-5" />
-              <path d="M21 13a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 17" />
-              <path d="M3 22v-5h5" />
-            </svg>
-          </button>
-          {currentSync && (
-            <span
-              className={syncBadgeClass(currentSync)}
-              tabIndex={0}
-              role="status"
-              title={currentSyncStatuses.map(syncBadgeTitle).join("\n")}
-            >
-              {syncBadgeText(currentSync, currentSyncStatuses)}
-            </span>
-          )}
-          {currentSync && (currentSync.needsReauth || currentSync.state === "error") && (
-            <button type="button" onClick={() => void retrySync()}>
-              {t("重试")}</button>
-          )}
-          {(loading || searching) && <span className="hint">{t("加载中……")}</span>}
-        </div>
-
-        <div className="inbox-search">
-          <div className="inbox-search-field">
-            <svg
-              className="inbox-search-icon"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.75"
-              strokeLinecap="round"
-              aria-hidden="true"
-              focusable="false"
-            >
-              <circle cx="10.5" cy="10.5" r="7" />
-              <path d="m16 16 5 5" />
-            </svg>
-            <input
-              ref={searchBoxRef}
-              aria-label={t("搜索邮件")}
-              aria-keyshortcuts="Control+K Meta+K"
-              aria-busy={searching}
-              title={t("输入 --help 查看命令使用方法")}
-              value={searchInput}
-              placeholder={t(SEARCH_PLACEHOLDER)}
-              onChange={(event) => setSearchInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  // 帮助弹窗会自动聚焦“知道了”；拦住同一次回车继续点击它。
-                  event.preventDefault();
-                  void runSearch();
-                }
-                if (event.key === "Escape" && searchMode) clearSearch();
-              }}
-            />
-            {searchInput.length > 0 ? (
-              <button
-                type="button"
-                className="inbox-search-clear"
-                aria-label={t("清空搜索")}
-                title={t("清空搜索")}
-                onClick={() => {
-                  clearSearch();
-                  searchBoxRef.current?.focus();
-                }}
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.75"
-                  strokeLinecap="round"
-                  aria-hidden="true"
-                  focusable="false"
-                >
-                  <path d="m6 6 12 12M18 6 6 18" />
-                </svg>
-              </button>
-            ) : (
-              <kbd className="inbox-search-shortcut" aria-hidden="true">Ctrl+K</kbd>
-            )}
-          </div>
-        </div>
-
         {notificationError && <p className="error" role="alert">{notificationError}</p>}
         {error && (
           <p className="error" role="alert">
@@ -2022,7 +2111,8 @@ export default function InboxPanel({ composeSeed, onComposeSeedConsumed, onNotif
           />
         )}
       </aside>
-    </div>
+      </div>
+      </div>
     {accountMenu && (
       <div
         className="context-menu"

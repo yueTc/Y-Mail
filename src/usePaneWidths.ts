@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-/** 最左侧设置栏宽度，固定不参与拖动。 */
-export const RAIL_WIDTH = 60;
 /** 拖动条布局占位。0 表示不占列宽，拖动条覆盖在分栏交界线上。 */
 export const RESIZER_WIDTH = 0;
 /** 邮件内容栏最小宽度，任何窗口尺寸下都不许低于这个值。 */
@@ -89,7 +87,7 @@ export function paneBudget(
   windowWidth: number,
   readerMinWidth: number = READER_MIN_WIDTH,
 ): number {
-  return windowWidth - RAIL_WIDTH - readerMinWidth;
+  return windowWidth - readerMinWidth;
 }
 
 /**

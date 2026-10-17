@@ -10,21 +10,20 @@ import {
   LIST_LIMITS,
   READER_MIN_WIDTH,
   RESIZER_WIDTH,
-  RAIL_WIDTH,
   SIDEBAR_LIMITS,
   fitPaneWidths,
   paneBudget,
 } from "../usePaneWidths";
 
 describe("三栏宽度计算", () => {
-  it("预算只扣掉设置栏和邮件内容最小宽度，拖动条不占列宽", () => {
+  it("预算只扣掉邮件内容最小宽度，拖动条不占列宽", () => {
     expect(RESIZER_WIDTH).toBe(0);
-    expect(paneBudget(1440)).toBe(1440 - RAIL_WIDTH - READER_MIN_WIDTH);
+    expect(paneBudget(1440)).toBe(1440 - READER_MIN_WIDTH);
   });
 
   it("写信时按 480 像素给内容区留位置", () => {
     expect(paneBudget(1440, COMPOSE_MIN_WIDTH)).toBe(
-      1440 - RAIL_WIDTH - COMPOSE_MIN_WIDTH,
+      1440 - COMPOSE_MIN_WIDTH,
     );
   });
 

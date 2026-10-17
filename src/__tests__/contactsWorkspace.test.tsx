@@ -115,11 +115,10 @@ async function waitForLoaded() {
   await screen.findByText("阿里");
 }
 
-function renderShell(mode: "inbox" | "contacts" | "settings", onModeChange = () => {}) {
+function renderShell(mode: "inbox" | "contacts" | "settings") {
   return render(
     <WorkspaceShell
       mode={mode}
-      onModeChange={onModeChange}
       inbox={<div>收件箱占位</div>}
       contacts={<div>通讯录占位</div>}
       settings={<div>设置占位</div>}
@@ -454,25 +453,28 @@ describe("通讯录页", () => {
   });
 });
 
-describe("最左设置栏", () => {
-  it("四个入口保留名称并按「收件箱 / 通讯录 / GitHub 账号 / 设置」排列", () => {
+describe("三栏页面外壳", () => {
+  it("当前页面可见，另外两页保持挂载但不显示", () => {
     renderShell("contacts");
 
-    const labels = screen
-      .getAllByRole("button")
-      .map((node) => node.getAttribute("aria-label"));
-    expect(labels).toEqual(["收件箱", "通讯录", "GitHub 账号", "设置"]);
-    expect(screen.getByRole("button", { name: "通讯录" }).getAttribute("aria-current")).toBe(
-      "page",
-    );
+    expect(screen.getByText("通讯录占位")).toBeTruthy();
+    expect(screen.getByText("收件箱占位").closest("[hidden]")).toBeTruthy();
+    expect(screen.getByText("设置占位").closest("[hidden]")).toBeTruthy();
+    expect(document.querySelectorAll(".workspace-pane")).toHaveLength(3);
   });
 
-  it("点通讯录会把新入口交给外壳", () => {
-    const onModeChange = vi.fn();
-    renderShell("inbox", onModeChange);
+  it("通讯录标题栏能返回收件箱", async () => {
+    const onBackToInbox = vi.fn();
+    render(
+      <ContactsWorkspace
+        onCompose={() => {}}
+        onBackToInbox={onBackToInbox}
+      />,
+    );
+    await waitForLoaded();
 
-    fireEvent.click(screen.getByRole("button", { name: "通讯录" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回收件箱" }));
 
-    expect(onModeChange).toHaveBeenCalledWith("contacts");
+    expect(onBackToInbox).toHaveBeenCalledOnce();
   });
 });
