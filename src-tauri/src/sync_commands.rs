@@ -16,13 +16,19 @@ use crate::state::AppState;
 /// 同步密码最短长度（与后端保持一致）。
 const MIN_PASSWORD_CHARS: usize = 8;
 
-/// 校验「设置同步」的新密码：至少 8 位、两次一致。
-fn validate_new_password(password: &str, confirm: &str) -> Result<(), CommandError> {
+/// 校验同步密码：至少 8 位。
+fn validate_password(password: &str) -> Result<(), CommandError> {
     if password.chars().count() < MIN_PASSWORD_CHARS {
         return Err(CommandError::input(format!(
             "同步密码至少 {MIN_PASSWORD_CHARS} 位"
         )));
     }
+    Ok(())
+}
+
+/// 重设密码时保留两次确认。
+fn validate_new_password(password: &str, confirm: &str) -> Result<(), CommandError> {
+    validate_password(password)?;
     if password != confirm {
         return Err(CommandError::input("两次输入的同步密码不一致"));
     }
@@ -90,19 +96,19 @@ pub async fn settings_sync_status(
     Ok(engine.settings_sync_status()?)
 }
 
-/// 开启设置同步：设密码、把本机配置加密后建一个私密 Gist。
+/// 上传到云端：共用同步密码，已有内容必须先确认覆盖。
 #[tauri::command]
 pub async fn settings_sync_enable(
     state: tauri::State<'_, AppState>,
     password: String,
-    confirm: String,
     device_label: String,
+    overwrite_remote: Option<bool>,
 ) -> Result<SettingsSyncStatus, CommandError> {
-    validate_new_password(&password, &confirm)?;
+    validate_password(&password)?;
     validate_device_label(&device_label)?;
     let engine = state.engine().await;
     Ok(engine
-        .enable_settings_sync(&password, &confirm, &device_label)
+        .enable_settings_sync(&password, &device_label, overwrite_remote.unwrap_or(false))
         .await?)
 }
 
@@ -141,9 +147,9 @@ pub async fn settings_sync_reset_password(
         .await?)
 }
 
-/// 新设备加入：输同步密码解密云端配置并导入。
+/// 从云端下载：用同一个同步密码解密，覆盖本机前先确认。
 #[tauri::command]
-pub async fn settings_sync_join(
+pub async fn settings_sync_download(
     state: tauri::State<'_, AppState>,
     password: String,
     device_label: String,
@@ -155,7 +161,7 @@ pub async fn settings_sync_join(
     validate_device_label(&device_label)?;
     let engine = state.engine().await;
     Ok(engine
-        .join_settings_sync(&password, &device_label, confirm_overwrite.unwrap_or(false))
+        .download_settings_sync(&password, &device_label, confirm_overwrite.unwrap_or(false))
         .await?)
 }
 

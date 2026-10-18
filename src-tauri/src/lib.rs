@@ -196,7 +196,7 @@ pub fn run() {
             sync_commands::settings_sync_disable,
             sync_commands::settings_sync_now,
             sync_commands::settings_sync_reset_password,
-            sync_commands::settings_sync_join,
+            sync_commands::settings_sync_download,
             sync_commands::settings_sync_resolve_conflict,
         ])
         .setup(|app| {

@@ -1,11 +1,11 @@
 //! 设置同步面板（规格 3.10 / 第 4 章）。
 //!
-//! 这里管三件事：GitHub 登录入口、开启/关闭同步、立即同步与冲突处理。
+//! 始终显示同一份上传/下载表单，成功后不切换到额外控制区域。
 //!
 //! 安全约定：
-//! - 同步密码与新设备加入用的密码只放在内存里，绝不写本地存储，也不进日志；
+//! - 上传与下载共用的同步密码只放在内存里，绝不写本地存储，也不进日志；
 //! - 开启前必须让用户明确勾选两条风险说明；
-//! - Gist 链接只交给系统浏览器打开，不在界面内嵌远程内容。
+//! - 覆盖云端或本机已有配置前必须确认。
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -13,7 +13,6 @@ import GitHubLoginPanel from "./GitHubLoginPanel";
 import {
   api,
   describeError,
-  type ConflictChoice,
   type GitHubLoginView,
   type SettingsSyncStatus,
 } from "./api";
@@ -28,25 +27,17 @@ type SettingsSyncPanelProps = {
 
 export default function SettingsSyncPanel({ onProfileChanged }: SettingsSyncPanelProps) {
   const [profile, setProfile] = useState<GitHubLoginView | null>(null);
-  const [status, setStatus] = useState<SettingsSyncStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [message, setMessage] = useState<string>();
 
   // 以下密码类输入只活在内存里，随组件卸载消失。
   const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
   const [deviceLabel, setDeviceLabel] = useState("");
   const deviceLabelEdited = useRef(false);
-  const joinLabelEdited = useRef(false);
   const [agreePrivate, setAgreePrivate] = useState(false);
   const [agreeSecrets, setAgreeSecrets] = useState(false);
-
-  const [joinPassword, setJoinPassword] = useState("");
-  const [joinLabel, setJoinLabel] = useState("");
-
-  const [newPassword, setNewPassword] = useState("");
-  const [newConfirm, setNewConfirm] = useState("");
 
   const refreshProfile = useCallback(async () => {
     try {
@@ -60,42 +51,44 @@ export default function SettingsSyncPanel({ onProfileChanged }: SettingsSyncPane
     }
   }, [onProfileChanged]);
 
-  const refreshStatus = useCallback(async () => {
-    try {
-      setStatus(await api.settingsSyncStatus());
-    } catch (caught) {
-      setError(describeError(caught));
-    }
-  }, []);
-
   useEffect(() => {
     void refreshProfile();
-    void refreshStatus();
-  }, [refreshProfile, refreshStatus]);
+  }, [refreshProfile]);
 
-  // 默认填写电脑名称；请求晚到时不覆盖用户已经改过或清空的输入。
+  // 优先沿用已保存的设备名，否则填电脑名称；不覆盖用户已编辑的输入。
   useEffect(() => {
     let cancelled = false;
     const applyName = (name: string) => {
       if (cancelled) return;
       const value = name.trim() || t("本机");
       if (!deviceLabelEdited.current) setDeviceLabel(value);
-      if (!joinLabelEdited.current) setJoinLabel(value);
     };
-    void api.getComputerName().then(applyName).catch(() => applyName(t("本机")));
+    const loadName = async () => {
+      try {
+        const [current, computerName] = await Promise.all([
+          api.settingsSyncStatus(),
+          api.getComputerName().catch(() => t("本机")),
+        ]);
+        applyName(current.deviceLabel || computerName);
+      } catch (caught) {
+        if (cancelled) return;
+        setError(describeError(caught));
+        applyName(t("本机"));
+      }
+    };
+    void loadName();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  /** 统一包一层：忙状态、错误提示、状态刷新；成功返回新状态，失败返回空。 */
-  const run = useCallback(async (job: () => Promise<SettingsSyncStatus>) => {
+  /** 统一处理忙状态和反馈；成功返回状态，失败或取消返回空。 */
+  const run = useCallback(async (job: () => Promise<SettingsSyncStatus | undefined>) => {
     setBusy(true);
     setError(undefined);
+    setMessage(undefined);
     try {
-      const next = await job();
-      setStatus(next);
-      return next;
+      return await job();
     } catch (caught) {
       setError(describeError(caught));
       return undefined;
@@ -104,16 +97,12 @@ export default function SettingsSyncPanel({ onProfileChanged }: SettingsSyncPane
     }
   }, []);
 
-  const enable = useCallback(async () => {
+  const upload = useCallback(async () => {
     if (!agreePrivate || !agreeSecrets) {
       setError(t("请先勾选上面两条说明。"));
       return;
     }
-    if (password !== confirm) {
-      setError(t("两次输入的同步密码不一致。"));
-      return;
-    }
-    if (password.length < MIN_PASSWORD_CHARS) {
+    if ([...password].length < MIN_PASSWORD_CHARS) {
       setError(t("同步密码至少 8 位。"));
       return;
     }
@@ -121,78 +110,53 @@ export default function SettingsSyncPanel({ onProfileChanged }: SettingsSyncPane
       setError(t("请填写这台设备的名字。"));
       return;
     }
-    const next = await run(() => api.settingsSyncEnable(password, confirm, deviceLabel.trim()));
+    const next = await run(async () => {
+      try {
+        return await api.settingsSyncEnable(password, deviceLabel.trim(), false);
+      } catch (caught) {
+        if (!describeError(caught).includes("云端已有同步内容")) throw caught;
+        const confirmed = window.confirm(
+          t("云端已有同步内容，是否用本机配置覆盖？覆盖后，云端内容将使用当前同步密码加密。"),
+        );
+        if (!confirmed) return undefined;
+        return api.settingsSyncEnable(password, deviceLabel.trim(), true);
+      }
+    });
     if (next) {
-      setPassword("");
-      setConfirm("");
+      setMessage(t("已上传到云端。"));
     }
-  }, [agreePrivate, agreeSecrets, password, confirm, deviceLabel, run]);
+  }, [agreePrivate, agreeSecrets, password, deviceLabel, run]);
 
-  const join = useCallback(async () => {
-    if (!joinPassword) {
+  const download = useCallback(async () => {
+    if (!password) {
       setError(t("请填写同步密码。"));
       return;
     }
-    if (!joinLabel.trim()) {
+    if (!deviceLabel.trim()) {
       setError(t("请填写这台设备的名字。"));
       return;
     }
-    const next = await run(() =>
-      api.settingsSyncJoin(joinPassword, joinLabel.trim(), true),
-    );
+    const next = await run(async () => {
+      try {
+        return await api.settingsSyncDownload(password, deviceLabel.trim(), false);
+      } catch (caught) {
+        const message = describeError(caught);
+        if (!message.includes("云端配置会覆盖本机这些条目")) throw caught;
+        if (!window.confirm(t("下载将覆盖本机的同名配置，是否继续？\n{0}", [message]))) return undefined;
+        return api.settingsSyncDownload(password, deviceLabel.trim(), true);
+      }
+    });
     if (next) {
-      setJoinPassword("");
+      setMessage(t("已从云端下载。"));
     }
-  }, [joinPassword, joinLabel, run]);
-
-  const resetPassword = useCallback(async () => {
-    if (newPassword !== newConfirm) {
-      setError(t("两次输入的同步密码不一致。"));
-      return;
-    }
-    if (newPassword.length < MIN_PASSWORD_CHARS) {
-      setError(t("同步密码至少 8 位。"));
-      return;
-    }
-    const next = await run(() => api.settingsSyncResetPassword(newPassword, newConfirm));
-    if (next) {
-      setNewPassword("");
-      setNewConfirm("");
-    }
-  }, [newPassword, newConfirm, run]);
-
-  const resolve = useCallback(
-    (choice: ConflictChoice) => {
-      void run(() => api.settingsSyncResolveConflict(choice));
-    },
-    [run],
-  );
-
-  const openGist = useCallback(async (url: string) => {
-    try {
-      await api.openExternalUrl(url);
-    } catch (caught) {
-      setError(describeError(caught));
-    }
-  }, []);
-
-  /** 关闭同步：默认保留云端，勾选后才连云端一起删。 */
-  const [deleteRemote, setDeleteRemote] = useState(false);
+  }, [password, deviceLabel, run]);
 
   const hasSyncScope = profile?.scope === "sync";
-  const enabled = status?.enabled === true;
 
   return (
     <section className="panel settings-sync" aria-busy={loading || busy}>
       <div className="panel-head">
         <h2>{t("同步")}</h2>
-        {enabled && (
-          <div className="actions">
-            <button className="primary" disabled={busy} onClick={() => void run(() => api.settingsSyncNow())}>
-              {t("立即同步")}
-            </button>
-          </div>
-        )}
       </div>
 
       {loading && <p className="hint" role="status">{t("正在读取设置同步状态……")}</p>}
@@ -217,96 +181,11 @@ export default function SettingsSyncPanel({ onProfileChanged }: SettingsSyncPane
             </p>
           )}
 
-          {hasSyncScope && status?.conflict && (
-            <div className="settings-sync-conflict" role="alert">
-              <p>
-                {t("检测到冲突：另一台设备「{0}」也改过配置（版本 {1}）。请选择保留哪一边。", [
-                  status.conflict.remoteDeviceLabel,
-                  status.conflict.remoteRevision,
-                ])}
-              </p>
-              <div className="actions">
-                <button disabled={busy} onClick={() => resolve("keepLocal")}>
-                  {t("保留本机配置")}
-                </button>
-                <button disabled={busy} onClick={() => resolve("keepRemote")}>
-                  {t("采用远端配置")}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {hasSyncScope && enabled && (
-            <>
-              <p className="settings-sync-line">
-                <span>{t("设备名：")}{status?.deviceLabel || t("本机")}</span>
-                <span>{t("当前版本：")}{status?.revision ?? 0}</span>
-                <span>
-                  {t("上次同步：")}
-                  {status?.lastSyncAt || t("还没同步过")}
-                </span>
-              </p>
-              {status?.gistUrl && (
-                <div className="actions">
-                  <button type="button" onClick={() => void openGist(status.gistUrl!)}>
-                    {t("在浏览器里打开 Gist")}
-                  </button>
-                </div>
-              )}
-
-              <div className="settings-sync-reset">
-                <details>
-                  <summary>{t("重设同步密码")}</summary>
-                  <p className="hint">
-                    {t("重设后会新建一个 Gist 并删掉旧的；旧密码将再也解不开新数据。")}
-                  </p>
-                  <label>
-                    {t("新同步密码")}
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      value={newPassword}
-                      onChange={(event) => setNewPassword(event.target.value)}
-                    />
-                  </label>
-                  <label>
-                    {t("再输一次")}
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      value={newConfirm}
-                      onChange={(event) => setNewConfirm(event.target.value)}
-                    />
-                  </label>
-                  <div className="actions">
-                    <button disabled={busy} onClick={() => void resetPassword()}>
-                      {t("重设密码")}
-                    </button>
-                  </div>
-                </details>
-              </div>
-
-              <label className="settings-sync-check">
-                <input
-                  type="checkbox"
-                  checked={deleteRemote}
-                  onChange={(event) => setDeleteRemote(event.target.checked)}
-                />
-                {t("关闭时连云端那份一起删（不勾选就只关本机，云端留着）")}
-              </label>
-              <div className="actions">
-                <button disabled={busy} onClick={() => void run(() => api.settingsSyncDisable(deleteRemote))}>
-                  {t("关闭同步")}
-                </button>
-              </div>
-            </>
-          )}
-
-          {hasSyncScope && !enabled && (
+          {hasSyncScope && (
             <>
               <div className="settings-sync-enable">
                 <p className="hint">
-                  {t("开启后，账号、代理、签名、界面开关、AI 配置和密钥会先加密，再上传到你自己的私密 Gist。")}
+                  {t("上传后，账号、代理、签名、界面开关、AI 配置和密钥会先加密，再保存到你自己的私密 Gist。")}
                 </p>
                 <label className="settings-sync-check">
                   <input
@@ -340,60 +219,27 @@ export default function SettingsSyncPanel({ onProfileChanged }: SettingsSyncPane
                   {t("同步密码")}
                   <input
                     type="password"
-                    autoComplete="new-password"
+                    autoComplete="current-password"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                   />
                 </label>
-                <label>
-                  {t("再输一次")}
-                  <input
-                    type="password"
-                    autoComplete="new-password"
-                    value={confirm}
-                    onChange={(event) => setConfirm(event.target.value)}
-                  />
-                </label>
+                <p className="hint">{t("同步密码至少 8 位，请妥善保存。")}</p>
                 <div className="actions">
-                  <button className="primary" disabled={busy} onClick={() => void enable()}>
-                    {t("开启同步")}
+                  <button className="primary" disabled={busy} onClick={() => void upload()}>
+                    {t("上传到云端")}
+                  </button>
+                  <button disabled={busy} onClick={() => void download()}>
+                    {t("从云端下载")}
                   </button>
                 </div>
               </div>
-
-              <details className="settings-sync-join">
-                <summary>{t("这是第二台设备？输入同步密码加入")}</summary>
-                <label>
-                  {t("同步密码")}
-                  <input
-                    type="password"
-                    autoComplete="current-password"
-                    value={joinPassword}
-                    onChange={(event) => setJoinPassword(event.target.value)}
-                  />
-                </label>
-                <label>
-                  {t("这台设备的名字")}
-                  <input
-                    type="text"
-                    value={joinLabel}
-                    onChange={(event) => {
-                      joinLabelEdited.current = true;
-                      setJoinLabel(event.target.value);
-                    }}
-                    placeholder={t("例如：公司的笔记本")}
-                  />
-                </label>
-                <div className="actions">
-                  <button disabled={busy} onClick={() => void join()}>
-                    {t("用同步密码加入")}
-                  </button>
-                </div>
-              </details>
             </>
           )}
         </>
       )}
+
+      {message && <p className="hint" role="status">{message}</p>}
 
       {error && (
         <p className="error" role="alert">

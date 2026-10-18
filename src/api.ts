@@ -1376,9 +1376,9 @@ export const api = {
   /** 当前设置同步状态。 */
   settingsSyncStatus: () => call<SettingsSyncStatus>("settings_sync_status"),
 
-  /** 开启设置同步。 */
-  settingsSyncEnable: (password: string, confirm: string, deviceLabel: string) =>
-    call<SettingsSyncStatus>("settings_sync_enable", { password, confirm, deviceLabel }),
+  /** 上传到云端；已有内容需明确允许覆盖。 */
+  settingsSyncEnable: (password: string, deviceLabel: string, overwriteRemote: boolean) =>
+    call<SettingsSyncStatus>("settings_sync_enable", { password, deviceLabel, overwriteRemote }),
 
   /** 关闭设置同步；`deleteRemote` 为真时连云端那份一起删。 */
   settingsSyncDisable: (deleteRemote: boolean) =>
@@ -1391,9 +1391,9 @@ export const api = {
   settingsSyncResetPassword: (newPassword: string, confirm: string) =>
     call<SettingsSyncStatus>("settings_sync_reset_password", { newPassword, confirm }),
 
-  /** 新设备加入：输同步密码解密云端配置并导入。 */
-  settingsSyncJoin: (password: string, deviceLabel: string, confirmOverwrite: boolean) =>
-    call<SettingsSyncStatus>("settings_sync_join", { password, deviceLabel, confirmOverwrite }),
+  /** 从云端下载：共用同步密码，覆盖本机前需确认。 */
+  settingsSyncDownload: (password: string, deviceLabel: string, confirmOverwrite: boolean) =>
+    call<SettingsSyncStatus>("settings_sync_download", { password, deviceLabel, confirmOverwrite }),
 
   /** 解决冲突：保留本机或按远端导入。 */
   settingsSyncResolveConflict: (choice: ConflictChoice) =>

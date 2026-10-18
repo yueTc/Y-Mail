@@ -448,15 +448,15 @@ impl MailEngine {
         Ok(Some(status))
     }
 
-    /// 开启设置同步：设密码、把本机配置加密后建一个私密 Gist。
+    /// 上传到云端：加密本机配置，已有内容需先确认覆盖。
     pub async fn enable_settings_sync(
         &self,
         password: &str,
-        confirm: &str,
         device_label: &str,
+        overwrite_remote: bool,
     ) -> Result<SettingsSyncStatus, EngineError> {
         let backend = self.settings_sync_backend();
-        self.enable_settings_sync_with(password, confirm, device_label, backend.as_ref())
+        self.enable_settings_sync_with(password, device_label, overwrite_remote, backend.as_ref())
             .await
     }
 
@@ -493,15 +493,15 @@ impl MailEngine {
             .await
     }
 
-    /// 新设备加入：找云端 Gist，输密码解密后导入。
-    pub async fn join_settings_sync(
+    /// 从云端下载：找同步 Gist，用同一个密码解密后导入。
+    pub async fn download_settings_sync(
         &self,
         password: &str,
         device_label: &str,
         confirm_overwrite: bool,
     ) -> Result<SettingsSyncStatus, EngineError> {
         let backend = self.settings_sync_backend();
-        self.join_settings_sync_with(password, device_label, confirm_overwrite, backend.as_ref())
+        self.download_settings_sync_with(password, device_label, confirm_overwrite, backend.as_ref())
             .await
     }
 
@@ -526,33 +526,52 @@ impl MailEngine {
     pub(crate) async fn enable_settings_sync_with(
         &self,
         password: &str,
-        confirm: &str,
         device_label: &str,
+        overwrite_remote: bool,
         backend: &dyn SettingsSyncBackend,
     ) -> Result<SettingsSyncStatus, EngineError> {
-        validate_new_password(password, confirm)?;
-        if self.read_sync_record()?.enabled {
-            return Err(EngineError::BadRequest("设置同步已经开启".to_string()));
-        }
+        validate_password(password)?;
+        let previous_record = self.read_sync_record()?;
         let token = self
             .github_token()?
             .ok_or_else(|| EngineError::BadRequest("请先登录 GitHub".to_string()))?;
-        if let Some(existing) = backend.find_gist(token.expose()).await? {
-            return Err(EngineError::BadRequest(format!(
-                "这个 GitHub 账号里已经有同步数据了；请改用「新设备加入」，或先在原设备上关闭同步。云端地址：{}",
-                gist::gist_html_url(&existing.id)
-            )));
+        let existing = backend.find_gist(token.expose()).await?;
+        if existing.is_some() && !overwrite_remote {
+            return Err(EngineError::BadRequest(
+                "云端已有同步内容，请确认覆盖后重试".to_string(),
+            ));
         }
 
-        let device_id = generate_device_id()?;
+        // 覆盖沿用原 Gist，版本继续递增，其他设备才能识别这次上传。
+        let previous_content = match existing.as_ref() {
+            Some(gist) => Some(backend.read_gist(token.expose(), &gist.id).await?),
+            None => None,
+        };
+        let revision = previous_content
+            .as_deref()
+            .and_then(|bytes| SyncEnvelope::parse(bytes).ok())
+            .map(|envelope| envelope.revision)
+            .unwrap_or(0)
+            .max(previous_record.revision)
+            .checked_add(1)
+            .ok_or_else(|| EngineError::BadRequest("同步版本号已达上限".to_string()))?;
+        let previous_password = self.secrets().get(SYNC_PASSWORD_KEY)?;
+        let device_id = if previous_record.device_id.is_empty() {
+            generate_device_id()?
+        } else {
+            previous_record.device_id.clone()
+        };
         let label = clean_device_label(device_label);
-        let revision = 1_u64;
         let snapshot = self.export_settings_snapshot(&device_id, &label, revision)?;
         let (bytes, _envelope) = encrypt_snapshot(&snapshot, password)?;
-        let created = backend.create_gist(token.expose(), &bytes).await?;
+        let created = match existing {
+            Some(existing) => {
+                backend.update_gist(token.expose(), &existing.id, &bytes).await?;
+                existing
+            }
+            None => backend.create_gist(token.expose(), &bytes).await?,
+        };
 
-        let previous_password = self.secrets().get(SYNC_PASSWORD_KEY)?;
-        self.secrets().set(SYNC_PASSWORD_KEY, &Secret::new(password))?;
         let record = SyncRecord {
             enabled: true,
             device_id,
@@ -561,14 +580,33 @@ impl MailEngine {
             revision,
             remote_revision: revision,
         };
-        if let Err(err) = self.write_sync_record(&record) {
-            let _ = backend.delete_gist(token.expose(), &created.id).await;
+        let saved = self
+            .secrets()
+            .set(SYNC_PASSWORD_KEY, &Secret::new(password))
+            .map_err(EngineError::from)
+            .and_then(|()| self.write_sync_record(&record));
+        if let Err(err) = saved {
+            // 覆盖失败时还原原密文；只有本次新建的 Gist 才能删除。
+            if let Some(previous) = previous_content {
+                let _ = backend.update_gist(token.expose(), &created.id, &previous).await;
+            } else {
+                let _ = backend.delete_gist(token.expose(), &created.id).await;
+            }
             restore_password(self, previous_password);
+            let _ = self.write_sync_record(&previous_record);
             return Err(err);
         }
+        self.clear_conflict()?;
         self.record_success_time()?;
         self.settings_sync_status()
     }
+}
+
+fn validate_password(password: &str) -> Result<(), EngineError> {
+    if password.chars().count() < MIN_PASSWORD_CHARS {
+        return Err(EngineError::BadRequest("同步密码至少 8 位".to_string()));
+    }
+    Ok(())
 }
 
 /// 空串（或只有空白）当作没设。
@@ -891,11 +929,11 @@ impl MailEngine {
         self.settings_sync_status()
     }
 
-    /// 新设备加入的具体实现：找 Gist、输密码解密、导入。
+    /// 从云端下载的具体实现：找 Gist、输密码解密、导入。
     ///
     /// `confirm_overwrite` 为假时，本机已有同邮箱账号或同标签代理会先拒绝，
     /// 让界面弹一次确认再重来——规格要求不静默覆盖。
-    pub(crate) async fn join_settings_sync_with(
+    pub(crate) async fn download_settings_sync_with(
         &self,
         password: &str,
         device_label: &str,
@@ -905,9 +943,7 @@ impl MailEngine {
         if password.is_empty() {
             return Err(EngineError::BadRequest("请输入同步密码".to_string()));
         }
-        if self.read_sync_record()?.enabled {
-            return Err(EngineError::BadRequest("本机已经开启设置同步".to_string()));
-        }
+        let previous_record = self.read_sync_record()?;
         let token = self.require_github_token()?;
         let existing = backend
             .find_gist(token.expose())
@@ -920,13 +956,17 @@ impl MailEngine {
             let overlap = self.local_overlap_with(&snapshot)?;
             if !overlap.is_empty() {
                 return Err(EngineError::BadRequest(format!(
-                    "云端配置会覆盖本机这些条目：{}。确认覆盖请再点一次「加入」",
+                    "云端配置会覆盖本机这些条目：{}。请确认是否覆盖",
                     overlap.join("、")
                 )));
             }
         }
 
-        let device_id = generate_device_id()?;
+        let device_id = if previous_record.device_id.is_empty() {
+            generate_device_id()?
+        } else {
+            previous_record.device_id.clone()
+        };
         let label = clean_device_label(device_label);
         let previous_password = self.secrets().get(SYNC_PASSWORD_KEY)?;
         self.import_settings_snapshot(&snapshot)?;
@@ -941,8 +981,10 @@ impl MailEngine {
         };
         if let Err(err) = self.write_sync_record(&record) {
             restore_password(self, previous_password);
+            let _ = self.write_sync_record(&previous_record);
             return Err(err);
         }
+        self.clear_conflict()?;
         self.record_success_time()?;
         self.settings_sync_status()
     }
@@ -1129,14 +1171,15 @@ impl MailEngine {
 mod tests {
     use std::sync::Arc;
 
-    use mail_domain::proxy::Secret;
+    use mail_domain::account::{AccountDraft, AccountProxyMode, AuthType, Security, ServerConfig};
+    use mail_domain::proxy::{ProxyConfig, ProxyKind, Secret};
     use mail_store::{NotifyNewMailWhen, SETTING_NOTIFY_NEW_MAIL};
     use mail_sync::envelope::{EnvelopeKdfParams, SyncEnvelope, FORMAT_NAME, KDF_ARGON2ID, SCHEMA_VERSION};
     use mail_sync::gist::{self, GistSummary};
     use mail_sync::github::GitHubProfile;
 
     use crate::engine::{EngineError, MailEngine};
-    use crate::secrets::MemorySecretStore;
+    use crate::secrets::{MemorySecretStore, SecretStore, SecretStoreError};
 
     use super::{
         classify_remote_change, BackendFuture, LocalSyncVersions, RemoteChange, SettingsSyncBackend,
@@ -1388,7 +1431,7 @@ mod tests {
         let backend = FakeGist::new();
 
         let status = engine
-            .enable_settings_sync_with("password-123", "password-123", "我的电脑", &backend)
+            .enable_settings_sync_with("password-123", "我的电脑", false, &backend)
             .await
             .expect("开启同步");
 
@@ -1405,6 +1448,333 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn 单次密码太短时不能上传() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (engine, secrets) = engine(dir.path());
+        let backend = FakeGist::new();
+        let result = engine
+            .enable_settings_sync_with("short", "本机", false, &backend)
+            .await;
+        assert!(result.unwrap_err().to_string().contains("至少 8 位"));
+        assert_eq!(backend.creates(), 0);
+        assert!(!secrets.contains(SYNC_PASSWORD_KEY));
+        assert!(!engine.settings_sync_status().expect("状态").enabled);
+    }
+
+    #[tokio::test]
+    async fn 云端已有内容必须先确认且覆盖后版本继续递增() {
+        let dir_a = tempfile::tempdir().expect("临时目录");
+        let (engine_a, _) = engine(dir_a.path());
+        engine_a
+            .save_github_login(&Secret::new("token-a"), &profile())
+            .expect("登录");
+        let backend = FakeGist::new();
+        let initial = engine_a
+            .enable_settings_sync_with("old-password", "甲机", false, &backend)
+            .await
+            .expect("首次上传");
+        engine_a
+            .upload_settings_sync_with(&backend, true)
+            .await
+            .expect("版本增加");
+        let original = backend.stored().expect("原内容");
+
+        let dir_b = tempfile::tempdir().expect("临时目录");
+        let (engine_b, secrets_b) = engine(dir_b.path());
+        engine_b
+            .save_github_login(&Secret::new("token-b"), &profile())
+            .expect("登录");
+        engine_b
+            .store()
+            .set_setting(SETTING_NOTIFY_NEW_MAIL, "false")
+            .expect("本机配置");
+        let blocked = engine_b
+            .enable_settings_sync_with("new-password", "乙机", false, &backend)
+            .await
+            .unwrap_err();
+        assert!(blocked.to_string().contains("云端已有同步内容"));
+        assert_eq!(backend.stored().expect("未覆盖"), original);
+        assert_eq!(backend.updates(), 1);
+        assert!(!secrets_b.contains(SYNC_PASSWORD_KEY));
+        assert!(!engine_b.settings_sync_status().expect("状态").enabled);
+
+        let uploaded = engine_b
+            .enable_settings_sync_with("new-password", "乙机", true, &backend)
+            .await
+            .expect("确认覆盖");
+        assert_eq!(uploaded.gist_id, initial.gist_id);
+        assert_eq!(uploaded.revision, 3);
+        assert_eq!(uploaded.remote_revision, 3);
+        assert_eq!(backend.creates(), 1, "覆盖应沿用原 Gist");
+        assert_eq!(backend.updates(), 2);
+        let (snapshot, _) = super::decrypt_snapshot(&backend.stored().unwrap(), "new-password")
+            .expect("用上面输入的密码加密");
+        assert!(!snapshot.settings.notify_new_mail);
+        assert_eq!(snapshot.device_label, "乙机");
+        assert_eq!(
+            secrets_b.plain(SYNC_PASSWORD_KEY).as_deref(),
+            Some("new-password")
+        );
+    }
+
+    /// 只让同步密码的一次写入失败，验证上传后本机落盘失败能恢复云端原内容。
+    #[derive(Default)]
+    struct FailSyncPasswordOnce {
+        inner: MemorySecretStore,
+        fail: std::sync::atomic::AtomicBool,
+    }
+
+    impl SecretStore for FailSyncPasswordOnce {
+        fn get(&self, key: &str) -> Result<Option<Secret>, SecretStoreError> {
+            self.inner.get(key)
+        }
+
+        fn set(&self, key: &str, value: &Secret) -> Result<(), SecretStoreError> {
+            if key == SYNC_PASSWORD_KEY && self.fail.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                return Err(SecretStoreError::Backend);
+            }
+            self.inner.set(key, value)
+        }
+
+        fn delete(&self, key: &str) -> Result<(), SecretStoreError> {
+            self.inner.delete(key)
+        }
+    }
+
+    #[tokio::test]
+    async fn 本机保存密码失败时恢复云端且不误删已有内容() {
+        for has_remote in [false, true] {
+            let dir = tempfile::tempdir().expect("临时目录");
+            let secrets = Arc::new(FailSyncPasswordOnce::default());
+            let engine = MailEngine::initialize_with_secrets(dir.path(), secrets.clone()).expect("初始化");
+            engine
+                .save_github_login(&Secret::new("token"), &profile())
+                .expect("登录");
+            let backend = FakeGist::new();
+            let original = b"original encrypted content";
+            if has_remote {
+                backend.create_gist("token", original).await.expect("已有云端");
+            }
+            secrets
+                .inner
+                .set(SYNC_PASSWORD_KEY, &Secret::new("previous-password"))
+                .expect("原密码");
+            secrets.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+            assert!(engine
+                .enable_settings_sync_with("new-password", "本机", true, &backend)
+                .await
+                .is_err());
+            assert!(!engine.settings_sync_status().expect("状态").enabled);
+            assert_eq!(
+                secrets.inner.plain(SYNC_PASSWORD_KEY).as_deref(),
+                Some("previous-password")
+            );
+            if has_remote {
+                assert_eq!(backend.stored().as_deref(), Some(original.as_slice()));
+                assert_eq!(backend.deletes(), 0, "不得删除原有 Gist");
+            } else {
+                assert!(backend.stored().is_none(), "回滚本次新建 Gist");
+                assert_eq!(backend.deletes(), 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn 下载覆盖邮箱与代理前必须确认且取消不写本机() {
+        let dir_a = tempfile::tempdir().expect("临时目录");
+        let (engine_a, _) = engine(dir_a.path());
+        engine_a
+            .save_github_login(&Secret::new("token-a"), &profile())
+            .expect("登录");
+        let remote_account = AccountDraft {
+            display_name: "云端邮箱".to_string(),
+            email: "test@example.com".to_string(),
+            auth_type: AuthType::Password,
+            username: "test@example.com".to_string(),
+            imap: ServerConfig {
+                host: "imap.example.com".to_string(),
+                port: 993,
+                security: Security::Tls,
+            },
+            smtp: ServerConfig {
+                host: "smtp.example.com".to_string(),
+                port: 465,
+                security: Security::Tls,
+            },
+            proxy: AccountProxyMode::Direct,
+            color: String::new(),
+            enabled: true,
+            oauth_provider: None,
+            oauth_client_id: String::new(),
+        };
+        let remote_proxy = ProxyConfig {
+            id: None,
+            label: "公司代理".to_string(),
+            kind: ProxyKind::Socks5,
+            host: "proxy.example.com".to_string(),
+            port: 1080,
+            username: "remote-user".to_string(),
+        };
+        engine_a
+            .store()
+            .insert_account(&remote_account, None)
+            .expect("云端邮箱");
+        engine_a
+            .store()
+            .insert_proxy(&remote_proxy, None)
+            .expect("云端代理");
+        let backend = FakeGist::new();
+        engine_a
+            .enable_settings_sync_with("password-123", "甲机", false, &backend)
+            .await
+            .expect("上传");
+
+        let dir_b = tempfile::tempdir().expect("临时目录");
+        let (engine_b, secrets_b) = engine(dir_b.path());
+        engine_b
+            .save_github_login(&Secret::new("token-b"), &profile())
+            .expect("登录");
+        let local_account = AccountDraft {
+            display_name: "本机邮箱".to_string(),
+            ..remote_account
+        };
+        let local_proxy = ProxyConfig {
+            username: "local-user".to_string(),
+            ..remote_proxy
+        };
+        engine_b
+            .store()
+            .insert_account(&local_account, None)
+            .expect("本机邮箱");
+        engine_b
+            .store()
+            .insert_proxy(&local_proxy, None)
+            .expect("本机代理");
+        let blocked = engine_b
+            .download_settings_sync_with("password-123", "乙机", false, &backend)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(blocked.contains("邮箱 test@example.com"));
+        assert!(blocked.contains("代理 公司代理"));
+        assert_eq!(engine_b.list_accounts().unwrap()[0].display_name, "本机邮箱");
+        assert_eq!(
+            engine_b.store().list_proxies().unwrap()[0].config.username,
+            "local-user"
+        );
+        assert!(!secrets_b.contains(SYNC_PASSWORD_KEY));
+        assert!(!engine_b.settings_sync_status().unwrap().enabled);
+
+        let downloaded = engine_b
+            .download_settings_sync_with("password-123", "乙机", true, &backend)
+            .await
+            .expect("确认后下载");
+        assert!(downloaded.enabled);
+        assert_eq!(engine_b.list_accounts().unwrap()[0].display_name, "云端邮箱");
+        assert_eq!(
+            engine_b.store().list_proxies().unwrap()[0].config.username,
+            "remote-user"
+        );
+        assert_eq!(
+            secrets_b.plain(SYNC_PASSWORD_KEY).as_deref(),
+            Some("password-123")
+        );
+        assert_eq!(backend.updates(), 0, "下载不能改云端");
+    }
+
+    #[tokio::test]
+    async fn 同步成功后可以重复上传下载并保留设备标识() {
+        let dir_a = tempfile::tempdir().expect("临时目录");
+        let (engine_a, _) = engine(dir_a.path());
+        engine_a
+            .save_github_login(&Secret::new("token-a"), &profile())
+            .expect("登录");
+        let backend = FakeGist::new();
+        let first = engine_a
+            .enable_settings_sync_with("password-123", "甲机", false, &backend)
+            .await
+            .expect("首次上传");
+        engine_a
+            .store()
+            .set_setting(SETTING_NOTIFY_NEW_MAIL, "false")
+            .expect("修改本机");
+        engine_a
+            .write_conflict(&super::SettingsSyncConflict {
+                remote_device_id: "other".to_string(),
+                remote_device_label: "对方".to_string(),
+                remote_revision: 1,
+                updated_at: "2026-10-18T00:00:00Z".to_string(),
+            })
+            .expect("待处理冲突");
+        let blocked = engine_a
+            .enable_settings_sync_with("password-123", "甲机", false, &backend)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(blocked.contains("云端已有同步内容"), "应继续走覆盖确认");
+        let second = engine_a
+            .enable_settings_sync_with("password-123", "甲机", true, &backend)
+            .await
+            .expect("再次上传");
+        assert_eq!(second.device_id, first.device_id);
+        assert_eq!(second.gist_id, first.gist_id);
+        assert_eq!(second.revision, 2);
+        assert!(second.conflict.is_none(), "手动上传已选择本机");
+        assert_eq!(backend.creates(), 1);
+
+        let dir_b = tempfile::tempdir().expect("临时目录");
+        let (engine_b, _) = engine(dir_b.path());
+        engine_b
+            .save_github_login(&Secret::new("token-b"), &profile())
+            .expect("登录");
+        let joined = engine_b
+            .download_settings_sync_with("password-123", "乙机", false, &backend)
+            .await
+            .expect("下载");
+        engine_b
+            .store()
+            .set_setting(SETTING_NOTIFY_NEW_MAIL, "true")
+            .expect("修改乙机");
+        let uploaded = engine_b
+            .enable_settings_sync_with("password-123", "乙机", true, &backend)
+            .await
+            .expect("下载后上传");
+        assert_eq!(uploaded.device_id, joined.device_id);
+        assert_eq!(uploaded.revision, 3);
+
+        let downloaded = engine_a
+            .download_settings_sync_with("password-123", "甲机", false, &backend)
+            .await
+            .expect("上传后下载");
+        assert_eq!(downloaded.device_id, first.device_id);
+        assert!(engine_a.read_synced_toggles().unwrap().notify_new_mail);
+        let repeated = engine_a
+            .download_settings_sync_with("password-123", "甲机", false, &backend)
+            .await
+            .expect("再次下载");
+        assert_eq!(repeated.device_id, first.device_id);
+        assert_eq!(repeated.revision, 3);
+        assert_eq!(backend.updates(), 2, "下载不应改动云端");
+    }
+
+    #[tokio::test]
+    async fn 云端没有内容时下载不写本机() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (engine, secrets) = engine(dir.path());
+        engine
+            .save_github_login(&Secret::new("token"), &profile())
+            .expect("登录");
+        let backend = FakeGist::new();
+        let result = engine
+            .download_settings_sync_with("password-123", "本机", false, &backend)
+            .await;
+        assert!(result.unwrap_err().to_string().contains("没有找到同步数据"));
+        assert!(!engine.settings_sync_status().unwrap().enabled);
+        assert!(!secrets.contains(SYNC_PASSWORD_KEY));
+        assert_eq!(backend.creates(), 0);
+    }
+
+    #[tokio::test]
     async fn 上传到云端的正文只有密文且改一字节解不开() {
         let dir = tempfile::tempdir().expect("临时目录");
         let (engine, _) = engine(dir.path());
@@ -1413,7 +1783,7 @@ mod tests {
             .expect("登录");
         let backend = FakeGist::new();
         engine
-            .enable_settings_sync_with("password-123", "password-123", "我的电脑", &backend)
+            .enable_settings_sync_with("password-123", "我的电脑", false, &backend)
             .await
             .expect("开启同步");
 
@@ -1446,7 +1816,7 @@ mod tests {
             .expect("登录");
         let backend = FakeGist::new();
         engine
-            .enable_settings_sync_with("password-123", "password-123", "我的电脑", &backend)
+            .enable_settings_sync_with("password-123", "我的电脑", false, &backend)
             .await
             .expect("开启同步");
 
@@ -1473,7 +1843,7 @@ mod tests {
             .expect("登录");
         let backend = FakeGist::new();
         engine_a
-            .enable_settings_sync_with("old-password-1", "old-password-1", "我的电脑", &backend)
+            .enable_settings_sync_with("old-password-1", "我的电脑", false, &backend)
             .await
             .expect("开启同步");
 
@@ -1492,20 +1862,20 @@ mod tests {
             .save_github_login(&Secret::new("token-b"), &profile())
             .expect("登录");
         let old = engine_b
-            .join_settings_sync_with("old-password-1", "乙机", false, &backend)
+            .download_settings_sync_with("old-password-1", "乙机", false, &backend)
             .await;
         assert!(old.is_err(), "旧密码该解不开新 Gist");
         assert!(!engine_b.settings_sync_status().expect("状态").enabled);
 
         let joined = engine_b
-            .join_settings_sync_with("new-password-2", "乙机", false, &backend)
+            .download_settings_sync_with("new-password-2", "乙机", false, &backend)
             .await
             .expect("新密码加入");
         assert!(joined.enabled);
     }
 
     #[tokio::test]
-    async fn 新设备加入能拉到并导入配置() {
+    async fn 从云端下载能拉到并导入配置() {
         let dir_a = tempfile::tempdir().expect("临时目录");
         let (engine_a, _) = engine(dir_a.path());
         engine_a
@@ -1513,7 +1883,7 @@ mod tests {
             .expect("登录");
         let backend = FakeGist::new();
         engine_a
-            .enable_settings_sync_with("password-123", "password-123", "甲机", &backend)
+            .enable_settings_sync_with("password-123", "甲机", false, &backend)
             .await
             .expect("开启同步");
         {
@@ -1533,7 +1903,7 @@ mod tests {
             .save_github_login(&Secret::new("token-b"), &profile())
             .expect("登录");
         let status = engine_b
-            .join_settings_sync_with("password-123", "乙机", false, &backend)
+            .download_settings_sync_with("password-123", "乙机", false, &backend)
             .await
             .expect("加入同步");
 
@@ -1554,7 +1924,7 @@ mod tests {
             .expect("登录");
         let backend = FakeGist::new();
         engine
-            .enable_settings_sync_with("password-123", "password-123", "我的电脑", &backend)
+            .enable_settings_sync_with("password-123", "我的电脑", false, &backend)
             .await
             .expect("开启同步");
 
@@ -1585,7 +1955,7 @@ mod tests {
             .expect("登录");
         let backend = FakeGist::new();
         engine
-            .enable_settings_sync_with("password-123", "password-123", "我的电脑", &backend)
+            .enable_settings_sync_with("password-123", "我的电脑", false, &backend)
             .await
             .expect("开启同步");
         backend.fail_delete("gist-1");

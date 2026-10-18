@@ -3622,42 +3622,10 @@ body.screenshot-body {
   flex: 0 0 auto;
 }
 
-.settings-sync-enable,
-.settings-sync-join,
-.settings-sync-reset {
+.settings-sync-enable {
   margin-top: var(--space-3);
   padding-top: var(--space-3);
   border-top: 1px solid var(--line);
-}
-
-.settings-sync details > summary {
-  cursor: pointer;
-  color: var(--text-muted);
-}
-
-.settings-sync-line {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
-  margin: var(--space-2) 0;
-  color: var(--text-muted);
-  font-size: var(--font-small);
-}
-
-/* 冲突提示：醒目一点，但不用红色吓人。 */
-.settings-sync-conflict {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-  padding: 10px 12px;
-  border: 1px solid var(--danger-border);
-  border-radius: var(--radius-md);
-  background: var(--danger-bg);
-}
-
-.settings-sync-conflict p {
-  margin: 0;
 }
 
 /* ============================ 本地分类标签胶囊（邮件分类） ============================ */

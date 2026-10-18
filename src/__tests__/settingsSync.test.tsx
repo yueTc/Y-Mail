@@ -1,7 +1,7 @@
 //! GitHub 登录与设置同步面板前端回归：
 //! - 登录面板：显示用户码 → 轮询成功 → 显示头像；头像优先用本机缓存，只放行固定域名。
 
-//! - 设置同步面板：未勾选、密码不一致、密码太短、开启成功、冲突选择、权限不够六条路径。
+//! - 设置同步面板：单次密码上传、云端覆盖确认、共用密码下载、本机覆盖确认与取消。
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,7 +25,7 @@ vi.mock("../api", () => ({
     settingsSyncDisable: vi.fn(),
     settingsSyncNow: vi.fn(),
     settingsSyncResetPassword: vi.fn(),
-    settingsSyncJoin: vi.fn(),
+    settingsSyncDownload: vi.fn(),
     settingsSyncResolveConflict: vi.fn(),
   },
 }));
@@ -60,10 +60,11 @@ async function findEl(container: HTMLElement, selector: string): Promise<HTMLEle
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   (api.githubLoginProfile as ReturnType<typeof vi.fn>).mockResolvedValue(loggedInSync);
   (api.settingsSyncStatus as ReturnType<typeof vi.fn>).mockResolvedValue(baseStatus);
   (api.getComputerName as ReturnType<typeof vi.fn>).mockResolvedValue("测试电脑");
+  (api.settingsSyncDownload as ReturnType<typeof vi.fn>).mockResolvedValue({ ...baseStatus, enabled: true });
   (api.githubLoginSignOut as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
   (api.openExternalUrl as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
   (api.settingsSyncEnable as ReturnType<typeof vi.fn>).mockImplementation(
@@ -73,7 +74,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  vi.clearAllMocks();
+  vi.restoreAllMocks();
+  vi.resetAllMocks();
 });
 
 describe("设备名默认值", () => {
@@ -161,96 +163,162 @@ describe("GitHub 登录面板", () => {
 });
 
 describe("设置同步面板", () => {
-  it("没勾选两条说明时开不了并提示", async () => {
+  async function fillForm({ agree = true, password = "password123" } = {}) {
     const { container } = render(<SettingsSyncPanel />);
     const form = await findEl(container, ".settings-sync-enable");
-
+    if (agree) {
+      fireEvent.click(within(form).getByLabelText(/私密 Gist/));
+      fireEvent.click(within(form).getByLabelText(/敏感信息/));
+    }
     fireEvent.change(within(form).getByLabelText("同步密码"), {
-      target: { value: "password123" },
-    });
-    fireEvent.change(within(form).getByLabelText("再输一次"), {
-      target: { value: "password123" },
+      target: { value: password },
     });
     fireEvent.change(within(form).getByLabelText("这台设备的名字"), {
       target: { value: "测试机" },
     });
+    return form;
+  }
 
-    fireEvent.click(within(form).getByRole("button", { name: "开启同步" }));
-
+  it("没勾选两条说明时不能上传并提示", async () => {
+    const form = await fillForm({ agree: false });
+    fireEvent.click(within(form).getByRole("button", { name: "上传到云端" }));
     expect(await screen.findByText("请先勾选上面两条说明。")).toBeTruthy();
     expect(api.settingsSyncEnable).not.toHaveBeenCalled();
   });
 
-  it("两次密码不一致时开不了并提示", async () => {
-    const { container } = render(<SettingsSyncPanel />);
-    const form = await findEl(container, ".settings-sync-enable");
-
-    fireEvent.click(within(form).getByLabelText(/私密 Gist/));
-    fireEvent.click(within(form).getByLabelText(/敏感信息/));
-    fireEvent.change(within(form).getByLabelText("同步密码"), {
-      target: { value: "password123" },
-    });
-    fireEvent.change(within(form).getByLabelText("再输一次"), {
-      target: { value: "password456" },
-    });
-    fireEvent.change(within(form).getByLabelText("这台设备的名字"), {
-      target: { value: "测试机" },
-    });
-
-    fireEvent.click(within(form).getByRole("button", { name: "开启同步" }));
-
-    expect(await screen.findByText("两次输入的同步密码不一致。")).toBeTruthy();
-    expect(api.settingsSyncEnable).not.toHaveBeenCalled();
-  });
-
-  it("同步密码不足 8 位时开不了并提示", async () => {
-    const { container } = render(<SettingsSyncPanel />);
-    const form = await findEl(container, ".settings-sync-enable");
-
-    fireEvent.click(within(form).getByLabelText(/私密 Gist/));
-    fireEvent.click(within(form).getByLabelText(/敏感信息/));
-    fireEvent.change(within(form).getByLabelText("同步密码"), {
-      target: { value: "short" },
-    });
-    fireEvent.change(within(form).getByLabelText("再输一次"), {
-      target: { value: "short" },
-    });
-    fireEvent.change(within(form).getByLabelText("这台设备的名字"), {
-      target: { value: "测试机" },
-    });
-
-    fireEvent.click(within(form).getByRole("button", { name: "开启同步" }));
-
+  it("同步密码不足 8 位时不能上传并提示", async () => {
+    const form = await fillForm({ password: "short" });
+    fireEvent.click(within(form).getByRole("button", { name: "上传到云端" }));
     expect(await screen.findByText("同步密码至少 8 位。")).toBeTruthy();
     expect(api.settingsSyncEnable).not.toHaveBeenCalled();
   });
-  it("勾选、密码一致、有设备名时能开启同步", async () => {
-    const { container } = render(<SettingsSyncPanel />);
-    const form = await findEl(container, ".settings-sync-enable");
 
-    fireEvent.click(within(form).getByLabelText(/私密 Gist/));
-    fireEvent.click(within(form).getByLabelText(/敏感信息/));
-    fireEvent.change(within(form).getByLabelText("同步密码"), {
-      target: { value: "password123" },
-    });
-    fireEvent.change(within(form).getByLabelText("再输一次"), {
-      target: { value: "password123" },
-    });
-    fireEvent.change(within(form).getByLabelText("这台设备的名字"), {
-      target: { value: "测试机" },
-    });
-
-    fireEvent.click(within(form).getByRole("button", { name: "开启同步" }));
-
+  it("只输入一次密码即可上传，删除重复密码和第二台设备入口", async () => {
+    const form = await fillForm();
+    const confirm = vi.spyOn(window, "confirm");
+    expect(form.querySelectorAll('input[type="password"]')).toHaveLength(1);
+    expect(screen.queryByText("再输一次")).toBeNull();
+    expect(screen.queryByText(/这是第二台设备/)).toBeNull();
+    const upload = within(form).getByRole("button", { name: "上传到云端" });
+    const download = within(form).getByRole("button", { name: "从云端下载" });
+    expect(upload.nextElementSibling).toBe(download);
+    fireEvent.click(upload);
     await waitFor(() =>
-      expect(api.settingsSyncEnable).toHaveBeenCalledWith("password123", "password123", "测试机"),
+      expect(api.settingsSyncEnable).toHaveBeenCalledWith("password123", "测试机", false),
     );
+    await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+    expect((screen.getByLabelText("同步密码") as HTMLInputElement).value).toBe("password123");
+    expect(confirm).not.toHaveBeenCalled();
   });
 
-  it("出现冲突时能让用户选保留哪边", async () => {
-    (api.settingsSyncStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+  it.each([true, false])("云端已有内容时确认覆盖为 %s 才决定是否重传", async (overwrite) => {
+    vi.mocked(api.settingsSyncEnable).mockRejectedValueOnce(new Error("云端已有同步内容，请确认覆盖后重试"));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(overwrite);
+    const form = await fillForm();
+    fireEvent.click(within(form).getByRole("button", { name: "上传到云端" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith(expect.stringContaining("云端已有同步内容")));
+    await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+    expect(api.settingsSyncEnable).toHaveBeenCalledTimes(overwrite ? 2 : 1);
+    expect(api.settingsSyncEnable).toHaveBeenNthCalledWith(1, "password123", "测试机", false);
+    if (overwrite) {
+      expect(api.settingsSyncEnable).toHaveBeenNthCalledWith(2, "password123", "测试机", true);
+    } else {
+      expect((within(form).getByLabelText("同步密码") as HTMLInputElement).value).toBe("password123");
+      expect(screen.queryByRole("alert")).toBeNull();
+    }
+  });
+
+  it("上传普通错误直接显示，确认覆盖后的失败也能显示并重试", async () => {
+    vi.mocked(api.settingsSyncEnable)
+      .mockRejectedValueOnce(new Error("网络不可用"))
+      .mockRejectedValueOnce(new Error("云端已有同步内容，请确认覆盖后重试"))
+      .mockRejectedValueOnce(new Error("覆盖失败"));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const form = await fillForm();
+    const upload = within(form).getByRole("button", { name: "上传到云端" });
+    fireEvent.click(upload);
+    expect(await screen.findByText("网络不可用")).toBeTruthy();
+    expect(confirm).not.toHaveBeenCalled();
+    fireEvent.click(upload);
+    expect(await screen.findByText("覆盖失败")).toBeTruthy();
+    expect((within(form).getByLabelText("同步密码") as HTMLInputElement).value).toBe("password123");
+    expect((upload as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("下载直接复用上面的同步密码和设备名", async () => {
+    const form = await fillForm({ agree: false });
+    fireEvent.click(within(form).getByRole("button", { name: "从云端下载" }));
+    await waitFor(() =>
+      expect(api.settingsSyncDownload).toHaveBeenCalledWith("password123", "测试机", false),
+    );
+    await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+    expect((screen.getByLabelText("同步密码") as HTMLInputElement).value).toBe("password123");
+    expect(api.settingsSyncEnable).not.toHaveBeenCalled();
+  });
+
+  it("没有输入同步密码时不能下载", async () => {
+    const form = await fillForm({ password: "" });
+    fireEvent.click(within(form).getByRole("button", { name: "从云端下载" }));
+    expect(await screen.findByText("请填写同步密码。")).toBeTruthy();
+    expect(api.settingsSyncDownload).not.toHaveBeenCalled();
+  });
+
+  it.each(["上传到云端", "从云端下载"])("%s 前要求设备名非空", async (action) => {
+    const form = await fillForm();
+    fireEvent.change(within(form).getByLabelText("这台设备的名字"), { target: { value: "  " } });
+    fireEvent.click(within(form).getByRole("button", { name: action }));
+    expect(await screen.findByText("请填写这台设备的名字。")).toBeTruthy();
+    expect(api.settingsSyncEnable).not.toHaveBeenCalled();
+    expect(api.settingsSyncDownload).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("下载覆盖本机配置的确认结果为 %s", async (overwrite) => {
+    vi.mocked(api.settingsSyncDownload).mockRejectedValueOnce(
+      new Error("云端配置会覆盖本机这些条目：邮箱 a@example.com。请确认是否覆盖"),
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(overwrite);
+    const form = await fillForm({ agree: false });
+    fireEvent.click(within(form).getByRole("button", { name: "从云端下载" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith(expect.stringContaining("a@example.com")));
+    await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+    expect(api.settingsSyncDownload).toHaveBeenCalledTimes(overwrite ? 2 : 1);
+    expect(api.settingsSyncDownload).toHaveBeenNthCalledWith(1, "password123", "测试机", false);
+    if (overwrite) {
+      expect(api.settingsSyncDownload).toHaveBeenNthCalledWith(2, "password123", "测试机", true);
+    } else {
+      expect((within(form).getByLabelText("同步密码") as HTMLInputElement).value).toBe("password123");
+      expect(screen.queryByRole("alert")).toBeNull();
+    }
+  });
+
+  it("下载密码错误时保留输入并显示错误，不弹覆盖确认", async () => {
+    vi.mocked(api.settingsSyncDownload).mockRejectedValueOnce(new Error("密码错误或同步内容已损坏"));
+    const confirm = vi.spyOn(window, "confirm");
+    const form = await fillForm({ agree: false });
+    fireEvent.click(within(form).getByRole("button", { name: "从云端下载" }));
+    expect(await screen.findByText("密码错误或同步内容已损坏")).toBeTruthy();
+    expect(confirm).not.toHaveBeenCalled();
+    expect((within(form).getByLabelText("同步密码") as HTMLInputElement).value).toBe("password123");
+  });
+
+  it("传输期间两个操作按钮都禁用，成功后保留密码", async () => {
+    let finish!: (status: SettingsSyncStatus) => void;
+    vi.mocked(api.settingsSyncDownload).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const form = await fillForm({ agree: false });
+    fireEvent.click(within(form).getByRole("button", { name: "从云端下载" }));
+    expect((within(form).getByRole("button", { name: "上传到云端" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(form).getByRole("button", { name: "从云端下载" }) as HTMLButtonElement).disabled).toBe(true);
+    finish({ ...baseStatus, enabled: true });
+    await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+    expect((screen.getByLabelText("同步密码") as HTMLInputElement).value).toBe("password123");
+  });
+
+  it("已有同步记录和冲突时仍只显示原来的上传下载表单", async () => {
+    vi.mocked(api.settingsSyncStatus).mockResolvedValue({
       ...baseStatus,
       enabled: true,
+      deviceLabel: "保存的设备名",
+      gistUrl: "https://gist.github.com/saved",
       revision: 3,
       remoteRevision: 4,
       conflict: {
@@ -260,19 +328,49 @@ describe("设置同步面板", () => {
         updatedAt: "2026-10-09T00:00:00Z",
       },
     });
-    (api.settingsSyncResolveConflict as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ...baseStatus,
-      enabled: true,
-    });
-
     const { container } = render(<SettingsSyncPanel />);
-    const conflict = await findEl(container, ".settings-sync-conflict");
+    const form = await findEl(container, ".settings-sync-enable");
+    await waitFor(() =>
+      expect((within(form).getByLabelText("这台设备的名字") as HTMLInputElement).value).toBe("保存的设备名"),
+    );
+    expect(within(form).getByRole("button", { name: "上传到云端" })).toBeTruthy();
+    expect(within(form).getByRole("button", { name: "从云端下载" })).toBeTruthy();
+    expect(screen.queryByText("重设同步密码")).toBeNull();
+    expect(screen.queryByText("当前版本：")).toBeNull();
+    expect(screen.queryByRole("button", { name: "立即同步" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "关闭同步" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "在浏览器里打开 Gist" })).toBeNull();
+    expect(container.querySelector(".settings-sync-conflict")).toBeNull();
+    expect(container.querySelector("details")).toBeNull();
+  });
 
-    expect(within(conflict).getByText(/公司的笔记本/)).toBeTruthy();
+  it.each(["上传到云端", "从云端下载"])("%s 成功后保留同一表单并且可以再次操作", async (action) => {
+    const form = await fillForm();
+    const operation = action === "上传到云端" ? api.settingsSyncEnable : api.settingsSyncDownload;
+    const result = action === "上传到云端" ? "已上传到云端。" : "已从云端下载。";
+    fireEvent.click(within(form).getByRole("button", { name: action }));
+    expect(await screen.findByText(result)).toBeTruthy();
+    expect((within(form).getByLabelText("同步密码") as HTMLInputElement).value).toBe("password123");
+    expect(screen.queryByText("重设同步密码")).toBeNull();
+    expect(screen.queryByRole("button", { name: "关闭同步" })).toBeNull();
+    expect(within(form).getAllByRole("button")).toHaveLength(2);
+    fireEvent.change(within(form).getByLabelText("同步密码"), { target: { value: "second-password" } });
+    fireEvent.click(within(form).getByRole("button", { name: action }));
+    await waitFor(() => expect(operation).toHaveBeenCalledTimes(2));
+    expect(operation).toHaveBeenNthCalledWith(2, "second-password", "测试机", false);
+    await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+    expect((within(form).getByLabelText("同步密码") as HTMLInputElement).value).toBe("second-password");
+  });
 
-    fireEvent.click(within(conflict).getByRole("button", { name: "采用远端配置" }));
-
-    await waitFor(() => expect(api.settingsSyncResolveConflict).toHaveBeenCalledWith("keepRemote"));
+  it("上传成功后直接复用保留的密码下载", async () => {
+    const form = await fillForm();
+    fireEvent.click(within(form).getByRole("button", { name: "上传到云端" }));
+    expect(await screen.findByText("已上传到云端。")).toBeTruthy();
+    fireEvent.click(within(form).getByRole("button", { name: "从云端下载" }));
+    expect(await screen.findByText("已从云端下载。")).toBeTruthy();
+    expect(api.settingsSyncDownload).toHaveBeenCalledWith("password123", "测试机", false);
+    expect(screen.queryByText("已上传到云端。")).toBeNull();
+    expect(within(form).getAllByRole("button")).toHaveLength(2);
   });
 
   it("登录权限不够时提示先授权 Gist 权限", async () => {
