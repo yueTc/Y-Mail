@@ -865,6 +865,11 @@ textarea:focus {
   min-height: 0;
   padding: 0 1px;
   overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.inbox-sidebar-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 .mailbox-footer {
