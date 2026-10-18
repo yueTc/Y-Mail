@@ -432,11 +432,55 @@ fn is_filesystem_root(path: &Path) -> bool {
             .all(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
 }
 
+/// 统计目录里普通文件的总字节数。
+///
+/// 目录不存在按 0 处理；不跟随符号链接或快捷方式，避免统计到目录外。
+pub fn directory_size_bytes(root: &Path) -> Result<u64, String> {
+    let metadata = match fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(format!("读取附件目录失败（{}）：{error}", root.display())),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(format!("附件目录是符号链接（{}）", root.display()));
+    }
+    if !metadata.is_dir() {
+        return Err(format!("附件目录不是文件夹（{}）", root.display()));
+    }
+
+    let mut total = 0_u64;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let entries =
+            fs::read_dir(&dir).map_err(|error| format!("读取附件目录失败（{}）：{error}", dir.display()))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|error| format!("读取附件目录条目失败（{}）：{error}", dir.display()))?;
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("读取附件文件类型失败（{}）：{error}", path.display()))?;
+            if file_type.is_dir() {
+                pending.push(path);
+            } else if file_type.is_file() {
+                let size = entry
+                    .metadata()
+                    .map_err(|error| format!("读取附件大小失败（{}）：{error}", path.display()))?
+                    .len();
+                total = total
+                    .checked_add(size)
+                    .ok_or_else(|| format!("附件总大小超出可统计范围（{}）", root.display()))?;
+            }
+        }
+    }
+    Ok(total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        cleanup_old_data_dir, copy_planned_files, is_filesystem_root, prepare_migration,
-        verify_database_file, MigrationStart,
+        cleanup_old_data_dir, copy_planned_files, directory_size_bytes, is_filesystem_root,
+        prepare_migration, verify_database_file, MigrationStart,
     };
 
     fn write(path: &std::path::Path, content: &[u8]) {
@@ -444,6 +488,39 @@ mod tests {
             std::fs::create_dir_all(parent).expect("建父目录");
         }
         std::fs::write(path, content).expect("写测试文件");
+    }
+
+    #[test]
+    fn directory_size_counts_nested_regular_files() {
+        let root = tempfile::tempdir().expect("临时目录");
+        let dir = root.path().join("downloads");
+        write(&dir.join("a.bin"), b"1234");
+        write(&dir.join("nested").join("b.bin"), b"123456");
+
+        assert_eq!(directory_size_bytes(&dir).expect("统计目录"), 10);
+        assert_eq!(
+            directory_size_bytes(&root.path().join("missing")).expect("不存在的目录按 0 算"),
+            0
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn directory_size_rejects_symlinked_root() {
+        let root = tempfile::tempdir().expect("临时目录");
+        let target = root.path().join("downloads");
+        write(&target.join("a.bin"), b"1234");
+        let link = root.path().join("downloads-link");
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&target, &link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(&target, &link);
+        if let Err(error) = made {
+            eprintln!("当前环境不能建符号链接，跳过测试：{error}");
+            return;
+        }
+
+        assert!(directory_size_bytes(&link).is_err());
     }
 
     #[test]

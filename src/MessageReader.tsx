@@ -1088,6 +1088,16 @@ export default function MessageReader({
       <header className="reader-header">
         <div className="reader-head-top">
           <h3 className="reader-subject">{message.subject || t("（无主题）")}</h3>
+          {message.groupResults.length > 0 && (
+            <div className="reader-group-pills">
+              <GroupPills
+                results={message.groupResults}
+                onClick={(result) =>
+                  setEditingGroupId((old) => (old === result.groupId ? undefined : result.groupId))
+                }
+              />
+            </div>
+          )}
           {onToggleFlag && (
             <FlagButton
               flagged={message.isFlagged}
@@ -1104,16 +1114,7 @@ export default function MessageReader({
           )}
           <span>{formatReaderTime(message.dateUtc)}</span>
         </div>
-        {message.groupResults.length > 0 && (
-          <div className="reader-group-pills">
-            <GroupPills
-              results={message.groupResults}
-              onClick={(result) =>
-                setEditingGroupId((old) => (old === result.groupId ? undefined : result.groupId))
-              }
-            />
-          </div>
-        )}
+
         {editingResult && (
           <div className="reader-label-row">
             <label>

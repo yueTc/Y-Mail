@@ -421,6 +421,21 @@ describe("读信页的标签组胶囊", () => {
     ],
   };
 
+  it("标签排在标题和星标之间", async () => {
+    render(<MessageReader message={MESSAGE_WITH_RESULTS} onToggleFlag={() => {}} />);
+
+    const pill = await screen.findByRole("button", { name: "账单" });
+    const group = pill.closest(".reader-group-pills");
+    const subject = screen.getByRole("heading", { level: 3, name: "测试邮件" });
+    const flag = screen.getByRole("button", { name: "标红这封邮件" });
+    const head = subject.parentElement;
+
+    expect(group).not.toBeNull();
+    expect(head).toBe(group?.parentElement);
+    expect(head).toBe(flag.parentElement);
+    expect(Array.from(head?.children ?? [])).toEqual([subject, group, flag]);
+  });
+
   it("读信页显示各组胶囊，打分胶囊带颜色分档", async () => {
     render(<MessageReader message={MESSAGE_WITH_RESULTS} />);
 

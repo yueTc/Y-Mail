@@ -87,6 +87,7 @@ const SETTINGS: AppSettings = {
   defaultAttachmentDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop/downloads",
   activeDataDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop",
   activeAttachmentDir: "C:/Users/me/AppData/Roaming/com.ymail.desktop/downloads",
+  activeAttachmentBytes: 1_572_864,
   firstRun: false,
   classifyEnabled: false,
   classifyConfidencePercent: 75,
@@ -312,6 +313,20 @@ describe("设置页存储目录", () => {
     expect((inputs[0] as HTMLInputElement).value).toBe("");
     expect(screen.getByText(SETTINGS.activeDataDir)).toBeTruthy();
     expect(screen.getByText(SETTINGS.activeAttachmentDir)).toBeTruthy();
+    expect(screen.getByText("当前生效的附件下载目录")).toBeTruthy();
+    expect(screen.getByText("占用 1.5 MB")).toBeTruthy();
+  });
+
+  it("统计附件目录失败时显示暂无法统计，不阻塞设置页", async () => {
+    vi.mocked(api.getAppSettings).mockResolvedValue({
+      ...SETTINGS,
+      activeAttachmentBytes: null,
+    });
+    renderSettings();
+    await openCategory("存储");
+
+    expect(await screen.findByText("占用 暂无法统计")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "保存设置" })).toBeTruthy();
   });
 
   it("保存时带上通知与远程图片开关，不提交单独附件目录", async () => {

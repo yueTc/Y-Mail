@@ -46,6 +46,7 @@ vi.mock("../api", () => {
     defaultAttachmentDir: "",
     activeDataDir: "",
     activeAttachmentDir: "",
+    activeAttachmentBytes: null,
     firstRun: false,
     classifyEnabled: false,
     classifyConfidencePercent: 75,
@@ -77,7 +78,6 @@ vi.mock("../api", () => {
     saveAiProvider: vi.fn(),
     deleteAiProvider: vi.fn(),
     testAiProvider: vi.fn(),
-    refreshAiProviderModels: vi.fn(),
     listAiModelMaps: vi.fn(),
     setAiFeature: vi.fn(),
     clearAiFeature: vi.fn(),
@@ -731,7 +731,7 @@ describe("AI 站点设置弹窗", () => {
     expect(api.saveAiProvider).not.toHaveBeenCalled();
   });
 
-  it("编辑站点回填它自己的代理策略，卡片显示代理名", async () => {
+  it("站点默认折叠，折叠时可直接编辑和删除，展开后显示详情", async () => {
     vi.mocked(api.listAiProviders).mockResolvedValue([
       provider({ label: "公司站点", proxy: { mode: "custom", proxyId: 5 } }),
     ]);
@@ -739,16 +739,69 @@ describe("AI 站点设置弹窗", () => {
 
     render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={async () => {}} />);
 
-    const cardLine = await screen.findByText(/代理策略：/);
-    expect(cardLine.textContent).toBe("代理策略：指定代理（公司代理）");
+    const toggle = await screen.findByRole("button", { name: "展开公司站点" });
+    const card = toggle.closest("article") as HTMLElement;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(within(card).queryByText(/代理策略：/)).toBeNull();
+    expect(within(card).getByRole("button", { name: "编辑" })).toBeTruthy();
+    expect(within(card).getByRole("button", { name: "删除" })).toBeTruthy();
+    expect(within(card).queryByRole("button", { name: "拉取模型" })).toBeNull();
+    expect(
+      screen.queryByText(
+        "默认关闭。Key 只进系统保险箱；非本机地址必须用 HTTPS。每次真正外发前都会弹窗确认域名、模型和是否本地。",
+      ),
+    ).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    fireEvent.click(within(card).getByRole("button", { name: "编辑" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("heading", { name: "编辑 AI 站点" })).toBeTruthy();
     expect((within(dialog).getByLabelText("AI 站点代理策略") as HTMLSelectElement).value).toBe(
       "custom",
     );
     expect((within(dialog).getByLabelText("AI 站点指定代理") as HTMLSelectElement).value).toBe("5");
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    fireEvent.click(toggle);
+    expect(within(card).getByRole("button", { name: "折叠公司站点" })).toBeTruthy();
+    const cardLine = within(card).getByText(/代理策略：/);
+    expect(cardLine.textContent).toBe("代理策略：指定代理（公司代理）");
+    expect(within(card).queryByRole("button", { name: "拉取模型" })).toBeNull();
+  });
+
+  it("多个站点可以各自展开和折叠", async () => {
+    vi.mocked(api.listAiProviders).mockResolvedValue([
+      provider({ id: 1, label: "站点甲" }),
+      provider({
+        id: 2,
+        label: "站点乙",
+        kind: "openai_compatible",
+        baseUrl: "https://api.example.com",
+        defaultModel: "gpt",
+        models: ["gpt"],
+      }),
+    ]);
+
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={async () => {}} />);
+
+    const firstToggle = await screen.findByRole("button", { name: "展开站点甲" });
+    const secondToggle = screen.getByRole("button", { name: "展开站点乙" });
+    const firstCard = firstToggle.closest("article") as HTMLElement;
+    const secondCard = secondToggle.closest("article") as HTMLElement;
+
+    fireEvent.click(firstToggle);
+    expect(within(firstCard).getByRole("button", { name: "折叠站点甲" })).toBeTruthy();
+    expect(within(secondCard).getByRole("button", { name: "展开站点乙" })).toBeTruthy();
+    expect(secondCard.textContent).not.toContain("地址：https://api.example.com");
+
+    fireEvent.click(secondToggle);
+    expect(firstCard.textContent).toContain("地址：http://127.0.0.1:11434");
+    expect(secondCard.textContent).toContain("地址：https://api.example.com");
+
+    fireEvent.click(within(firstCard).getByRole("button", { name: "折叠站点甲" }));
+    expect(within(firstCard).getByRole("button", { name: "展开站点甲" })).toBeTruthy();
+    expect(firstCard.textContent).not.toContain("地址：http://127.0.0.1:11434");
+    expect(secondCard.textContent).toContain("地址：https://api.example.com");
   });
 });
 
@@ -969,6 +1022,7 @@ describe("邮件自动分类设置", () => {
 
   it("邮件分类的站点下拉只列支持分类的 TypeSafe jev", async () => {
     prepare();
+    fireEvent.click(await screen.findByRole("button", { name: "展开邮件分类" }));
     const select = await screen.findByLabelText("邮件分类站点");
     const texts = within(select)
       .getAllByRole("option")
@@ -983,6 +1037,7 @@ describe("邮件自动分类设置", () => {
     vi.mocked(api.listAiAudit).mockResolvedValue([]);
     vi.mocked(api.listLabelGroups).mockResolvedValue([]);
     render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "展开邮件分类" }));
     expect(
       await screen.findByText(
         "还没有 TypeSafe jev 站点：请先到上面的「AI 站点」里新增一个，再回来选。",
@@ -996,6 +1051,16 @@ describe("邮件自动分类设置", () => {
     expect((toggle as HTMLInputElement).checked).toBe(false);
     expect(screen.queryByLabelText("把握程度门槛")).toBeNull();
     expect(await screen.findByText("邮件自动分类 · 标签组管理")).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "组就是判断维度，一封邮件每组各出一个结果；把握门槛按组设置。标签和颜色只存在本机，不发给模型、不参与账号同步。",
+      ),
+    ).toBeNull();
+    expect(
+      screen.queryByText(
+        "打开后，新邮件正文会发给所选 TypeSafe jev 站点；本地没有正文时会先自动下载到本机。模型只返回标签名和把握程度，标签和颜色只存本机。默认关闭。",
+      ),
+    ).toBeNull();
   });
 
   it("「手动分类免确认」默认关闭，勾选后写本机设置并提示", async () => {
@@ -1267,24 +1332,28 @@ describe("标签组管理", () => {
     expect(screen.getByRole("button", { name: "折叠内容分类" })).toBeTruthy();
   });
 
-  it("功能级模型卡片默认展开，可单独折叠再展开", async () => {
+  it("功能级模型卡片默认折叠，可单独展开再折叠", async () => {
     const { container } = prepare();
-    // 默认展开：翻译的站点下拉一开始就在。
+    const cards = Array.from(
+      container.querySelectorAll(".ai-feature-list > .ai-feature-card"),
+    ) as HTMLElement[];
+    expect(cards.length).toBeGreaterThan(1);
+    expect(cards.every((card) => card.getAttribute("data-collapsed") === "true")).toBe(true);
+    expect(screen.queryByLabelText("翻译站点")).toBeNull();
+    expect(screen.queryByLabelText("摘要站点")).toBeNull();
+    expect(screen.getByRole("button", { name: "展开翻译" })).toBeTruthy();
+
+    const card = cards[0];
+    fireEvent.click(screen.getByRole("button", { name: "展开翻译" }));
     expect(await screen.findByLabelText("翻译站点")).toBeTruthy();
-    const card = container.querySelector(".ai-feature-list .ai-feature-card") as HTMLElement;
     expect(card.getAttribute("data-collapsed")).toBe("false");
+    // 只影响这一张卡片，别的功能仍然折叠。
+    expect(screen.queryByLabelText("摘要站点")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "折叠翻译" }));
     await waitFor(() => {
       expect(screen.queryByLabelText("翻译站点")).toBeNull();
       expect(card.getAttribute("data-collapsed")).toBe("true");
     });
-    expect(screen.getByRole("button", { name: "展开翻译" })).toBeTruthy();
-    // 只影响这一张卡片，别的功能不受影响。
-    expect(screen.getByLabelText("摘要站点")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "展开翻译" }));
-    expect(await screen.findByLabelText("翻译站点")).toBeTruthy();
-    expect(card.getAttribute("data-collapsed")).toBe("false");
   });
 });

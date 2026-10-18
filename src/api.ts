@@ -205,6 +205,8 @@ export interface AppSettings {
   activeDataDir: string;
   /** 当前引擎实际在用的附件目录。 */
   activeAttachmentDir: string;
+  /** 附件目录里普通文件的总大小（字节）；统计失败时为空。 */
+  activeAttachmentBytes: number | null;
   /** 是不是全新安装后的第一次启动；界面据此弹「数据放哪」向导。 */
   firstRun: boolean;
 }
@@ -1196,8 +1198,6 @@ export const api = {
     return call<string[]>("test_ai_provider", args);
   },
 
-  refreshAiProviderModels: (id: number) =>
-    call<string[]>("refresh_ai_provider_models", { id }),
 
   /** 用当前选的站点和模型测一次通知识别往返耗时；内容由后端写成假邮件。 */
   checkNotificationLatency: (providerId: number, model: string, thinkingLevel?: AiThinkingLevel) =>

@@ -589,6 +589,8 @@ pub struct AppSettingsDto {
     pub active_data_dir: String,
     /// 当前引擎实际在用的附件目录。
     pub active_attachment_dir: String,
+    /// 附件目录里普通文件的总大小；统计失败时为空。
+    pub active_attachment_bytes: Option<u64>,
     /// 「邮件自动分类」开关；默认关，只存本机，不同步。
     pub classify_enabled: bool,
     /// 分类把握程度门槛（百分数，50–99）；只读兼容字段，分类不再使用，界面不展示。
@@ -1092,6 +1094,12 @@ async fn bridge_synced_toggles(state: &AppState, settings: &AppSettings) {
 fn build_settings_dto(state: &AppState) -> AppSettingsDto {
     let settings = state.settings_snapshot();
     let default_dir = state.default_data_dir();
+    let active_attachment_bytes = storage_dir::directory_size_bytes(Path::new(state.active_attachment_dir()))
+        .map(Some)
+        .unwrap_or_else(|error| {
+            tracing::warn!(error = %error, "统计附件目录占用失败");
+            None
+        });
     AppSettingsDto {
         data_dir: path_text(settings.data_dir.as_deref()),
         attachment_dir: path_text(settings.attachment_dir.as_deref()),
@@ -1113,6 +1121,7 @@ fn build_settings_dto(state: &AppState) -> AppSettingsDto {
         ),
         active_data_dir: strip_verbatim_prefix(state.active_data_dir()),
         active_attachment_dir: strip_verbatim_prefix(state.active_attachment_dir()),
+        active_attachment_bytes,
         first_run: state.first_run(),
     }
 }

@@ -18,18 +18,94 @@
   gap: 10px;
 }
 
+/* 站点行铺满设置面板的可用宽度，左右只保留与面板一致的内边距。 */
+.ai-provider-list {
+  width: 100%;
+}
+
 .ai-provider-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px 14px;
+  display: block;
+  padding: 6px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--field-bg);
 }
 
+.ai-provider-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-provider-toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.ai-provider-toggle:focus-visible {
+  outline: 2px solid var(--state-focus-ring);
+  outline-offset: 3px;
+}
+
+.ai-provider-toggle strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ai-provider-chevron {
+  flex: 0 0 1em;
+  color: var(--text-muted);
+}
+
+.ai-provider-quick-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  gap: 6px;
+}
+
+/* 图标按钮和右侧文字按钮同高，避免操作区出现一高一低。 */
+.ai-provider-edit-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  min-height: var(--button-height);
+  padding: 0;
+  color: var(--text-muted);
+}
+
+.ai-provider-edit-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ai-provider-edit-button:hover:not(:disabled) {
+  background: var(--state-hover-bg);
+  color: var(--text);
+}
+
+.ai-provider-details {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
 .ai-provider-main {
-  flex: 1;
+  flex: 1 1 18rem;
   min-width: 0;
 }
 
@@ -50,8 +126,11 @@
   margin-top: 10px;
 }
 
+/* 弹窗 body 已有内边距，避免复用设置页 .form 时再叠一层顶部留白和分隔线。 */
 .ai-provider-form {
-  margin-top: 14px;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }
 
 .ai-provider-form textarea {
@@ -69,6 +148,24 @@
 .ai-feature-card h4 {
   margin: 0 0 8px;
   font-size: 0.95rem;
+}
+
+/* 功能级模型卡片更轻：细边框、小内边距、小标题，不影响其它复用该类名的区块。 */
+.ai-feature-list > .ai-feature-card {
+  padding: 8px 10px;
+  border-color: color-mix(in srgb, var(--line) 58%, transparent);
+  border-radius: 6px;
+}
+
+.ai-feature-list > .ai-feature-card h4 {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.ai-feature-list .ai-feature-toggle {
+  min-width: 1.75rem;
+  padding: 2px 6px;
 }
 
 .ai-feature-card .field-row,
@@ -312,4 +409,19 @@
   background: var(--field-bg);
   border-color: var(--border);
   color: var(--text);
+}
+@media (max-width: 720px) {
+  .ai-provider-head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .ai-provider-toggle {
+    width: 100%;
+  }
+
+  .ai-provider-quick-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
 }

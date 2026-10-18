@@ -30,6 +30,24 @@ import AiProviderDialog, {
 } from "./AiProviderDialog";
 import { t } from "./i18n";
 
+/** 编辑站点图标：铅笔；按钮名字由 aria-label 和 title 提供。 */
+function EditIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+      <g
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+      </g>
+    </svg>
+  );
+}
+
 /** 卡片上显示站点代理策略；选了具体代理时补上代理名。 */
 function proxyText(proxy: AccountProxy, proxies: Proxy[]): string {
   const base = t(PROXY_MODE_LABELS[proxy.mode]);
@@ -183,6 +201,8 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   // 站点弹窗：新增时 editingProvider 为 null，编辑时指向要改的那个站点。
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<AiProvider | null>(null);
+  // 站点卡片默认全部收起；按站点编号分别记展开状态，只影响界面，不写配置。
+  const [expandedProviders, setExpandedProviders] = useState<Record<number, boolean>>({});
   // 卡片上「指定代理」要显示代理名，这里存一份代理清单。
   const [proxies, setProxies] = useState<Proxy[]>([]);
   const [featureDrafts, setFeatureDrafts] = useState<Record<string, FeatureDraftState>>({});
@@ -208,8 +228,8 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   const [thresholdDrafts, setThresholdDrafts] = useState<Record<number, string>>({});
   // 设置页里每一组可单独展开；默认全部收起，只影响界面，不写配置。
   const [expandedGroups, setExpandedGroups] = useState<Record<number, boolean>>({});
-  // 「功能级模型与思考程度」里每个功能一张卡片，可单独折叠；默认展开，只影响界面，不写配置。
-  const [collapsedFeatures, setCollapsedFeatures] = useState<Record<string, boolean>>({});
+  // 「功能级模型与思考程度」里每个功能一张卡片，可单独展开；默认收起，只影响界面，不写配置。
+  const [expandedFeatures, setExpandedFeatures] = useState<Record<string, boolean>>({});
   // 打开「通知智能识别」开关前的风险确认：先记下要展示的目标，用户点确认才落盘。
   const [verifyRisk, setVerifyRisk] = useState<
     | { providerLabel: string; model: string; local: boolean }
@@ -269,24 +289,6 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  const refreshModels = useCallback(
-    async (id: number) => {
-      setBusy(true);
-      setError("");
-      setNotice("");
-      try {
-        const models = await api.refreshAiProviderModels(id);
-        setNotice(t("已拉取 {0} 个模型", [models.length]));
-        await refresh();
-      } catch (caught) {
-        setError(describeError(caught));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [refresh],
-  );
 
   const removeProvider = useCallback(
     async (provider: AiProvider) => {
@@ -580,8 +582,8 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
     setExpandedGroups((old) => ({ ...old, [groupId]: !old[groupId] }));
   }, []);
   /** 单个功能卡片展开/收起：只影响设置界面，不改数据。 */
-  const toggleFeatureCollapsed = useCallback((fn: AiFunction) => {
-    setCollapsedFeatures((old) => ({ ...old, [fn]: !(old[fn] === true) }));
+  const toggleFeatureExpanded = useCallback((fn: AiFunction) => {
+    setExpandedFeatures((old) => ({ ...old, [fn]: !(old[fn] === true) }));
   }, []);
 
   /** 组门槛：失焦落盘，越界拉回 50–99。 */
@@ -939,8 +941,6 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       <div className="panel-head">
         <div>
           <h2>{t("AI 与翻译")}</h2>
-          <p className="hint">
-            {t("默认关闭。Key 只进系统保险箱；非本机地址必须用 HTTPS。每次真正外发前都会弹窗确认域名、模型和是否本地。")}</p>
         </div>
         <div className="ai-panel-actions">
           <button type="button" className="danger" onClick={() => void disableAll()} disabled={busy}>
@@ -959,48 +959,92 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
         {providers.length === 0 && !loading && (
           <p className="hint">{t("还没有站点。添加一个后，AI 功能才会出现可用状态。")}</p>
         )}
-        {providers.map((provider) => (
-          <article key={provider.id} className="ai-provider-card">
-            <div className="ai-provider-main">
-              <div className="ai-provider-title">
-                <strong>{provider.label}</strong>
-                <span className={provider.enabled ? "tag ai-enabled" : "tag"}>
-                  {provider.enabled ? t("已启用") : t("已停用")}
-                </span>
-                <span className="tag">{t(KIND_LABEL[provider.kind] ?? provider.kind)}</span>
-                <span className="tag">{provider.hasKey ? t("已有密钥") : t("无密钥")}</span>
+        {providers.map((provider) => {
+          const expanded = expandedProviders[provider.id] === true;
+          const detailsId = `ai-provider-details-${provider.id}`;
+          return (
+            <article
+              key={provider.id}
+              className="ai-provider-card"
+              data-expanded={expanded ? "true" : "false"}
+            >
+              <div className="ai-provider-head">
+                <button
+                  type="button"
+                  className="ai-provider-toggle"
+                  aria-expanded={expanded}
+                  aria-controls={detailsId}
+                  aria-label={
+                    expanded
+                      ? t("折叠{0}", [provider.label])
+                      : t("展开{0}", [provider.label])
+                  }
+                  title={expanded ? t("折叠这一项") : t("展开这一项")}
+                  onClick={() =>
+                    setExpandedProviders((old) => ({
+                      ...old,
+                      [provider.id]: !expanded,
+                    }))
+                  }
+                >
+                  <span className="ai-provider-chevron" aria-hidden="true">
+                    {expanded ? "▾" : "▸"}
+                  </span>
+                  <strong>{provider.label}</strong>
+                </button>
+                <div className="ai-provider-quick-actions">
+                  <button
+                    type="button"
+                    className="ai-provider-edit-button"
+                    aria-label={t("编辑")}
+                    title={t("编辑")}
+                    onClick={() => {
+                      setEditingProvider(provider);
+                      setDialogOpen(true);
+                    }}
+                    disabled={busy}
+                  >
+                    <EditIcon />
+                  </button>
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={() => void removeProvider(provider)}
+                    disabled={busy}
+                  >
+                    {t("删除")}</button>
+                </div>
               </div>
-              <div className="card-sub">{t("地址：")}{provider.baseUrl}</div>
-              <div className="card-sub">
-                {t("默认模型：")}{provider.defaultModel || t("未填写")}{t("；思考程度：")}{t(THINKING_LABEL[provider.thinkingLevel], undefined, "ai")}
-              </div>
-              <div className="card-sub">
-                {t("模型：")}{provider.models.length > 0 ? provider.models.join(t("、")) : t("未拉取，可手工填写")}
-              </div>
-              <div className="card-sub">{t("代理策略：")}{proxyText(provider.proxy, proxies)}</div>
-            </div>
-            <div className="card-actions">
-              <button
-                type="button"
-                onClick={() => {
-                  setEditingProvider(provider);
-                  setDialogOpen(true);
-                }}
-                disabled={busy}
-              >
-                {t("编辑")}</button>
-              {provider.kind === "typesafe" ? (
-                <button type="button" onClick={() => void testProvider(provider)} disabled={busy}>
-                  {t("测试连接")}</button>
-              ) : (
-                <button type="button" onClick={() => void refreshModels(provider.id)} disabled={busy}>
-                  {t("拉取模型")}</button>
+              {expanded && (
+                <div id={detailsId} className="ai-provider-details">
+                  <div className="ai-provider-main">
+                    <div className="ai-provider-title">
+                      <span className={provider.enabled ? "tag ai-enabled" : "tag"}>
+                        {provider.enabled ? t("已启用") : t("已停用")}
+                      </span>
+                      <span className="tag">{t(KIND_LABEL[provider.kind] ?? provider.kind)}</span>
+                      <span className="tag">{provider.hasKey ? t("已有密钥") : t("无密钥")}</span>
+                    </div>
+                    <div className="card-sub">{t("地址：")}{provider.baseUrl}</div>
+                    <div className="card-sub">
+                      {t("默认模型：")}{provider.defaultModel || t("未填写")}{t("；思考程度：")}{t(THINKING_LABEL[provider.thinkingLevel], undefined, "ai")}
+                    </div>
+                    <div className="card-sub">
+                      {t("模型：")}{provider.models.length > 0 ? provider.models.join(t("、")) : t("未拉取，可手工填写")}
+                    </div>
+                    <div className="card-sub">{t("代理策略：")}{proxyText(provider.proxy, proxies)}</div>
+                  </div>
+                  {provider.kind === "typesafe" && (
+                    <div className="card-actions">
+                      <button type="button" onClick={() => void testProvider(provider)} disabled={busy}>
+                        {t("测试连接")}</button>
+                    </div>
+                  )}
+                </div>
               )}
-              <button type="button" className="danger" onClick={() => void removeProvider(provider)} disabled={busy}>
-                {t("删除")}</button>
-            </div>
-          </article>
-        ))}
+            </article>
+          );
+        })}
       </div>
 
       <button
@@ -1034,7 +1078,8 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
             provider.supportedFunctions.includes(fn),
           );
           const selected = candidates.find((provider) => String(provider.id) === draft.providerId);
-          const collapsed = collapsedFeatures[fn] === true;
+          const expanded = expandedFeatures[fn] === true;
+          const collapsed = !expanded;
           return (
             <section
               key={fn}
@@ -1045,14 +1090,14 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
                 <button
                   type="button"
                   className="ai-feature-toggle"
-                  aria-expanded={!collapsed}
+                  aria-expanded={expanded}
                   aria-label={
                     collapsed
                       ? t("展开{0}", [t(FUNCTION_LABEL[fn])])
                       : t("折叠{0}", [t(FUNCTION_LABEL[fn])])
                   }
                   title={collapsed ? t("展开这一项") : t("折叠这一项")}
-                  onClick={() => toggleFeatureCollapsed(fn)}
+                  onClick={() => toggleFeatureExpanded(fn)}
                 >
                   {collapsed ? "▸" : "▾"}
                 </button>
@@ -1261,12 +1306,6 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
         )}
       </section>
       <h3>{t("邮件自动分类 · 标签组管理")}</h3>
-      <p className="hint">
-        {t("打开后，新邮件正文会发给所选 TypeSafe jev 站点；本地没有正文时会先自动下载到本机。模型只返回标签名和把握程度，标签和颜色只存本机。默认关闭。")}
-      </p>
-      <p className="hint">
-        {t("组就是判断维度，一封邮件每组各出一个结果；把握门槛按组设置。标签和颜色只存在本机，不发给模型、不参与账号同步。")}
-      </p>
       <section className="ai-feature-card ai-label-manager ai-label-manager-merged">
         <div className="ai-classify-global">
           <label className="checkbox">
@@ -1358,7 +1397,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
                   <button
                     type="button"
                     className="ai-label-group-toggle"
-                    aria-expanded={!collapsed}
+                    aria-expanded={expanded}
                     aria-label={
                       collapsed
                         ? t("展开{0}", [group.name])

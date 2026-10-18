@@ -254,6 +254,12 @@ textarea:focus {
   font-size: 0.9em;
 }
 
+.storage-size {
+  margin-left: 0.6em;
+  white-space: nowrap;
+  opacity: 0.78;
+}
+
 /* ---------- 账号 / 代理列表 ---------- */
 
 .card-list {
@@ -734,11 +740,22 @@ textarea:focus {
 }
 
 .window-controls {
+  position: relative;
   display: flex;
   align-self: stretch;
   height: 100%;
   margin-left: 6px;
-  border-left: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+}
+
+.window-controls::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 2px;
+  height: 20px;
+  background: color-mix(in srgb, var(--line) 55%, transparent);
+  transform: translateY(-50%);
+  content: "";
 }
 
 .window-control-button {
@@ -1302,19 +1319,24 @@ textarea:focus {
 .reader-head-top {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 10px;
 }
 
 .reader-subject {
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
   font-size: 1.02rem;
   line-height: 1.35;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
+/* 星标固定在标题行最右侧；标题吃掉剩余宽度。 */
 .reader-flag {
-  margin-left: auto;
+  flex: none;
+  margin-left: 0;
 }
 
 /* 外观设置：深色模式作用于整个界面，这里是设置页里的选择行。 */
@@ -3671,12 +3693,16 @@ body.screenshot-body {
   flex: none;
 }
 
-/* 读信页的胶囊行：排在时间下方，浅深主题沿用面板配色。 */
+/* 读信页的胶囊行：排在标题和星标之间，标签多时在本区域内换行。 */
 .reader-group-pills {
+  flex: 0 1 auto;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
+  min-width: 0;
+  max-width: min(50%, 28rem);
   padding: 2px 0;
 }
 
@@ -3870,6 +3896,11 @@ body.screenshot-body {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+.ai-label-group-toggle,
+.ai-feature-toggle {
+  border: 0;
+  background: transparent;
 }
 .ai-label-group-toggle {
   flex: 0 0 auto;

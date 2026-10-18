@@ -400,7 +400,7 @@ export default function AiProviderDialog({
         style={DIALOG_STYLE}
       >
         <header style={HEADER_STYLE}>
-          <h2 id="ai-provider-dialog-title" style={{ margin: 0, fontSize: 18 }}>
+          <h2 id="ai-provider-dialog-title" style={{ margin: 0, fontSize: 16 }}>
             {editingProvider ? t("编辑 AI 站点") : t("新增 AI 站点")}</h2>
           <button
             type="button"

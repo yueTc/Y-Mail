@@ -97,6 +97,7 @@ const SETTINGS: AppSettings = {
   defaultAttachmentDir: "",
   activeDataDir: "",
   activeAttachmentDir: "",
+  activeAttachmentBytes: null,
   firstRun: false,
 };
 

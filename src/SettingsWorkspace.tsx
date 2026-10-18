@@ -84,6 +84,15 @@ function persistNavWidth(value: number): void {
   }
 }
 
+/** 把附件目录占用字节数说成好读的单位；统计失败单独说清楚。 */
+function formatStorageSize(bytes: number | null): string {
+  if (bytes === null) return t("暂无法统计");
+  if (bytes < 1024) return t("{0} 字节", [bytes]);
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
 type SettingsWorkspaceProps = {
   /** 顶部返回入口；直接渲染设置页的测试可以不传。 */
   onBackToInbox?: () => void;
@@ -832,8 +841,20 @@ export default function SettingsWorkspace({
                   <dl className="status">
                     <dt>{t("当前生效的数据目录")}</dt>
                     <dd className="path">{storage.settings.activeDataDir}</dd>
-                    <dt>{t("当前生效的下载目录")}</dt>
-                    <dd className="path">{storage.settings.activeAttachmentDir}</dd>
+                    <dt>{t("当前生效的附件下载目录")}</dt>
+                    <dd className="path">
+                      {storage.settings.activeAttachmentDir}
+                      <span
+                        className="storage-size"
+                        title={
+                          storage.settings.activeAttachmentBytes === null
+                            ? undefined
+                            : t("{0} 字节", [storage.settings.activeAttachmentBytes])
+                        }
+                      >
+                        {t("占用 {0}", [formatStorageSize(storage.settings.activeAttachmentBytes)])}
+                      </span>
+                    </dd>
                   </dl>
 
                   <div className="actions">
