@@ -3334,7 +3334,7 @@ pub struct AiProviderDraftDto {
     pub id: Option<i64>,
     /// 便于识别的站点名称。
     pub label: String,
-    /// 站点类型：openai_compatible / deepl / ollama / typesafe。
+    /// 站点类型：openai_compatible / deepl / ollama / typesafe / decision_api。
     pub kind: String,
     /// 站点根地址。
     pub base_url: String,
@@ -3358,7 +3358,9 @@ pub struct AiProviderDraftDto {
 impl AiProviderDraftDto {
     fn to_input(&self) -> Result<AiProviderInput, CommandError> {
         let kind = AiProviderKind::parse(&self.kind).ok_or_else(|| {
-            CommandError::input("AI 站点类型只能是 openai_compatible、deepl、ollama 或 typesafe")
+            CommandError::input(
+                "AI 站点类型只能是 openai_compatible、deepl、ollama、typesafe 或 decision_api",
+            )
         })?;
         let level = self.thinking_level.trim().to_ascii_lowercase();
         if !matches!(level.as_str(), "" | "off" | "low" | "medium" | "high") {
@@ -3407,7 +3409,7 @@ pub struct AiProviderDto {
     pub proxy: AccountProxyDto,
     /// 保险箱里是否已有密钥。
     pub has_key: bool,
-    /// 这个站点类型支持的功能标识（邮件分类只认 TypeSafe jev）。
+    /// 这个站点类型支持的功能标识（邮件分类支持决策模型站点）。
     pub supported_functions: Vec<String>,
 }
 
@@ -3907,7 +3909,7 @@ pub async fn test_ai_provider(
     model: Option<String>,
 ) -> Result<Vec<String>, CommandError> {
     let kind = AiProviderKind::parse(&kind).ok_or_else(|| {
-        CommandError::input("AI 站点类型只能是 openai_compatible、deepl、ollama 或 typesafe")
+        CommandError::input("AI 站点类型只能是 openai_compatible、deepl、ollama、typesafe 或 decision_api")
     })?;
     let proxy = match proxy {
         Some(proxy) => proxy.to_domain()?,
@@ -4455,11 +4457,13 @@ pub async fn classify_messages(
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_ui_zoom, create_label_group_snapshot, is_external_link, label_groups_snapshot,
-        migrate_classify_confidence, set_message_group_value_snapshot, strip_verbatim_prefix, MailLabelDto,
+        clamp_ui_zoom, create_label_group_snapshot, default_account_proxy, is_external_link,
+        label_groups_snapshot, migrate_classify_confidence, set_message_group_value_snapshot,
+        strip_verbatim_prefix, AiProviderDraftDto, AiProviderDto, MailLabelDto,
     };
     use crate::settings::AppSettings;
-    use mail_core::MailEngine;
+    use mail_core::{AiProviderKind, AiProviderView, AiThinkingLevel, MailEngine};
+    use mail_domain::account::AccountProxyMode;
 
     /// 建一个临时引擎，跑命令层抽出来的组逻辑。
     fn test_engine(dir: &std::path::Path) -> MailEngine {
@@ -4467,6 +4471,41 @@ mod tests {
             .expect("初始化引擎")
     }
 
+    #[test]
+    fn command_ai_provider_keeps_decision_api() {
+        let draft = AiProviderDraftDto {
+            id: None,
+            label: "StartLux".to_string(),
+            kind: "decision_api".to_string(),
+            base_url: "https://api.bamboonode.dev/v1/decisions".to_string(),
+            default_model: "startlux-decision-27b-autothink".to_string(),
+            models: vec!["startlux-decision-27b-autothink".to_string()],
+            thinking_level: "off".to_string(),
+            enabled: true,
+            proxy: default_account_proxy(),
+        };
+        let input = draft.to_input().expect("通用决策站点应能提交");
+        assert_eq!(input.kind, AiProviderKind::DecisionApi);
+
+        let mut invalid = draft;
+        invalid.kind = "unknown".to_string();
+        let error = invalid.to_input().expect_err("未知站点类型应被拒");
+        assert!(error.message.contains("decision_api"), "{}", error.message);
+
+        let dto = AiProviderDto::from_view(&AiProviderView {
+            id: 1,
+            label: "StartLux".to_string(),
+            kind: AiProviderKind::DecisionApi,
+            base_url: "https://api.bamboonode.dev/v1/decisions".to_string(),
+            default_model: "startlux-decision-27b-autothink".to_string(),
+            models: vec!["startlux-decision-27b-autothink".to_string()],
+            thinking_level: AiThinkingLevel::Off,
+            enabled: true,
+            proxy: AccountProxyMode::Direct,
+            has_key: true,
+        });
+        assert_eq!(dto.supported_functions, vec!["classify"]);
+    }
     #[test]
     fn label_group_commands_round_trip() {
         let dir = tempfile::tempdir().expect("临时目录");

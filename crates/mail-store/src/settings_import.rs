@@ -705,6 +705,7 @@ fn set_setting_in(tx: &Transaction<'_>, key: &str, value: &str) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::AiProviderKind;
 
     fn store() -> Store {
         let mut store = Store::open_in_memory().expect("打开内存库");
@@ -746,6 +747,7 @@ mod tests {
             Some("account/ref-1".to_string()),
         );
         secrets.insert("ai:deepseek".to_string(), Some("ai/ref-1".to_string()));
+        secrets.insert("ai:StartLux".to_string(), Some("ai/ref-2".to_string()));
 
         let plan = SettingsImportPlan {
             proxies: vec![ProxyImport {
@@ -766,19 +768,34 @@ mod tests {
                 html: "<p>你好</p>".to_string(),
                 enabled: true,
             }],
-            ai_providers: vec![AiProviderImport {
-                key: "ai:deepseek".to_string(),
-                provider: NewAiProvider {
-                    label: "deepseek".to_string(),
-                    kind: crate::ai::AiProviderKind::OpenAiCompatible,
-                    base_url: "https://api.deepseek.com".to_string(),
-                    default_model: "deepseek-chat".to_string(),
-                    models: vec!["deepseek-chat".to_string()],
-                    thinking_level: AiThinkingLevel::Off,
-                    enabled: true,
-                    proxy: mail_domain::account::AccountProxyMode::InheritGlobal,
+            ai_providers: vec![
+                AiProviderImport {
+                    key: "ai:deepseek".to_string(),
+                    provider: NewAiProvider {
+                        label: "deepseek".to_string(),
+                        kind: crate::ai::AiProviderKind::OpenAiCompatible,
+                        base_url: "https://api.deepseek.com".to_string(),
+                        default_model: "deepseek-chat".to_string(),
+                        models: vec!["deepseek-chat".to_string()],
+                        thinking_level: AiThinkingLevel::Off,
+                        enabled: true,
+                        proxy: mail_domain::account::AccountProxyMode::InheritGlobal,
+                    },
                 },
-            }],
+                AiProviderImport {
+                    key: "ai:StartLux".to_string(),
+                    provider: NewAiProvider {
+                        label: "StartLux".to_string(),
+                        kind: AiProviderKind::DecisionApi,
+                        base_url: "https://api.bamboonode.dev/v1/decisions".to_string(),
+                        default_model: "startlux-decision-27b-autothink".to_string(),
+                        models: vec!["startlux-decision-27b-autothink".to_string()],
+                        thinking_level: AiThinkingLevel::Off,
+                        enabled: true,
+                        proxy: mail_domain::account::AccountProxyMode::InheritGlobal,
+                    },
+                },
+            ],
             ai_model_map: vec![AiModelMapImport {
                 function: AiFunction::Translate,
                 provider_key: "ai:deepseek".to_string(),
@@ -812,12 +829,16 @@ mod tests {
             store.list_proxies().expect("列代理")[0].password_key.as_deref(),
             Some("proxy/ref-1")
         );
-        assert_eq!(store.list_ai_providers().expect("列站点").len(), 1);
+        assert_eq!(store.list_ai_providers().expect("列站点").len(), 2);
         assert_eq!(
             store.list_ai_providers().expect("列站点")[0]
                 .api_key_ref
                 .as_deref(),
             Some("ai/ref-1")
+        );
+        assert_eq!(
+            store.list_ai_providers().expect("列站点")[1].kind,
+            AiProviderKind::DecisionApi
         );
         assert_eq!(
             store.global_proxy_mode().expect("全局代理"),

@@ -1128,6 +1128,7 @@ mod tests {
     use mail_domain::proxy::{GlobalProxyMode, ProxyConfig, ProxyKind};
     use mail_store::{AiFunction, AiProviderKind, AiThinkingLevel, NewAiProvider, SETTING_NOTIFY_NEW_MAIL};
 
+    use crate::ai::AiProviderInput;
     use crate::engine::MailEngine;
     use crate::secrets::{MemorySecretStore, SecretStore};
 
@@ -1481,6 +1482,36 @@ mod tests {
         false
     }
 
+    #[test]
+    fn 设置快照保留通用决策站点() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (engine, _secrets) = engine(dir.path());
+        let input = AiProviderInput {
+            id: None,
+            label: "StartLux".to_string(),
+            kind: AiProviderKind::DecisionApi,
+            base_url: "https://api.bamboonode.dev/v1/decisions".to_string(),
+            default_model: "startlux-decision-27b-autothink".to_string(),
+            models: vec!["startlux-decision-27b-autothink".to_string()],
+            thinking_level: AiThinkingLevel::Off,
+            enabled: true,
+            proxy: AccountProxyMode::Direct,
+        };
+        engine
+            .save_ai_provider(&input, Some(&Secret::new("fake-key")))
+            .expect("保存站点");
+        let snapshot = engine
+            .export_settings_snapshot("device-a", "本机", 1)
+            .expect("导出快照");
+        assert_eq!(snapshot.ai_providers.len(), 1);
+        assert_eq!(snapshot.ai_providers[0].kind, AiProviderKind::DecisionApi);
+        let plan = super::build_import_plan(&snapshot);
+        assert_eq!(plan.ai_providers[0].provider.kind, AiProviderKind::DecisionApi);
+        assert_eq!(
+            plan.ai_providers[0].provider.base_url,
+            "https://api.bamboonode.dev/v1/decisions"
+        );
+    }
     #[test]
     fn 快照序列化往返一致() {
         let dir = tempfile::tempdir().expect("临时目录");
