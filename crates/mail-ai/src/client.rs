@@ -162,17 +162,12 @@ pub async fn classify_mail(
         .get("answers")
         .and_then(|answers| answers.get("category"))
         .ok_or(AiError::Protocol)?;
-    let choice = answer
-        .get("choice")
-        .and_then(|choice| choice.as_str())
-        .map(str::trim)
-        .filter(|choice| !choice.is_empty())
-        .ok_or(AiError::Protocol)?
-        .to_string();
-    if !choices.iter().any(|candidate| candidate == &choice) {
+    if answer.get("type").is_some_and(|kind| !kind.is_string()) {
         return Err(AiError::Protocol);
     }
-    let confidence = answer_confidence(answer).ok_or(AiError::Protocol)?;
+    let answer_type = answer.get("type").and_then(Value::as_str);
+    let (choice, confidence) =
+        parse_choice_answer_for_choices(answer, answer_type, choices).ok_or(AiError::Protocol)?;
     Ok(ClassifyOutcome { choice, confidence })
 }
 
@@ -330,6 +325,16 @@ fn parse_choice_answer(
     answer_type: Option<&str>,
     question: &GroupQuestion,
 ) -> Option<GroupAnswer> {
+    let (label, confidence) = parse_choice_answer_for_choices(answer, answer_type, &question.criteria)?;
+    Some(GroupAnswer::Choice { label, confidence })
+}
+
+/// 按本次候选标签校验选择题答案，供单封和分组分类共用。
+fn parse_choice_answer_for_choices(
+    answer: &Value,
+    answer_type: Option<&str>,
+    choices: &[String],
+) -> Option<(String, f64)> {
     if answer_type.is_some_and(|kind| kind != "choice") {
         return None;
     }
@@ -339,20 +344,20 @@ fn parse_choice_answer(
         .map(str::trim)
         .filter(|label| !label.is_empty())?
         .to_string();
-    if !question.criteria.iter().any(|candidate| candidate == &label) {
+    if !choices.iter().any(|candidate| candidate == &label) {
         return None;
     }
     if let Some(probabilities) = answer.get("probabilities") {
         if probabilities
             .as_object()?
             .keys()
-            .any(|label| !question.criteria.contains(label))
+            .any(|label| !choices.contains(label))
         {
             return None;
         }
     }
     let confidence = answer_confidence(answer)?;
-    Some(GroupAnswer::Choice { label, confidence })
+    Some((label, confidence))
 }
 
 /// 解析是否题答案；类型不符或概率越界都返回 `None`。
@@ -422,10 +427,10 @@ fn score_level_from_answer(answer: &Value, min: i64, max: i64) -> Option<i64> {
         let (index, _) = best?;
         return min.checked_add(index);
     }
-    answer
-        .get("score")
-        .and_then(Value::as_i64)
-        .or_else(|| answer.get("level").and_then(Value::as_i64))
+    if let Some(score) = answer.get("score") {
+        return score.as_i64().filter(|level| (min..=max).contains(level));
+    }
+    answer.get("level").and_then(Value::as_i64)
 }
 
 /// 选择题优先读把握程度；缺省时从概率中取最大值。
@@ -791,6 +796,73 @@ mod tests {
                 }
             })
             .unwrap_or(0)
+    }
+    #[tokio::test]
+    async fn 决策站点单封分类拒绝显式非选择题类型() {
+        let port = fake_server(
+            "200 OK",
+            r#"{"answers":{"category":{"type":"score","choice":"账单","confidence":0.9}}}"#,
+        )
+        .await;
+        let base = format!("http://127.0.0.1:{port}/v1/decisions");
+        let error = classify_mail(
+            None,
+            &endpoint(ProviderKind::DecisionApi, &base),
+            "测试模型",
+            "虚构测试正文",
+            &["账单".to_string(), "其他".to_string()],
+            Duration::from_secs(5),
+        )
+        .await
+        .expect_err("显式非选择题类型应报协议错误");
+        assert!(matches!(error, AiError::Protocol));
+    }
+
+    #[tokio::test]
+    async fn 决策站点单封分类拒绝候选外概率键() {
+        let port = fake_server(
+            "200 OK",
+            r#"{"answers":{"category":{"type":"choice","choice":"账单","confidence":0.9,"probabilities":{"未知选项":0.9,"账单":0.8}}}}"#,
+        )
+        .await;
+        let base = format!("http://127.0.0.1:{port}/v1/decisions");
+        let error = classify_mail(
+            None,
+            &endpoint(ProviderKind::DecisionApi, &base),
+            "测试模型",
+            "虚构测试正文",
+            &["账单".to_string(), "其他".to_string()],
+            Duration::from_secs(5),
+        )
+        .await
+        .expect_err("概率键不在候选里应报协议错误");
+        assert!(matches!(error, AiError::Protocol));
+    }
+
+    #[test]
+    fn 决策站点打分字段非法时不回退旧档位() {
+        let question = group_question(
+            1,
+            GroupQuestionKind::Score,
+            "打分",
+            prompt::score_levels(-1, 1),
+            Some(-1),
+            Some(1),
+        );
+        for answer in [
+            json!({"score":"0","level":-1,"confidence":0.8}),
+            json!({"score":0.5,"level":-1,"confidence":0.8}),
+            json!({"score":2,"level":-1,"confidence":0.8}),
+        ] {
+            assert!(parse_score_answer(&answer, None, &question).is_none(), "{answer}");
+        }
+        assert_eq!(
+            parse_score_answer(&json!({"level":-1,"confidence":0.8}), None, &question),
+            Some(GroupAnswer::Score {
+                level: -1,
+                confidence: 0.8,
+            })
+        );
     }
     #[test]
     fn 决策站点选择题拒绝非法概率和把握程度() {
