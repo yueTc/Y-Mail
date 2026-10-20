@@ -160,9 +160,14 @@ pub async fn settings_sync_download(
     }
     validate_device_label(&device_label)?;
     let engine = state.engine().await;
-    Ok(engine
+    let status = engine
         .download_settings_sync(&password, &device_label, confirm_overwrite.unwrap_or(false))
-        .await?)
+        .await?;
+    // 导入可能新增账号；已在跑的账号会被跳过，只补起新账号。
+    if let Err(error) = engine.start_sync(None) {
+        tracing::warn!(error = %error, "设置下载后启动新账号同步失败");
+    }
+    Ok(status)
 }
 
 /// 解决冲突：保留本机重新上传，或丢本机按远端导入。
@@ -172,5 +177,10 @@ pub async fn settings_sync_resolve_conflict(
     choice: ConflictChoice,
 ) -> Result<SettingsSyncStatus, CommandError> {
     let engine = state.engine().await;
-    Ok(engine.resolve_settings_sync_conflict(choice).await?)
+    let status = engine.resolve_settings_sync_conflict(choice).await?;
+    // 选择保留远端时也可能导入新账号，补起它们的后台同步。
+    if let Err(error) = engine.start_sync(None) {
+        tracing::warn!(error = %error, "设置冲突处理后启动新账号同步失败");
+    }
+    Ok(status)
 }

@@ -3019,7 +3019,7 @@ dependencies = [
 
 [[package]]
 name = "mail-ai"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "mail-domain",
  "mail-net",
@@ -3033,7 +3033,7 @@ dependencies = [
 
 [[package]]
 name = "mail-core"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.4.3",
@@ -3059,11 +3059,11 @@ dependencies = [
 
 [[package]]
 name = "mail-domain"
-version = "0.4.4"
+version = "0.4.5"
 
 [[package]]
 name = "mail-imap"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "base64 0.22.1",
  "mail-domain",
@@ -3075,7 +3075,7 @@ dependencies = [
 
 [[package]]
 name = "mail-mcp"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "mail-core",
  "mail-domain",
@@ -3088,7 +3088,7 @@ dependencies = [
 
 [[package]]
 name = "mail-mime"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "ammonia",
  "base64 0.22.1",
@@ -3100,7 +3100,7 @@ dependencies = [
 
 [[package]]
 name = "mail-net"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "base64 0.22.1",
  "mail-domain",
@@ -3115,7 +3115,7 @@ dependencies = [
 
 [[package]]
 name = "mail-oauth"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "base64 0.22.1",
  "form_urlencoded",
@@ -3143,7 +3143,7 @@ dependencies = [
 
 [[package]]
 name = "mail-smtp"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "base64 0.22.1",
  "mail-domain",
@@ -3156,7 +3156,7 @@ dependencies = [
 
 [[package]]
 name = "mail-store"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "mail-domain",
  "rusqlite",
@@ -3170,7 +3170,7 @@ dependencies = [
 
 [[package]]
 name = "mail-sync"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -4601,6 +4601,41 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "rclip-codepage"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03b479f8baadf78efd25b8a252cf6e6926f53f26f25578bb0e4316e9a481abff"
+dependencies = [
+ "rclip-core",
+]
+
+[[package]]
+name = "rclip-core"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6414ce752a0d18ee3d000b6c76fccbc30e90b93c2a8c1e7fdd855ab9b7ea0af6"
+
+[[package]]
+name = "rclip-idlist"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9ea46804880588b0c68a55553a252118783d0232940a9e72717f050d772dec9"
+dependencies = [
+ "rclip-codepage",
+ "rclip-core",
+]
+
+[[package]]
+name = "rclip-shell-link"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "718e7efddef2cd8cf492d9f05a8a3525cd7ecfc22d68d7ceec7730f25a5537a3"
+dependencies = [
+ "rclip-core",
+ "rclip-idlist",
 ]
 
 [[package]]
@@ -7509,7 +7544,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
 name = "ymail"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -7519,6 +7554,7 @@ dependencies = [
  "mail-mcp",
  "mail-mime",
  "notify-rust",
+ "rclip-shell-link",
  "serde",
  "serde_json",
  "tauri",

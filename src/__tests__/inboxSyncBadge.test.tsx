@@ -126,4 +126,26 @@ describe("多邮箱同步数量", () => {
     await screen.findByRole("button", { name: "邮箱1" });
     expect(container.querySelector(".sync-badge")).toBeNull();
   });
+
+  it("设置同步导入账号后，邮箱栏立即显示新账号", async () => {
+    const view = render(<InboxPanel accountsVersion={0} />);
+    await screen.findByRole("button", { name: "邮箱1" });
+
+    vi.mocked(api.inboxSummary).mockResolvedValue({
+      accounts: [1, 2].map((accountId) => ({
+        accountId,
+        email: `mail${accountId}@example.com`,
+        displayName: `邮箱${accountId}`,
+        color: "#3366ff",
+        enabled: true,
+        messageCount: 0,
+        unreadCount: 0,
+      })),
+      totalMessages: 0,
+      totalUnread: 0,
+    });
+    view.rerender(<InboxPanel accountsVersion={1} />);
+
+    expect(await screen.findByRole("button", { name: "邮箱2" })).toBeTruthy();
+  });
 });

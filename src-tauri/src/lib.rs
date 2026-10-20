@@ -338,6 +338,14 @@ pub fn run() {
                     };
                     match pulled {
                         Ok(_) => {
+                            // 启动拉取可能带来新账号；先补齐它们的后台同步。
+                            let started = {
+                                let engine = state.engine().await;
+                                engine.start_sync(None)
+                            };
+                            if let Err(error) = started {
+                                tracing::warn!(error = %error, "启动拉取后启动新账号同步失败");
+                            }
                             let toggles = {
                                 let engine = state.engine().await;
                                 engine.read_synced_toggles()
