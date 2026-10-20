@@ -126,6 +126,30 @@
   margin-top: 10px;
 }
 
+.ai-provider-test {
+  display: grid;
+  gap: 8px;
+  flex: 1 1 14rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ai-provider-test > button {
+  justify-self: start;
+}
+
+.ai-test-model {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ai-test-model input,
+.ai-test-model select {
+  width: 100%;
+  min-width: 0;
+}
+
 /* 弹窗 body 已有内边距，避免复用设置页 .form 时再叠一层顶部留白和分隔线。 */
 .ai-provider-form {
   margin-top: 0;

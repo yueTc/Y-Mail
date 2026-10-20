@@ -473,6 +473,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn 加密握手中途断开时提示网络线路且不发送登录凭据() {
+        use tokio::io::AsyncReadExt;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定失败");
+        let addr = listener.local_addr().expect("取地址失败");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("接受连接失败");
+            let mut buffer = vec![0; 4096];
+            let read = socket.read(&mut buffer).await.expect("读取握手失败");
+            assert!(read > 0, "客户端应先发加密握手");
+            buffer.truncate(read);
+            assert_eq!(buffer[0], 0x16, "必须是加密握手记录");
+            let text = String::from_utf8_lossy(&buffer);
+            assert!(!text.contains("LOGIN"));
+            assert!(!text.contains("pw-secret"));
+            socket.shutdown().await.expect("关闭连接失败");
+        });
+
+        let error = probe(&request(addr.port(), Security::Tls), None)
+            .await
+            .expect_err("断开的握手不能通过自检");
+        server.await.expect("服务端任务失败");
+        assert_eq!(error.kind, ConnectionErrorKind::NetworkUnreachable);
+        assert!(error.message.contains("中途断开"));
+        assert!(error.message.contains("代理"));
+        assert!(!error.kind.hint().contains("993/465"));
+    }
+
+    #[tokio::test]
+    async fn 升级加密后握手断开也提示网络线路() {
+        use tokio::io::AsyncReadExt;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定失败");
+        let addr = listener.local_addr().expect("取地址失败");
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("接受连接失败");
+            let mut reader = BufReader::new(socket);
+            reader
+                .get_mut()
+                .write_all(b"* OK ready\r\n")
+                .await
+                .expect("写入失败");
+            assert_eq!(read_line(&mut reader).await, "a001 STARTTLS");
+            reader
+                .get_mut()
+                .write_all(b"a001 OK begin TLS\r\n")
+                .await
+                .expect("写入失败");
+            let mut buffer = [0; 4096];
+            let read = reader.read(&mut buffer).await.expect("读取握手失败");
+            assert!(read > 0);
+            assert_eq!(buffer[0], 0x16, "必须先完成加密，不能发送明文登录命令");
+            reader.get_mut().shutdown().await.expect("关闭连接失败");
+        });
+
+        let error = probe(&request(addr.port(), Security::StartTls), None)
+            .await
+            .expect_err("升级后握手断开不能通过自检");
+        server.await.expect("服务端任务失败");
+        assert_eq!(error.kind, ConnectionErrorKind::NetworkUnreachable);
+        assert!(error.message.contains("中途断开"));
+    }
+
+    #[tokio::test]
     async fn tls握手失败时归类为加密失败() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定失败");
         let addr = listener.local_addr().expect("取地址失败");

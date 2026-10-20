@@ -165,7 +165,7 @@ impl Loopback {
                 code.ok_or(OAuthError::Protocol)
             };
             let page = if outcome.is_ok() {
-                PAGE_SUCCESS
+                PAGE_RECEIVED
             } else {
                 PAGE_FAILURE
             };
@@ -198,7 +198,7 @@ async fn respond(socket: &mut tokio::net::TcpStream, page: &str) -> std::io::Res
     socket.shutdown().await
 }
 
-const PAGE_SUCCESS: &str = "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><title>授权成功</title><body><h1>授权成功</h1><p>可以回到客户端继续了，这个窗口可以直接关掉。</p></body></html>";
+const PAGE_RECEIVED: &str = "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><title>授权信息已收到</title><body><h1>授权信息已收到</h1><p>软件正在获取登录凭据并检查邮箱连接，请回到软件查看最终结果。这个窗口可以直接关掉。</p></body></html>";
 const PAGE_FAILURE: &str = "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><title>授权未完成</title><body><h1>授权未完成</h1><p>请回到客户端重新发起授权，这个窗口可以直接关掉。</p></body></html>";
 const PAGE_NOT_FOUND: &str = "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><title>找不到页面</title><body><h1>找不到页面</h1></body></html>";
 
@@ -262,6 +262,13 @@ mod tests {
             .expect("写入成功");
         let code = waiting.await.expect("任务未崩溃").expect("拿到授权码");
         assert_eq!(code, "abc123");
+        let mut response = String::new();
+        client.read_to_string(&mut response).await.expect("读取网页");
+        assert!(response.contains("授权信息已收到"));
+        assert!(response.contains("请回到软件查看最终结果"));
+        assert!(!response.contains("授权成功"));
+        assert!(!response.contains("abc123"));
+        assert!(!response.contains("expected-state"));
     }
 
     #[tokio::test]

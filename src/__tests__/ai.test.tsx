@@ -1357,3 +1357,148 @@ describe("标签组管理", () => {
     });
   });
 });
+
+describe("TypeSafe 测试模型选择", () => {
+  const provider: AiProvider = {
+    id: 7,
+    label: "分类中转",
+    kind: "typesafe",
+    baseUrl: "https://relay.example.com/v1",
+    defaultModel: "relay/jev-default",
+    models: ["relay/jev-default", "relay/jev-fast"],
+    thinkingLevel: "off",
+    enabled: true,
+    hasKey: true,
+    supportedFunctions: ["classify"],
+    proxy: { mode: "direct" },
+  };
+
+  async function prepare(overrides: Partial<AiProvider> = {}) {
+    vi.mocked(api.listAiProviders).mockResolvedValue([{ ...provider, ...overrides }]);
+    vi.mocked(api.testAiProvider).mockResolvedValue(["relay/jev-fast"]);
+    render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={vi.fn()} />);
+    return (await screen.findByRole("button", { name: "展开分类中转" })).closest("article") as HTMLElement;
+  }
+
+  it("卡片默认选中站点默认模型，可以改选列表里的中转模型", async () => {
+    const card = await prepare();
+    fireEvent.click(within(card).getByRole("button", { name: "展开分类中转" }));
+    const select = within(card).getByLabelText("测试模型") as HTMLSelectElement;
+    expect(select.value).toBe("relay/jev-default");
+    expect(within(select).getAllByRole("option").map((item) => item.textContent))
+      .toEqual(["relay/jev-default", "relay/jev-fast", "手工填写模型编号"]);
+    expect(api.testAiProvider).not.toHaveBeenCalled();
+
+    fireEvent.change(select, { target: { value: "relay/jev-fast" } });
+    fireEvent.click(within(card).getByRole("button", { name: "测试连接" }));
+    await waitFor(() => expect(api.testAiProvider).toHaveBeenCalledWith(
+      "typesafe", provider.baseUrl, undefined, 7, { mode: "direct" }, "relay/jev-fast",
+    ));
+    expect(api.saveAiProvider).not.toHaveBeenCalled();
+  });
+
+  it("没有默认模型和模型列表时可手填中转模型", async () => {
+    const card = await prepare({ defaultModel: "", models: [] });
+    fireEvent.click(within(card).getByRole("button", { name: "展开分类中转" }));
+    fireEvent.change(within(card).getByLabelText("手填测试模型"), {
+      target: { value: " relay/jev-custom " },
+    });
+    fireEvent.click(within(card).getByRole("button", { name: "测试连接" }));
+    await waitFor(() => expect(api.testAiProvider).toHaveBeenCalledWith(
+      "typesafe", provider.baseUrl, undefined, 7, { mode: "direct" }, "relay/jev-custom",
+    ));
+  });
+
+  it("默认模型为空时选择列表第一项，候选会去空白和重复", async () => {
+    const card = await prepare({ defaultModel: " ", models: [" ", " relay/first ", "relay/first", "relay/next"] });
+    fireEvent.click(within(card).getByRole("button", { name: "展开分类中转" }));
+    const select = within(card).getByLabelText("测试模型") as HTMLSelectElement;
+    expect(select.value).toBe("relay/first");
+    expect(within(select).getAllByRole("option").map((item) => item.textContent))
+      .toEqual(["relay/first", "relay/next", "手工填写模型编号"]);
+  });
+
+  it("卡片选择手工填写后，空白模型不发请求", async () => {
+    const card = await prepare();
+    fireEvent.click(within(card).getByRole("button", { name: "展开分类中转" }));
+    fireEvent.change(within(card).getByLabelText("测试模型"), { target: { value: "" } });
+    fireEvent.change(within(card).getByLabelText("手填测试模型"), { target: { value: "   " } });
+    fireEvent.click(within(card).getByRole("button", { name: "测试连接" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("请选择或填写测试模型");
+    expect(api.testAiProvider).not.toHaveBeenCalled();
+  });
+
+  it("编辑弹窗使用当前选择测试，成功不覆盖原模型列表或默认模型", async () => {
+    const card = await prepare();
+    fireEvent.click(within(card).getByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("测试模型"), {
+      target: { value: "relay/jev-fast" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "测试连接" }));
+    await within(dialog).findByText("连接成功，测试模型：relay/jev-fast");
+    expect(api.testAiProvider).toHaveBeenCalledWith(
+      "typesafe", provider.baseUrl, undefined, 7, { mode: "direct" }, "relay/jev-fast",
+    );
+    expect((within(dialog).getByLabelText("模型列表") as HTMLTextAreaElement).value)
+      .toBe("relay/jev-default\nrelay/jev-fast");
+    expect((within(dialog).getByLabelText("默认模型") as HTMLInputElement).value)
+      .toBe("relay/jev-default");
+    expect(api.saveAiProvider).not.toHaveBeenCalled();
+  });
+
+  it("编辑弹窗能手填模型并沿用已存密钥，重新打开恢复默认选择", async () => {
+    const card = await prepare();
+    fireEvent.click(within(card).getByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("测试模型"), { target: { value: "" } });
+    fireEvent.change(within(dialog).getByLabelText("手填测试模型"), {
+      target: { value: " relay/custom " },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "测试连接" }));
+    await within(dialog).findByText("连接成功，测试模型：relay/custom");
+    expect(api.testAiProvider).toHaveBeenCalledWith(
+      "typesafe", provider.baseUrl, undefined, 7, { mode: "direct" }, "relay/custom",
+    );
+    await waitFor(() => expect(
+      (within(dialog).getByRole("button", { name: "取消" }) as HTMLButtonElement).disabled,
+    ).toBe(false));
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(within(card).getByRole("button", { name: "编辑" }));
+    const reopened = await screen.findByRole("dialog");
+    expect((within(reopened).getByLabelText("测试模型") as HTMLSelectElement).value)
+      .toBe("relay/jev-default");
+  });
+
+  it("编辑弹窗空模型不发请求，失败后保留所选模型便于重试", async () => {
+    const card = await prepare();
+    fireEvent.click(within(card).getByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("测试模型"), { target: { value: "" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "测试连接" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toContain("请选择或填写测试模型");
+    expect(api.testAiProvider).not.toHaveBeenCalled();
+    vi.mocked(api.testAiProvider).mockRejectedValueOnce(new Error("模型不存在"));
+    fireEvent.change(within(dialog).getByLabelText("手填测试模型"), {
+      target: { value: "relay/other" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "测试连接" }));
+    await within(dialog).findByText(/模型不存在/);
+    expect((within(dialog).getByLabelText("手填测试模型") as HTMLInputElement).value).toBe("relay/other");
+  });
+
+  it("兼容站点保留原有拉取模型流程，不需要选择测试模型", async () => {
+    const card = await prepare({ kind: "openai_compatible", defaultModel: "", models: [] });
+    vi.mocked(api.testAiProvider).mockResolvedValue(["relay/chat"]);
+    fireEvent.click(within(card).getByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByLabelText("测试模型")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "测试连接并拉取模型" }));
+    await within(dialog).findByText("连接成功，拉到 1 个模型。");
+    expect((within(dialog).getByLabelText("模型列表") as HTMLTextAreaElement).value).toBe("relay/chat");
+    expect(api.testAiProvider).toHaveBeenCalledWith(
+      "openai_compatible", provider.baseUrl, undefined, 7, { mode: "direct" }, undefined,
+    );
+  });
+});

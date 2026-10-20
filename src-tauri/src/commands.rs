@@ -1304,12 +1304,14 @@ pub async fn begin_oauth_authorize(
     state: tauri::State<'_, AppState>,
     draft: AccountDraftDto,
     account_id: Option<i64>,
+    client_secret: Option<String>,
 ) -> Result<OAuthAuthorizationDto, CommandError> {
     let draft = draft.to_domain()?;
+    let client_secret = client_secret.map(Secret::new);
     let authorization = {
         let engine = state.engine().await;
         engine
-            .begin_oauth_authorize(&draft, account_id.map(AccountId))
+            .begin_oauth_authorize_with_secret(&draft, account_id.map(AccountId), client_secret.as_ref())
             .await?
     };
     if let Err(error) = open_in_browser(&authorization.authorize_url) {
@@ -3902,6 +3904,7 @@ pub async fn test_ai_provider(
     api_key: Option<String>,
     id: Option<i64>,
     proxy: Option<AccountProxyDto>,
+    model: Option<String>,
 ) -> Result<Vec<String>, CommandError> {
     let kind = AiProviderKind::parse(&kind).ok_or_else(|| {
         CommandError::input("AI 站点类型只能是 openai_compatible、deepl、ollama 或 typesafe")
@@ -3913,7 +3916,14 @@ pub async fn test_ai_provider(
     let secret = api_key.map(Secret::new);
     let engine = state.engine().await;
     let models = engine
-        .test_ai_provider(kind, &base_url, secret.as_ref(), id, proxy)
+        .test_ai_provider(
+            kind,
+            &base_url,
+            model.as_deref().unwrap_or(""),
+            secret.as_ref(),
+            id,
+            proxy,
+        )
         .await?;
     Ok(models)
 }

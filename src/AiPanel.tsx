@@ -29,6 +29,7 @@ import AiProviderDialog, {
   THINKING_ORDER,
 } from "./AiProviderDialog";
 import { t } from "./i18n";
+import AiTestModelPicker from "./AiTestModelPicker";
 
 /** 编辑站点图标：铅笔；按钮名字由 aria-label 和 title 提供。 */
 function EditIcon() {
@@ -203,6 +204,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   const [editingProvider, setEditingProvider] = useState<AiProvider | null>(null);
   // 站点卡片默认全部收起；按站点编号分别记展开状态，只影响界面，不写配置。
   const [expandedProviders, setExpandedProviders] = useState<Record<number, boolean>>({});
+  const [testModels, setTestModels] = useState<Record<number, string>>({});
   // 卡片上「指定代理」要显示代理名，这里存一份代理清单。
   const [proxies, setProxies] = useState<Proxy[]>([]);
   const [featureDrafts, setFeatureDrafts] = useState<Record<string, FeatureDraftState>>({});
@@ -360,10 +362,14 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
   );
 
   /** 测试一个已存站点的连接；TypeSafe jev 没有模型列表接口，只做一次试探分类。 */
-  const testProvider = useCallback(async (provider: AiProvider) => {
-    setBusy(true);
+  const testProvider = useCallback(async (provider: AiProvider, model: string) => {
     setError("");
     setNotice("");
+    if (model.trim() === "") {
+      setError(t("请选择或填写测试模型"));
+      return;
+    }
+    setBusy(true);
     try {
       const models = await api.testAiProvider(
         provider.kind,
@@ -371,12 +377,9 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
         undefined,
         provider.id,
         provider.proxy,
+        model.trim(),
       );
-      setNotice(
-        models.length > 0
-          ? t("连接成功，站点可用模型：{0}", [models.join(t("、"))])
-          : t("连接成功。"),
-      );
+      setNotice(t("连接成功，测试模型：{0}", [models[0] ?? model.trim()]));
     } catch (caught) {
       setError(describeError(caught));
     } finally {
@@ -962,6 +965,11 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
         {providers.map((provider) => {
           const expanded = expandedProviders[provider.id] === true;
           const detailsId = `ai-provider-details-${provider.id}`;
+          const testModel =
+            testModels[provider.id] ??
+            (provider.defaultModel.trim() ||
+              provider.models.find((model) => model.trim())?.trim() ||
+              "");
           return (
             <article
               key={provider.id}
@@ -1035,8 +1043,18 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
                     <div className="card-sub">{t("代理策略：")}{proxyText(provider.proxy, proxies)}</div>
                   </div>
                   {provider.kind === "typesafe" && (
-                    <div className="card-actions">
-                      <button type="button" onClick={() => void testProvider(provider)} disabled={busy}>
+                    <div className="ai-provider-test">
+                      <AiTestModelPicker
+                        value={testModel}
+                        defaultModel={provider.defaultModel}
+                        models={provider.models}
+                        disabled={busy}
+                        onChange={(model) => {
+                          setTestModels((old) => ({ ...old, [provider.id]: model }));
+                          setNotice("");
+                        }}
+                      />
+                      <button type="button" onClick={() => void testProvider(provider, testModel)} disabled={busy}>
                         {t("测试连接")}</button>
                     </div>
                   )}

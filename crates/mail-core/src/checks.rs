@@ -2,10 +2,17 @@
 //!
 //! 安全约定：授权码只在内存里传递；错误文案由协议层脱敏后返回，本模块只加环节前缀。
 
+use std::future::Future;
+use std::time::Duration;
+
 use mail_domain::account::AccountDraft;
 use mail_domain::auth::AuthMaterial;
 use mail_domain::error::ConnectionError;
 use mail_domain::proxy::{ProxyRoute, Secret};
+
+/// 单次自检遇到临时网络问题时最多尝试三次，总重试次数不超过两次。
+const PROBE_ATTEMPTS: u8 = 3;
+const PROBE_RETRY_DELAY: Duration = Duration::from_millis(350);
 
 /// 一次账号自检的完整结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,12 +62,12 @@ impl ProbePlan {
     }
 }
 
-/// 执行自检：先收件后发件，任何一步失败都标出出问题的环节。
+/// 执行自检：先收件后发件；只有临时网络问题会重试，最终失败标出环节。
 pub(crate) async fn run(plan: &ProbePlan) -> Result<ConnectionReport, ConnectionError> {
-    let imap = mail_imap::probe(&plan.imap, plan.route.as_ref())
+    let imap = retry_transient(|| mail_imap::probe(&plan.imap, plan.route.as_ref()))
         .await
         .map_err(|err| with_stage("收件服务器", err))?;
-    let smtp = mail_smtp::probe(&plan.smtp, plan.route.as_ref())
+    let smtp = retry_transient(|| mail_smtp::probe(&plan.smtp, plan.route.as_ref()))
         .await
         .map_err(|err| with_stage("发件服务器", err))?;
 
@@ -70,6 +77,34 @@ pub(crate) async fn run(plan: &ProbePlan) -> Result<ConnectionReport, Connection
     })
 }
 
+async fn retry_transient<F, Fut, T>(mut operation: F) -> Result<T, ConnectionError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, ConnectionError>>,
+{
+    let mut attempt = 1;
+    loop {
+        match operation().await {
+            Ok(result) => return Ok(result),
+            Err(error) if attempt >= PROBE_ATTEMPTS || !is_transient(&error) => {
+                return Err(error);
+            }
+            Err(_) => {
+                attempt += 1;
+                tokio::time::sleep(PROBE_RETRY_DELAY).await;
+            }
+        }
+    }
+}
+
+fn is_transient(error: &ConnectionError) -> bool {
+    matches!(
+        error.kind,
+        mail_domain::error::ConnectionErrorKind::Timeout
+            | mail_domain::error::ConnectionErrorKind::NetworkUnreachable
+    )
+}
+
 /// 保留错误分类，只给描述加上环节名。
 fn with_stage(stage: &str, error: ConnectionError) -> ConnectionError {
     ConnectionError::new(error.kind, format!("{stage}：{}", error.message))
@@ -77,11 +112,14 @@ fn with_stage(stage: &str, error: ConnectionError) -> ConnectionError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
     use mail_domain::account::{AccountDraft, AccountProxyMode, AuthType, Security, ServerConfig};
-    use mail_domain::error::ConnectionErrorKind;
+    use mail_domain::error::{ConnectionError, ConnectionErrorKind};
     use mail_domain::proxy::Secret;
 
-    use super::{with_stage, ProbePlan};
+    use super::{retry_transient, with_stage, ProbePlan};
 
     fn draft() -> AccountDraft {
         AccountDraft {
@@ -125,5 +163,66 @@ mod tests {
         );
         assert_eq!(err.kind, ConnectionErrorKind::AuthFailed);
         assert_eq!(err.message, "收件服务器：登录被拒绝");
+    }
+
+    #[tokio::test]
+    async fn 临时超时第三次成功() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::clone(&attempts);
+        let result = retry_transient(move || {
+            let calls = Arc::clone(&calls);
+            async move {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if attempt < 3 {
+                    Err(ConnectionError::timeout("暂时超时"))
+                } else {
+                    Ok(attempt)
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(result.expect("第三次应成功"), 3);
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn 持续网络中断总共只尝试三次() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::clone(&attempts);
+        let result: Result<(), ConnectionError> = retry_transient(move || {
+            let calls = Arc::clone(&calls);
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(ConnectionError::network("网络中断"))
+            }
+        })
+        .await;
+
+        assert_eq!(
+            result.expect_err("网络仍未恢复").kind,
+            ConnectionErrorKind::NetworkUnreachable
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn 认证失败只尝试一次() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::clone(&attempts);
+        let result: Result<(), ConnectionError> = retry_transient(move || {
+            let calls = Arc::clone(&calls);
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(ConnectionError::auth("登录被拒绝"))
+            }
+        })
+        .await;
+
+        assert_eq!(
+            result.expect_err("认证错误应立即返回").kind,
+            ConnectionErrorKind::AuthFailed
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 }

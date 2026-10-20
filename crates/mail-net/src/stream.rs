@@ -1,12 +1,20 @@
 //! 连接流：明文 TCP 与 TLS 加密连接的统一封装。
 
 use std::pin::Pin;
+use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
 use mail_domain::error::ConnectionError;
+use rustls::pki_types::ServerName;
+use rustls::ClientConfig;
+use rustls_platform_verifier::ConfigVerifierExt;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
-use tokio_native_tls::TlsStream;
+use tokio_rustls::client::TlsStream;
+use tokio_rustls::TlsConnector;
+
+/// 系统证书校验配置只需建立一次；连接失败时也复用同一次初始化结果。
+static TLS_CONFIG: OnceLock<Result<Arc<ClientConfig>, String>> = OnceLock::new();
 
 /// 一条可读可写的连接：要么是明文，要么是 TLS 加密。
 ///
@@ -78,16 +86,58 @@ impl AsyncWrite for Stream {
     }
 }
 
-/// 把一条明文 TCP 连接升级为 TLS 加密连接（使用系统信任库校验证书）。
+/// 把一条明文 TCP 连接升级为 TLS 加密连接。
+///
+/// 加密握手由 Rustls 完成，证书和域名仍交给操作系统信任库校验。
 pub async fn tls_wrap(tcp: TcpStream, host: &str) -> Result<Stream, ConnectionError> {
-    let connector = native_tls::TlsConnector::builder().build().map_err(|err| {
-        tracing::debug!(error = %err, "创建 TLS 连接器失败");
-        ConnectionError::tls("无法初始化加密组件")
-    })?;
-    let connector = tokio_native_tls::TlsConnector::from(connector);
-    let tls = connector.connect(host, tcp).await.map_err(|err| {
-        tracing::debug!(error = %err, "TLS 握手失败");
-        ConnectionError::tls("加密握手失败：请确认服务器地址与加密方式是否匹配")
-    })?;
+    let config = tls_config()?;
+    let server_name = tls_server_name(host)?;
+    let tls = TlsConnector::from(config)
+        .connect(server_name, tcp)
+        .await
+        .map_err(|err| {
+            tracing::debug!(error = %err, "TLS 握手失败");
+            crate::error::classify_tls(&err)
+        })?;
     Ok(Stream::Tls(Box::pin(tls)))
+}
+
+/// 初始化并缓存 Rustls 平台证书校验器。
+fn tls_config() -> Result<Arc<ClientConfig>, ConnectionError> {
+    let cached = TLS_CONFIG.get_or_init(|| {
+        ClientConfig::with_platform_verifier()
+            .map(Arc::new)
+            .map_err(|err| err.to_string())
+    });
+    match cached {
+        Ok(config) => Ok(config.clone()),
+        Err(error) => {
+            tracing::debug!(error = %error, "创建 TLS 连接器失败");
+            Err(ConnectionError::tls("无法初始化加密组件"))
+        }
+    }
+}
+
+/// 把服务器地址转换成证书必须覆盖的域名。
+fn tls_server_name(host: &str) -> Result<ServerName<'static>, ConnectionError> {
+    ServerName::try_from(host.to_owned()).map_err(|error| {
+        tracing::debug!(error = %error, "服务器地址不能作为 TLS 域名");
+        ConnectionError::tls("服务器地址不能作为证书域名")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tls_server_name;
+
+    #[test]
+    fn 空服务器地址不能用于证书校验() {
+        let error = tls_server_name("").expect_err("空地址应被拒绝");
+        assert_eq!(error.message, "服务器地址不能作为证书域名");
+    }
+
+    #[test]
+    fn 正常邮箱服务器地址可用于证书校验() {
+        assert!(tls_server_name("smtp.gmail.com").is_ok());
+    }
 }

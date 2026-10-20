@@ -32,9 +32,6 @@ pub const AI_TIMEOUT: Duration = Duration::from_secs(60);
 /// 通知识别的单封等待上限；超了就退回普通通知。
 pub const NOTIFICATION_VERIFY_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// TypeSafe jev 的默认模型名；官方推荐值。
-pub const TYPESAFE_PROBE_MODEL: &str = "jev-latest";
-
 /// 分类外发的正文上限：只发前 2000 个字符。
 pub const CLASSIFY_BODY_MAX_CHARS: usize = 2000;
 
@@ -498,11 +495,16 @@ impl MailEngine {
         &self,
         kind: AiProviderKind,
         base_url: &str,
+        model: &str,
         api_key: Option<&Secret>,
         provider_id: Option<i64>,
         proxy: AccountProxyMode,
     ) -> Result<Vec<String>, EngineError> {
         let base_url = normalize_base_url(base_url, provider_kind(kind))?;
+        let model = model.trim();
+        if kind == AiProviderKind::TypeSafe && model.is_empty() {
+            return Err(EngineError::BadRequest("请选择或填写测试模型".to_string()));
+        }
         if let AccountProxyMode::Custom(id) = proxy {
             if self.store().get_proxy(id)?.is_none() {
                 return Err(EngineError::ProxyNotFound(id.0));
@@ -530,13 +532,13 @@ impl MailEngine {
             classify_mail(
                 route.as_ref(),
                 &endpoint,
-                TYPESAFE_PROBE_MODEL,
+                model,
                 prompt::TYPESAFE_PROBE_STATE,
                 &choices,
                 NOTIFICATION_VERIFY_TIMEOUT,
             )
             .await?;
-            return Ok(vec![TYPESAFE_PROBE_MODEL.to_string()]);
+            return Ok(vec![model.to_string()]);
         }
         Ok(list_models(route.as_ref(), &endpoint, AI_TIMEOUT).await?)
     }
@@ -2113,7 +2115,7 @@ mod tests {
             .unwrap_or(0)
     }
     #[tokio::test]
-    async fn typesafe_test_connection_returns_fixed_model_name() {
+    async fn typesafe_test_connection_uses_selected_relay_model() {
         let dir = tempfile::tempdir().expect("临时目录");
         let engine = engine(dir.path());
         let (port, captured) =
@@ -2124,13 +2126,14 @@ mod tests {
             .test_ai_provider(
                 AiProviderKind::TypeSafe,
                 &base,
+                " relay/jev-custom ",
                 None,
                 None,
                 AccountProxyMode::InheritGlobal,
             )
             .await
             .expect("TypeSafe 测试连接应成功");
-        assert_eq!(models, vec!["jev-latest".to_string()]);
+        assert_eq!(models, vec!["relay/jev-custom".to_string()]);
 
         let request = captured.recv().expect("拿到请求");
         assert!(request.contains("POST /v1/systemone"), "{request}");
@@ -2138,7 +2141,102 @@ mod tests {
             request.contains(prompt::TYPESAFE_PROBE_STATE),
             "请求体里应是固定探针：{request}"
         );
-        assert!(request.contains("\"model\":\"jev-latest\""), "{request}");
+        assert!(request.contains("\"model\":\"relay/jev-custom\""), "{request}");
+        assert!(engine.list_ai_providers().expect("站点列表").is_empty());
+    }
+
+    #[tokio::test]
+    async fn typesafe_test_connection_reuses_stored_key_without_changing_configuration() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let secrets = std::sync::Arc::new(crate::secrets::MemorySecretStore::new());
+        let engine = MailEngine::initialize_with_secrets(dir.path(), secrets.clone()).expect("初始化");
+        let (port, captured) =
+            fake_capture_server(r#"{"answers":{"category":{"choice":"账单","confidence":0.92}}}"#).await;
+        let base = format!("http://127.0.0.1:{port}/v1");
+        let saved = engine
+            .save_ai_provider(
+                &AiProviderInput {
+                    id: None,
+                    label: "中转".to_string(),
+                    kind: AiProviderKind::TypeSafe,
+                    base_url: base.clone(),
+                    default_model: "relay/default".to_string(),
+                    models: vec!["relay/default".to_string(), "relay/fast".to_string()],
+                    thinking_level: AiThinkingLevel::Off,
+                    enabled: false,
+                    proxy: AccountProxyMode::Direct,
+                },
+                Some(&Secret::new("fake-stored-test-key")),
+            )
+            .expect("保存站点");
+        let models = engine
+            .test_ai_provider(
+                AiProviderKind::TypeSafe,
+                &base,
+                "relay/fast",
+                None,
+                Some(saved.id),
+                AccountProxyMode::Direct,
+            )
+            .await
+            .expect("沿用已存密钥测试");
+        assert_eq!(models, vec!["relay/fast"]);
+        let request = captured.recv().expect("请求");
+        assert!(request.contains("Authorization: Bearer fake-stored-test-key"));
+        assert!(request.contains(r#""model":"relay/fast""#));
+        let after = engine.list_ai_providers().expect("站点").remove(0);
+        assert_eq!(after.default_model, saved.default_model);
+        assert_eq!(after.models, saved.models);
+        assert!(!after.enabled);
+        assert_eq!(secrets.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn typesafe_test_connection_rejects_blank_model_before_sending() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("监听");
+        let base = format!("http://{}/v1", listener.local_addr().expect("地址"));
+        for model in ["", " \n "] {
+            let error = engine
+                .test_ai_provider(
+                    AiProviderKind::TypeSafe,
+                    &base,
+                    model,
+                    None,
+                    None,
+                    AccountProxyMode::Direct,
+                )
+                .await
+                .expect_err("空模型必须拦截");
+            assert!(matches!(error, EngineError::BadRequest(ref text) if text.contains("测试模型")));
+        }
+        assert!(tokio::time::timeout(Duration::from_millis(50), listener.accept())
+            .await
+            .is_err());
+        assert!(engine.list_ai_providers().expect("站点列表").is_empty());
+    }
+
+    #[tokio::test]
+    async fn compatible_test_connection_still_lists_models_without_selected_model() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let (port, captured) = fake_capture_server(r#"{"data":[{"id":"relay-model"}]}"#).await;
+        let models = engine
+            .test_ai_provider(
+                AiProviderKind::OpenAiCompatible,
+                &format!("http://127.0.0.1:{port}/v1"),
+                "",
+                None,
+                None,
+                AccountProxyMode::Direct,
+            )
+            .await
+            .expect("兼容站点仍可拉取模型");
+        assert_eq!(models, vec!["relay-model"]);
+        let request = captured.recv().expect("请求");
+        assert!(request.starts_with("GET /v1/models "), "{request}");
+        assert!(!request.contains("systemone"), "{request}");
     }
 
     fn add_typesafe(engine: &MailEngine) -> i64 {

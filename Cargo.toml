@@ -58,8 +58,9 @@ sha2 = "0.10"
 tempfile = "3.27.0"
 fs2 = "0.4.3"
 tokio = { version = "1.44", features = ["net", "io-util", "time", "macros", "rt", "sync"] }
-tokio-native-tls = "0.3.1"
-native-tls = "0.2.14"
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.7.1"
 base64 = "0.22.1"
 aes-gcm = "0.10"
 argon2 = "0.5"

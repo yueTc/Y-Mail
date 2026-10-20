@@ -26,6 +26,7 @@ import {
   type Proxy,
 } from "./api";
 import { t } from "./i18n";
+import AiTestModelPicker from "./AiTestModelPicker";
 
 /** 思考程度四档的中文名；站点卡片列站点时也用同一份。 */
 export const THINKING_LABEL: Record<AiThinkingLevel, string> = {
@@ -227,6 +228,7 @@ export default function AiProviderDialog({
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [modelsHint, setModelsHint] = useState("");
+  const [testModel, setTestModel] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [proxies, setProxies] = useState<Proxy[]>([]);
@@ -244,6 +246,7 @@ export default function AiProviderDialog({
     setApiKey("");
     setShowApiKey(false);
     setModelsHint("");
+    setTestModel(null);
     setError("");
     initialRef.current = JSON.stringify(next);
     dirtyRef.current = false;
@@ -355,7 +358,15 @@ export default function AiProviderDialog({
     }
   }, [apiKey, editing, onSaved]);
 
+  const selectedTestModel =
+    testModel ?? (editing.defaultModel.trim() || parseModels(editing.modelsText)[0] || "");
+
   const testDraft = useCallback(async () => {
+    setModelsHint("");
+    if (editing.kind === "typesafe" && selectedTestModel.trim() === "") {
+      setError(t("请选择或填写测试模型"));
+      return;
+    }
     const proxy = proxyForDraft(editing);
     if (proxy === null) {
       setError(t("选了「指定代理」就要挑一个具体代理"));
@@ -370,9 +381,14 @@ export default function AiProviderDialog({
         apiKey === "" ? undefined : apiKey,
         editing.id,
         proxy,
+        editing.kind === "typesafe" ? selectedTestModel.trim() : undefined,
       );
-      setModelsHint(t("连接成功，拉到 {0} 个模型。", [models.length]));
-      if (models.length > 0) {
+      setModelsHint(
+        editing.kind === "typesafe"
+          ? t("连接成功，测试模型：{0}", [selectedTestModel.trim()])
+          : t("连接成功，拉到 {0} 个模型。", [models.length]),
+      );
+      if (editing.kind !== "typesafe" && models.length > 0) {
         setEditing((old) => ({ ...old, modelsText: models.join("\n") }));
       }
     } catch (caught) {
@@ -380,7 +396,7 @@ export default function AiProviderDialog({
     } finally {
       setBusy(false);
     }
-  }, [apiKey, editing]);
+  }, [apiKey, editing, selectedTestModel]);
 
   // 关着的时候渲染一个空片段：既满足 JSX.Element 返回类型，也不会挂载表单。
   if (!open) return <></>;
@@ -436,6 +452,8 @@ export default function AiProviderDialog({
                   value={editing.kind}
                   onChange={(event) => {
                     const kind = event.target.value as AiProviderKind;
+                    setTestModel(null);
+                    setModelsHint("");
                     setEditing((old) => {
                       // TypeSafe jev 只有分类接口：地址与模型都有官方默认值，空着就预填。
                       const preset =
@@ -591,6 +609,18 @@ export default function AiProviderDialog({
                 }
               />
               {t("启用这个站点")}</label>
+            {editing.kind === "typesafe" && (
+              <AiTestModelPicker
+                value={selectedTestModel}
+                defaultModel={editing.defaultModel}
+                models={parseModels(editing.modelsText)}
+                disabled={busy}
+                onChange={(model) => {
+                  setTestModel(model);
+                  setModelsHint("");
+                }}
+              />
+            )}
             {modelsHint && <p className="hint" role="status">{modelsHint}</p>}
             <div className="form-actions">
               <button type="button" className="primary" onClick={() => void saveProvider()} disabled={busy}>

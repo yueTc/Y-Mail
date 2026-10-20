@@ -45,10 +45,10 @@ impl ConnectionErrorKind {
     pub fn hint(self) -> &'static str {
         match self {
             Self::AuthFailed => "请检查登录名与授权码；注意多数邮箱要求使用「授权码」而不是网页登录密码。",
-            Self::NetworkUnreachable => "请检查网络连接，或确认该邮箱在企业网络/防火墙下是否需要代理。",
+            Self::NetworkUnreachable => "请检查网络连接；若使用代理，请确认该线路能稳定连接邮箱服务器。",
             Self::Timeout => "请稍后重试；若长期超时，请检查网络或代理是否稳定。",
             Self::TlsFailure => {
-                "请确认服务器地址与加密方式匹配（993/465 通常是 SSL/TLS，587 通常是 STARTTLS）。"
+                "请检查服务器证书、地址与加密方式（993/465 通常是 SSL/TLS，587 通常是 STARTTLS）；若连接被中途断开，也请检查网络或代理线路。"
             }
             Self::ProxyFailure => "请检查代理地址、端口与账号密码，或改用「直连」再试。",
             Self::Protocol => "服务器返回了无法识别的内容，可能是地址或端口填错了。",

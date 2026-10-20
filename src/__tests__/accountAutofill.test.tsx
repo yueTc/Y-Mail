@@ -1,10 +1,10 @@
 //! 常用邮箱自动填回归：离开邮箱框或按回车自动补齐，手工改过的服务器参数不被覆盖。
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import AccountForm from "../AccountForm";
-import { api } from "../api";
+import { api, type Account, type OAuthOutcome } from "../api";
 
 vi.mock("../api", () => ({
   describeError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
@@ -34,11 +34,112 @@ function renderForm() {
 
 beforeEach(() => {
   vi.mocked(api.listProxies).mockResolvedValue([]);
+  vi.mocked(api.cancelOAuthAuthorize).mockResolvedValue(true);
+  vi.mocked(api.beginOAuthAuthorize).mockResolvedValue({
+    authorizeUrl: "https://accounts.example.com/authorize", state: "test-state",
+    redirectUri: "http://127.0.0.1:1234/oauth/callback",
+  });
+  vi.mocked(api.completeOAuthAuthorize).mockRejectedValue(new Error("授权失败，请重试"));
+  vi.mocked(api.oauthStatus).mockResolvedValue({
+    authorized: true, expiresAt: null, scope: null, hasRefreshToken: true,
+  });
 });
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+describe("谷歌应用密钥", () => {
+  function gmailForm() {
+    renderForm();
+    fireEvent.change(input("邮箱地址"), { target: { value: "me@gmail.com" } });
+    fireEvent.blur(input("邮箱地址"));
+    fireEvent.click(screen.getByText("高级设置：客户端编号与应用密钥"));
+  }
+
+  it("密钥作为独立参数提交，失败时保留以便重试，不写浏览器存储", async () => {
+    gmailForm();
+    const secret = input("应用密钥（client_secret）");
+    expect(secret.type).toBe("password");
+    expect(secret.autocomplete).toBe("off");
+    expect(secret.value).toBe("");
+    fireEvent.change(secret, { target: { value: "fake-client-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "浏览器授权并保存" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("授权失败"));
+    expect(api.beginOAuthAuthorize).toHaveBeenCalledWith(
+      expect.objectContaining({ oauthProvider: "gmail" }), undefined, "fake-client-secret",
+    );
+    const draft = vi.mocked(api.beginOAuthAuthorize).mock.calls[0][0];
+    expect(JSON.stringify(draft)).not.toContain("fake-client-secret");
+    expect(secret.value).toBe("fake-client-secret");
+    expect(JSON.stringify(localStorage)).not.toContain("fake-client-secret");
+    expect(JSON.stringify(sessionStorage)).not.toContain("fake-client-secret");
+    expect(api.cancelOAuthAuthorize).toHaveBeenCalledWith("test-state");
+  });
+
+  it("更换客户端编号或服务商会清空输入，微软不带谷歌密钥", async () => {
+    gmailForm();
+    fireEvent.change(input("应用密钥（client_secret）"), { target: { value: "first-secret" } });
+    fireEvent.change(input("客户端编号（client_id）"), { target: { value: "another-client" } });
+    expect(input("应用密钥（client_secret）").value).toBe("");
+    fireEvent.change(input("应用密钥（client_secret）"), { target: { value: "second-secret" } });
+    fireEvent.change(select("OAuth2 服务商"), { target: { value: "microsoft" } });
+    expect(screen.queryByLabelText("应用密钥（client_secret）")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "浏览器授权并保存" }));
+    await waitFor(() => expect(api.beginOAuthAuthorize).toHaveBeenCalled());
+    expect(api.beginOAuthAuthorize).toHaveBeenCalledWith(
+      expect.objectContaining({ oauthProvider: "microsoft" }), undefined, undefined,
+    );
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    fireEvent.change(select("OAuth2 服务商"), { target: { value: "gmail" } });
+    expect(input("应用密钥（client_secret）").value).toBe("");
+  });
+
+  it("已配置的谷歌应用可留空直接授权，不要求重新填写密钥", async () => {
+    gmailForm();
+    vi.mocked(api.completeOAuthAuthorize).mockResolvedValue({
+      account: { id: 9 } as Account,
+      report: { imapFolderCount: 3, smtpMechanism: "XOAUTH2" },
+    } as OAuthOutcome);
+    expect(input("应用密钥（client_secret）").value).toBe("");
+    expect(screen.getByText(/谷歌授权会自动使用本机保险箱中已配置的配套应用密钥/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "浏览器授权并保存" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("授权成功"));
+    expect(api.beginOAuthAuthorize).toHaveBeenCalledWith(
+      expect.objectContaining({ oauthProvider: "gmail", oauthClientId: "" }), undefined, undefined,
+    );
+  });
+
+  it("授权成功后清空密钥输入", async () => {
+    gmailForm();
+    vi.mocked(api.completeOAuthAuthorize).mockResolvedValue({
+      account: { id: 9 } as Account,
+      report: { imapFolderCount: 3, smtpMechanism: "XOAUTH2" },
+    } as OAuthOutcome);
+    fireEvent.change(input("应用密钥（client_secret）"), { target: { value: "success-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "浏览器授权并保存" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("授权成功"));
+    expect(input("应用密钥（client_secret）").value).toBe("");
+  });
+
+  it("已有谷歌账号不回显密钥，留空重新授权不发送密钥参数", async () => {
+    const account: Account = {
+      id: 8, displayName: "谷歌", email: "me@gmail.com", username: "me@gmail.com",
+      authType: "oauth2", oauthProvider: "gmail", oauthClientId: "saved-client",
+      imap: { host: "imap.gmail.com", port: 993, security: "tls" },
+      smtp: { host: "smtp.gmail.com", port: 465, security: "tls" },
+      proxy: { mode: "direct" }, color: "", enabled: true, hasCredential: true,
+      createdAt: "", updatedAt: "",
+    };
+    render(<AccountForm account={account} onSaved={() => {}} onCancel={() => {}} />);
+    fireEvent.click(screen.getByText("高级设置：客户端编号与应用密钥"));
+    expect(input("应用密钥（client_secret）").value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "重新授权" }));
+    await waitFor(() => expect(api.beginOAuthAuthorize).toHaveBeenCalled());
+    expect(api.beginOAuthAuthorize).toHaveBeenCalledWith(expect.any(Object), 8, undefined);
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+  });
 });
 
 describe("常用邮箱自动填", () => {

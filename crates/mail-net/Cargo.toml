@@ -14,8 +14,9 @@ mail-domain.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tokio.workspace = true
-tokio-native-tls.workspace = true
-native-tls.workspace = true
+tokio-rustls.workspace = true
+rustls.workspace = true
+rustls-platform-verifier.workspace = true
 base64.workspace = true
 
 [target.'cfg(windows)'.dependencies]

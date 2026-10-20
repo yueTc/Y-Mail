@@ -86,7 +86,7 @@ const PRESETS: Record<
     label: "Gmail",
     imap: { host: "imap.gmail.com", port: 993, security: "tls" },
     smtp: { host: "smtp.gmail.com", port: 465, security: "tls" },
-    note: "谷歌邮箱会自动改用 OAuth2；点「浏览器授权」用系统默认浏览器登录即可。",
+    note: "谷歌邮箱会自动改用 OAuth2，并使用本机已配置的谷歌应用；点「浏览器授权」继续。",
     oauthProvider: "gmail",
   },
   "outlook.com": {
@@ -256,6 +256,7 @@ export default function AccountForm({
   const [form, setForm] = useState<FormState>(() =>
     account === null ? emptyForm() : formFromAccount(account),
   );
+  const [oauthClientSecret, setOauthClientSecret] = useState("");
   const [proxies, setProxies] = useState<Proxy[]>([]);
   const [report, setReport] = useState<ConnectionReport | null>(null);
   const [verifiedFingerprint, setVerifiedFingerprint] = useState<string | null>(null);
@@ -269,6 +270,10 @@ export default function AccountForm({
   const [serversEdited, setServersEdited] = useState(account !== null);
   /** 用户有没有自己改过认证方式或 OAuth2 服务商；改过就不再自动覆盖。 */
   const [authEdited, setAuthEdited] = useState(false);
+
+  useEffect(() => {
+    setOauthClientSecret("");
+  }, [form.oauthClientId, form.oauthProvider, form.authType]);
 
   const editing = account !== null;
   const fingerprint = useMemo(() => JSON.stringify(form), [form]);
@@ -475,12 +480,16 @@ export default function AccountForm({
     setNotice(null);
     setPendingAuth(null);
     try {
-      const authorization = await api.beginOAuthAuthorize(toDraft(form), form.id ?? undefined);
+      const authorization = await api.beginOAuthAuthorize(
+        toDraft(form), form.id ?? undefined,
+        form.oauthProvider === "gmail" && oauthClientSecret.trim() ? oauthClientSecret.trim() : undefined,
+      );
       pendingState = authorization.state;
       setPendingAuth(authorization);
       setNotice(t("已用系统默认浏览器打开授权页；登录并同意后，本窗口会自动收口……"));
       const outcome = await api.completeOAuthAuthorize(authorization.state);
       setPendingAuth(null);
+      setOauthClientSecret("");
       setNotice(
         t("授权成功：收件服务器可见 {0} 个文件夹，发件认证方式 {1}。", [outcome.report.imapFolderCount, outcome.report.smtpMechanism]),
       );
@@ -701,7 +710,7 @@ export default function AccountForm({
             </label>
           </div>
           <details className="advanced-settings">
-            <summary>{t("高级设置：自备客户端编号（普通用户不用管）")}</summary>
+            <summary>{t("高级设置：客户端编号与应用密钥")}</summary>
             <label>
               {t("客户端编号（client_id）")}<input
                 value={form.oauthClientId}
@@ -711,7 +720,26 @@ export default function AccountForm({
             </label>
             <p className="hint">
               {t("只有你自己注册了应用、想用自己的编号时才填。留空时软件会用它内置的编号。")}</p>
+            {form.oauthProvider === "gmail" && (
+              <label className="secret-field">
+                {t("应用密钥（client_secret）")}<input
+                  type="password"
+                  autoComplete="off"
+                  value={oauthClientSecret}
+                  onChange={(event) => {
+                    setTouched(true);
+                    setOauthClientSecret(event.target.value);
+                  }}
+                  placeholder={t("本机已配置时可留空")}
+                />
+              </label>
+            )}
           </details>
+          {form.oauthProvider === "gmail" && (
+            <p className="hint">
+              {t("谷歌授权会自动使用本机保险箱中已配置的配套应用密钥，无需重复填写。使用其他客户端编号时，可在高级设置填写对应密钥；密钥只存保险箱、不回显。")}
+            </p>
+          )}
           <p className="hint">
             {t("点「浏览器授权」会用系统默认浏览器打开服务商的登录页，登录并同意后自动回到本窗口； 访问令牌与刷新令牌只存进 Windows 凭据管理器，数据库里只留一个引用键。")}</p>
           {oauthStatus && (

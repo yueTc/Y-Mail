@@ -933,10 +933,14 @@ export const api = {
 
   // ===== OAuth2 浏览器授权（Wave 6） =====
 
-  beginOAuthAuthorize: (draft: AccountDraft, accountId?: number) =>
+  beginOAuthAuthorize: (draft: AccountDraft, accountId?: number, clientSecret?: string) =>
     call<OAuthAuthorization>(
       "begin_oauth_authorize",
-      accountId === undefined ? { draft } : { draft, accountId },
+      {
+        draft,
+        ...(accountId === undefined ? {} : { accountId }),
+        ...(clientSecret === undefined ? {} : { clientSecret }),
+      },
     ),
 
   completeOAuthAuthorize: (stateKey: string) =>
@@ -1190,11 +1194,13 @@ export const api = {
     apiKey?: string,
     id?: number,
     proxy?: AccountProxy,
+    model?: string,
   ) => {
     const args: Record<string, unknown> = { kind, baseUrl };
     if (apiKey !== undefined) args.apiKey = apiKey;
     if (id !== undefined) args.id = id;
     if (proxy !== undefined) args.proxy = proxy;
+    if (model !== undefined) args.model = model;
     return call<string[]>("test_ai_provider", args);
   },
 

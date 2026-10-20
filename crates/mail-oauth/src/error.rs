@@ -36,6 +36,9 @@ pub enum OAuthError {
     /// 本地配置不完整（用户没填、程序里也没内置编号等）。
     #[error("OAuth 配置不完整：{0}")]
     Config(String),
+    /// 谷歌要求配套应用密钥，但本次配置未提供。
+    #[error("登录缺少应用密钥，请在账号高级设置中填写与客户端编号配套的应用密钥（client_secret）；密钥只保存在系统保险箱")]
+    MissingClientSecret,
     /// 本机回调端口无法绑定。
     #[error("无法在本机开启授权回调端口")]
     Bind,

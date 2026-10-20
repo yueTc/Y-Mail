@@ -7,6 +7,12 @@ export const CONTEXT_SEPARATOR = "\u0001";
 
 /** 中文原文 → 英文；同一个词在别处意思不同时另有 `上下文 + 分隔符 + 中文` 的词条。 */
 export const EN: Record<string, string> = {
+  "测试模型": "Test model",
+  "手工填写模型编号": "Enter a model ID",
+  "手填测试模型": "Custom test model",
+  "填写中转站支持的模型编号": "Enter a model ID supported by your relay",
+  "请选择或填写测试模型": "Select or enter a test model",
+  "连接成功，测试模型：{0}": "Connection succeeded. Tested model: {0}",
   "继续写信": "Resume draft",
   "这封邮件已不存在，可能已被删除或重新同步。": "This message is no longer available. It may have been deleted or resynced.",
   " · 登录名 {0}": " · Sign-in name {0}",
@@ -262,7 +268,10 @@ export const EN: Record<string, string> = {
   "该模型不支持所选思考程度，已按默认调用。": "This model does not support the selected thinking level; it was called with the default.",
   "改成什么名字？": "Rename to what?",
   "高": "High",
-  "高级设置：自备客户端编号（普通用户不用管）": "Advanced: bring your own client ID (most users can ignore this)",
+  "高级设置：客户端编号与应用密钥": "Advanced: client ID and client secret",
+  "应用密钥（client_secret）": "Client secret (client_secret)",
+  "本机已配置时可留空": "Leave blank to use the app secret configured on this device",
+  "谷歌授权会自动使用本机保险箱中已配置的配套应用密钥，无需重复填写。使用其他客户端编号时，可在高级设置填写对应密钥；密钥只存保险箱、不回显。": "Google sign-in automatically uses the matching app secret configured in this device’s credential vault. You do not need to enter it again. For another client ID, enter its matching secret in advanced settings; secrets stay in the vault and are never displayed.",
   "高速下载": "Fast download",
   "格式刷": "Format painter",
   "个会话": " conversations",
@@ -276,7 +285,7 @@ export const EN: Record<string, string> = {
   "共 {0} {1}": "{0} {1} in total",
   "共找到 {0} 封，当前已显示 {1} 封": "Found {0}, showing {1}",
   "谷歌 Gmail": "Google Gmail",
-  "谷歌邮箱会自动改用 OAuth2；点「浏览器授权」用系统默认浏览器登录即可。": "Google mail switches to OAuth2 automatically; click “Browser sign-in” to log in with your default browser.",
+  "谷歌邮箱会自动改用 OAuth2，并使用本机已配置的谷歌应用；点「浏览器授权」继续。": "Google mail automatically switches to OAuth2 and uses the Google app configured on this device. Click “Browser sign-in” to continue.",
   "关闭": "Close",
   "关闭写工具": "Disable write tools",
   "关闭写信窗格": "Close compose pane",
