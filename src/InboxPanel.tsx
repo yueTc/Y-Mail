@@ -617,6 +617,8 @@ export default function InboxPanel({
   const [notificationError, setNotificationError] = useState<string>();
   // 一次性短提示，例如「未读筛选下已移出列表」。
   const [statusNote, setStatusNote] = useState("");
+  // 批量标为已读进行中，挡住重复触发。
+  const [bulkReadBusy, setBulkReadBusy] = useState(false);
 
   // 搜索相关状态：输入值、已提交的查询、命中结果与深拉提示。
   const [searchInput, setSearchInput] = useState("");
@@ -1354,6 +1356,42 @@ export default function InboxPanel({
     await refreshSidebar();
     await load(true);
   }, [refreshSidebar, load]);
+
+  /** 批量已读后刷新侧栏；搜索中保留关键词重新搜索。 */
+  const refreshAfterBulkRead = useCallback(async () => {
+    await refreshSidebar();
+    if (searchRaw !== "") {
+      await runSearch({ raw: searchRaw });
+    } else {
+      await load(true);
+    }
+  }, [refreshSidebar, searchRaw, runSearch, load]);
+
+  /** 批量标为已读；folderId 为空表示当前账号所有文件夹。 */
+  const markAllRead = useCallback(
+    async (accountId: number, folderId?: number) => {
+      if (bulkReadBusy) return;
+      setAccountMenu(undefined);
+      setFolderMenu(undefined);
+      setStatusNote("");
+      setError(undefined);
+      setBulkReadBusy(true);
+      try {
+        const result = await api.markAllRead(accountId, folderId);
+        setStatusNote(
+          result.changed > 0
+            ? t("已将 {0} 封邮件标为已读", [result.changed])
+            : t("没有未读邮件"),
+        );
+        await refreshAfterBulkRead();
+      } catch (caught) {
+        setError(t("批量标为已读失败：{0}", [describeError(caught)]));
+      } finally {
+        setBulkReadBusy(false);
+      }
+    },
+    [bulkReadBusy, refreshAfterBulkRead],
+  );
 
   /** 点「删除」：先问后端会走哪条路；彻底删除才弹二次确认。 */
   const startDeleteMessage = useCallback(
@@ -2120,12 +2158,33 @@ export default function InboxPanel({
         aria-label={t("邮箱菜单")}
         style={{
           left: Math.min(accountMenu.x, Math.max(8, window.innerWidth - 220)),
-          top: Math.min(accountMenu.y, Math.max(8, window.innerHeight - (menuAccount ? 140 : 60))),
+          top: Math.min(accountMenu.y, Math.max(8, window.innerHeight - (menuAccount ? 190 : 60))),
         }}
         onClick={(event) => event.stopPropagation()}
       >
         {menuAccount ? (
           <>
+            <button
+              type="button"
+              role="menuitem"
+              className="context-menu-item"
+              disabled={bulkReadBusy}
+              onClick={() => {
+                const name = menuAccount.displayName || menuAccount.email;
+                setAccountMenu(undefined);
+                if (
+                  !window.confirm(
+                    t("确定把「{0}」所有文件夹里的未读邮件都标为已读吗？只改本机，不回写服务器。", [
+                      name,
+                    ]),
+                  )
+                ) {
+                  return;
+                }
+                void markAllRead(menuAccount.accountId);
+              }}
+            >
+              {t("全部标为已读")}</button>
             <button
               type="button"
               role="menuitem"
@@ -2170,10 +2229,22 @@ export default function InboxPanel({
         aria-label={t("文件夹菜单")}
         style={{
           left: Math.min(folderMenu.x, Math.max(8, window.innerWidth - 240)),
-          top: Math.min(folderMenu.y, Math.max(8, window.innerHeight - 170)),
+          top: Math.min(folderMenu.y, Math.max(8, window.innerHeight - 220)),
         }}
         onClick={(event) => event.stopPropagation()}
       >
+        <button
+          type="button"
+          role="menuitem"
+          className="context-menu-item"
+          disabled={bulkReadBusy}
+          onClick={() => {
+            const target = folderMenu.folder;
+            setFolderMenu(undefined);
+            void markAllRead(target.accountId, target.folderId);
+          }}
+        >
+          {t("全部标为已读")}</button>
         {folderMenu.folder.allowsChildren && (
           <button
             type="button"
@@ -2219,7 +2290,7 @@ export default function InboxPanel({
         aria-label={t("邮件菜单")}
         style={{
           left: Math.min(messageMenu.x, Math.max(8, window.innerWidth - 220)),
-          top: Math.min(messageMenu.y, Math.max(8, window.innerHeight - 220)),
+          top: Math.min(messageMenu.y, Math.max(8, window.innerHeight - 170)),
         }}
         onClick={(event) => event.stopPropagation()}
       >

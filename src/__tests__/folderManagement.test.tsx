@@ -45,7 +45,8 @@ vi.mock("../api", () => ({
     syncStatus: vi.fn(),
     startSync: vi.fn(),
     stopSync: vi.fn(),
-    setMessageRead: vi.fn(),
+    setMessageRead: vi.fn(),    markAllRead: vi.fn(),
+
     setMessageFlagged: vi.fn(),
     listLabelGroups: vi.fn().mockResolvedValue([]),
     setMessageGroupValue: vi.fn(),
@@ -189,7 +190,10 @@ beforeEach(() => {
   });
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 /** 渲染面板并展开账号，让文件夹项露出来。 */
 async function openAccount(): Promise<void> {
@@ -453,5 +457,103 @@ describe("删除单封邮件", () => {
       expect(screen.queryByRole("dialog", { name: "确认彻底删除邮件" })).toBeNull(),
     );
     expect(vi.mocked(api.deleteMessage)).not.toHaveBeenCalled();
+  });
+});
+
+describe("批量标为已读", () => {
+  it("账号右键先确认，取消时不调用接口", async () => {
+    vi.mocked(api.listInboxFolders).mockResolvedValue([
+      folder({ folderId: 1, fullPath: "INBOX", kind: "inbox" }),
+    ]);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await openAccount();
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /测试账号/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "全部标为已读" }));
+
+    expect(confirm).toHaveBeenCalled();
+    expect(api.markAllRead).not.toHaveBeenCalled();
+  });
+
+  it("搜索状态下批量已读保留关键词并重新搜索", async () => {
+    vi.mocked(api.listInboxFolders).mockResolvedValue([
+      folder({ folderId: 1, fullPath: "INBOX", kind: "inbox" }),
+    ]);
+    vi.mocked(api.searchMessages).mockResolvedValue({
+      items: [],
+      total: 0,
+      offset: 0,
+      limit: 200,
+      deepSynced: false,
+      deepError: null,
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(api.markAllRead).mockResolvedValue({ changed: 1 });
+    await openAccount();
+
+    const searchBox = screen.getByLabelText("搜索邮件") as HTMLInputElement;
+    fireEvent.change(searchBox, { target: { value: "安全提醒" } });
+    fireEvent.keyDown(searchBox, { key: "Enter" });
+    await waitFor(() =>
+      expect(api.searchMessages).toHaveBeenCalledWith(
+        expect.objectContaining({ raw: "安全提醒", deep: false }),
+      ),
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /测试账号/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "全部标为已读" }));
+
+    await waitFor(() => expect(api.markAllRead).toHaveBeenCalledWith(1, undefined));
+    await waitFor(() =>
+      expect(vi.mocked(api.searchMessages)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ raw: "安全提醒", deep: false }),
+      ),
+    );
+    expect(searchBox.value).toBe("安全提醒");
+  });
+
+  it("账号右键确认后覆盖整个账号并提示数量", async () => {
+    vi.mocked(api.listInboxFolders).mockResolvedValue([
+      folder({ folderId: 1, fullPath: "INBOX", kind: "inbox" }),
+    ]);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(api.markAllRead).mockResolvedValue({ changed: 4 });
+    await openAccount();
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /测试账号/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "全部标为已读" }));
+
+    await waitFor(() => expect(api.markAllRead).toHaveBeenCalledWith(1, undefined));
+    expect(await screen.findByText("已将 4 封邮件标为已读")).toBeTruthy();
+  });
+
+  it("文件夹右键直接处理当前文件夹", async () => {
+    vi.mocked(api.listInboxFolders).mockResolvedValue([
+      folder({ folderId: 10, fullPath: "工作" }),
+    ]);
+    vi.mocked(api.markAllRead).mockResolvedValue({ changed: 2 });
+    const confirm = vi.spyOn(window, "confirm");
+    await openAccount();
+
+    fireEvent.contextMenu(screen.getByText("工作"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "全部标为已读" }));
+
+    await waitFor(() => expect(api.markAllRead).toHaveBeenCalledWith(1, 10));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(await screen.findByText("已将 2 封邮件标为已读")).toBeTruthy();
+  });
+
+  it("没有未读时提示没有未读邮件", async () => {
+    vi.mocked(api.listInboxFolders).mockResolvedValue([
+      folder({ folderId: 1, fullPath: "INBOX", kind: "inbox" }),
+    ]);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(api.markAllRead).mockResolvedValue({ changed: 0 });
+    await openAccount();
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /测试账号/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "全部标为已读" }));
+
+    expect(await screen.findByText("没有未读邮件")).toBeTruthy();
   });
 });
