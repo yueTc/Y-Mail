@@ -529,7 +529,7 @@ impl MailEngine {
             api_key: secret,
         };
         if provider_kind(kind).is_decision() {
-            // jev 没有「拉模型列表」接口，测试连接改成一次极小的试探分类请求。
+            // 决策站点没有「拉模型列表」接口，测试连接改成一次极小的试探分类请求。
             let choices = prompt::TYPESAFE_PROBE_CHOICES
                 .iter()
                 .map(|choice| (*choice).to_string())
