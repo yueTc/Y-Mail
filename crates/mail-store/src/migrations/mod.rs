@@ -813,6 +813,33 @@ mod tests {
             [],
         )
         .expect("升级后应能写 decision_api 站点");
+        let decision_id = conn.last_insert_rowid();
+        conn.execute(
+            "UPDATE ai_provider SET default_model = 'startlux-decision-27b-fast' WHERE id = ?1",
+            [decision_id],
+        )
+        .expect("升级后应能更新 decision_api 站点");
+        let updated_model: String = conn
+            .query_row(
+                "SELECT default_model FROM ai_provider WHERE id = ?1",
+                [decision_id],
+                |row| row.get(0),
+            )
+            .expect("读取更新后的 decision_api 站点");
+        assert_eq!(updated_model, "startlux-decision-27b-fast");
+        assert!(
+            conn.execute("DELETE FROM ai_provider WHERE id = ?1", [decision_id])
+                .expect("升级后应能删除 decision_api 站点")
+                > 0
+        );
+        let removed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ai_provider WHERE id = ?1",
+                [decision_id],
+                |row| row.get(0),
+            )
+            .expect("确认 decision_api 已删除");
+        assert_eq!(removed, 0);
         assert!(conn
             .execute(
                 "INSERT INTO ai_provider (label, kind, base_url) VALUES ('坏', 'nope', 'https://x')",

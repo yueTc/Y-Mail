@@ -695,6 +695,12 @@ describe("AI 站点设置弹窗", () => {
     expect(kindSelect.value).toBe("typesafe");
     expect(within(kindSelect).getAllByRole("option").map((option) => option.textContent))
       .toContain("旧版 TypeSafe jev（兼容）");
+
+    fireEvent.change(kindSelect, { target: { value: "decision_api" } });
+    expect(within(kindSelect).getAllByRole("option").map((option) => option.textContent))
+      .toContain("旧版 TypeSafe jev（兼容）");
+    fireEvent.change(kindSelect, { target: { value: "typesafe" } });
+    expect(kindSelect.value).toBe("typesafe");
   });
 
   it("通用决策站点测试模型为空时不发请求", async () => {

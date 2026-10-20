@@ -6,7 +6,9 @@
 
 use std::collections::HashMap;
 
-use rusqlite::OptionalExtension;
+use rusqlite::{OptionalExtension, Transaction};
+
+use crate::ai::{insert_ai_audit_in, NewAiAudit};
 
 use crate::connection::Store;
 use crate::error::StoreError;
@@ -139,6 +141,21 @@ pub struct MessageGroupResult {
     pub source: MailLabelSource,
     /// 模型或人工给的把握程度。
     pub confidence: Option<f64>,
+}
+
+/// 一次自动分类里准备写入的单组结果。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassificationGroupWrite {
+    /// 标签组编号。
+    pub group_id: i64,
+    /// 选择题或是否题的标签编号；打分题为空。
+    pub label_id: Option<i64>,
+    /// 打分题的数字；其它题型为空。
+    pub score_value: Option<i64>,
+    /// 模型给的把握程度。
+    pub confidence: Option<f64>,
+    /// 只写进审计的结果摘要，不能含邮件正文。
+    pub summary: String,
 }
 
 const SELECT_GROUP: &str =
@@ -751,7 +768,139 @@ impl Store {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn set_message_group_value_in(
+    tx: &Transaction<'_>,
+    message_id: i64,
+    group_id: i64,
+    label_id: Option<i64>,
+    score_value: Option<i64>,
+    source: MailLabelSource,
+    confidence: Option<f64>,
+    skip_manual: bool,
+) -> Result<bool, StoreError> {
+    let message_exists = tx
+        .query_row("SELECT 1 FROM message WHERE id = ?1", [message_id], |_| Ok(true))
+        .optional()?
+        .unwrap_or(false);
+    if !message_exists {
+        return Err(StoreError::InvalidData("邮件不存在".to_string()));
+    }
+
+    if skip_manual {
+        let existing = tx
+            .query_row(
+                "SELECT source FROM message_label WHERE message_id = ?1 AND group_id = ?2",
+                rusqlite::params![message_id, group_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if existing.as_deref() == Some(MailLabelSource::Manual.as_str()) {
+            return Ok(false);
+        }
+    }
+
+    let group = tx
+        .query_row(&format!("{SELECT_GROUP} WHERE id = ?1"), [group_id], row_to_group)
+        .optional()?
+        .ok_or_else(|| StoreError::InvalidData("标签组不存在".to_string()))?;
+
+    if let Some(value) = confidence {
+        if value.is_nan() || !(0.0..=1.0).contains(&value) {
+            return Err(StoreError::InvalidData("把握程度必须在 0 到 1 之间".to_string()));
+        }
+    }
+
+    match group.kind {
+        LabelGroupKind::Choice | LabelGroupKind::Boolean => {
+            if score_value.is_some() {
+                return Err(StoreError::InvalidData("选择题和是否题只能写标签".to_string()));
+            }
+            let label_id = label_id
+                .ok_or_else(|| StoreError::InvalidData("选择题和是否题必须写一个标签".to_string()))?;
+            let belongs = tx
+                .query_row(
+                    "SELECT 1 FROM mail_label WHERE id = ?1 AND group_id = ?2",
+                    rusqlite::params![label_id, group_id],
+                    |_| Ok(true),
+                )
+                .optional()?
+                .unwrap_or(false);
+            if !belongs {
+                return Err(StoreError::InvalidData("标签不存在或不属于该组".to_string()));
+            }
+        }
+        LabelGroupKind::Score => {
+            if label_id.is_some() {
+                return Err(StoreError::InvalidData("打分题只能写数字".to_string()));
+            }
+            let score = score_value.ok_or_else(|| StoreError::InvalidData("打分题必须写数字".to_string()))?;
+            let (min, max) = match (group.score_min, group.score_max) {
+                (Some(min), Some(max)) => (min, max),
+                _ => {
+                    return Err(StoreError::InvalidData(
+                        "打分题缺少上下限，不能写结果".to_string(),
+                    ))
+                }
+            };
+            if !(min..=max).contains(&score) {
+                return Err(StoreError::InvalidData(format!("打分必须在 {min} 到 {max} 之间")));
+            }
+        }
+    }
+
+    tx.execute(
+        "INSERT INTO message_label
+             (message_id, group_id, label_id, score_value, source, confidence)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(message_id, group_id) DO UPDATE SET
+             label_id = excluded.label_id,
+             score_value = excluded.score_value,
+             source = excluded.source,
+             confidence = excluded.confidence,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+        rusqlite::params![
+            message_id,
+            group_id,
+            label_id,
+            score_value,
+            source.as_str(),
+            confidence
+        ],
+    )?;
+    Ok(true)
+}
+
 impl Store {
+    /// 一封邮件的本次自动分类结果和成功审计放进同一事务；手动锁定的组跳过。
+    pub fn save_classification_batch(
+        &self,
+        message_id: i64,
+        writes: &[ClassificationGroupWrite],
+        mut audit: NewAiAudit,
+    ) -> Result<(), StoreError> {
+        let tx = self.conn().unchecked_transaction()?;
+        let mut summaries = Vec::with_capacity(writes.len());
+        for write in writes {
+            if set_message_group_value_in(
+                &tx,
+                message_id,
+                write.group_id,
+                write.label_id,
+                write.score_value,
+                MailLabelSource::Auto,
+                write.confidence,
+                true,
+            )? {
+                summaries.push(write.summary.clone());
+            }
+        }
+        audit.detail = format!("各组结果：{}", summaries.join("；"));
+        insert_ai_audit_in(&tx, &audit)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// 过渡兼容：把标签写进它所属的组。
     pub fn set_message_label(
         &self,
@@ -785,87 +934,20 @@ impl Store {
         source: MailLabelSource,
         confidence: Option<f64>,
     ) -> Result<(), StoreError> {
-        let message_exists = self
-            .conn()
-            .query_row("SELECT 1 FROM message WHERE id = ?1", [message_id], |_| Ok(true))
-            .optional()?
-            .unwrap_or(false);
-        if !message_exists {
-            return Err(StoreError::InvalidData("邮件不存在".to_string()));
-        }
-
-        let group = self
-            .get_label_group(group_id)?
-            .ok_or_else(|| StoreError::InvalidData("标签组不存在".to_string()))?;
-
-        if let Some(value) = confidence {
-            if value.is_nan() || !(0.0..=1.0).contains(&value) {
-                return Err(StoreError::InvalidData("把握程度必须在 0 到 1 之间".to_string()));
-            }
-        }
-
-        match group.kind {
-            LabelGroupKind::Choice | LabelGroupKind::Boolean => {
-                if score_value.is_some() {
-                    return Err(StoreError::InvalidData("选择题和是否题只能写标签".to_string()));
-                }
-                let label_id = label_id
-                    .ok_or_else(|| StoreError::InvalidData("选择题和是否题必须写一个标签".to_string()))?;
-                let belongs = self
-                    .conn()
-                    .query_row(
-                        "SELECT 1 FROM mail_label WHERE id = ?1 AND group_id = ?2",
-                        rusqlite::params![label_id, group_id],
-                        |_| Ok(true),
-                    )
-                    .optional()?
-                    .unwrap_or(false);
-                if !belongs {
-                    return Err(StoreError::InvalidData("标签不存在或不属于该组".to_string()));
-                }
-            }
-            LabelGroupKind::Score => {
-                if label_id.is_some() {
-                    return Err(StoreError::InvalidData("打分题只能写数字".to_string()));
-                }
-                let score =
-                    score_value.ok_or_else(|| StoreError::InvalidData("打分题必须写数字".to_string()))?;
-                let (min, max) = match (group.score_min, group.score_max) {
-                    (Some(min), Some(max)) => (min, max),
-                    _ => {
-                        return Err(StoreError::InvalidData(
-                            "打分题缺少上下限，不能写结果".to_string(),
-                        ))
-                    }
-                };
-                if !(min..=max).contains(&score) {
-                    return Err(StoreError::InvalidData(format!("打分必须在 {min} 到 {max} 之间")));
-                }
-            }
-        }
-
-        self.conn().execute(
-            "INSERT INTO message_label
-                 (message_id, group_id, label_id, score_value, source, confidence)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(message_id, group_id) DO UPDATE SET
-                 label_id = excluded.label_id,
-                 score_value = excluded.score_value,
-                 source = excluded.source,
-                 confidence = excluded.confidence,
-                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
-            rusqlite::params![
-                message_id,
-                group_id,
-                label_id,
-                score_value,
-                source.as_str(),
-                confidence
-            ],
+        let tx = self.conn().unchecked_transaction()?;
+        set_message_group_value_in(
+            &tx,
+            message_id,
+            group_id,
+            label_id,
+            score_value,
+            source,
+            confidence,
+            false,
         )?;
+        tx.commit()?;
         Ok(())
     }
-
     /// 过渡兼容：只读内容分类组的结果。
     pub fn get_message_label(
         &self,
@@ -1362,6 +1444,53 @@ mod tests {
             .find(|label| label.name == name)
             .expect("找到组内标签")
             .id
+    }
+
+    #[test]
+    fn 分类批量写入中途失败会连同审计整体回滚() {
+        let store = store();
+        let message = seeded_messages(&store, &[599])[0];
+        let content = default_group_id(&store, "内容分类");
+        let bill = group_label_id(&store, content, "账单");
+        let audit = crate::ai::NewAiAudit {
+            function: "classify".to_string(),
+            provider_id: None,
+            provider_label: "虚构站点".to_string(),
+            model: "虚构模型".to_string(),
+            target_host: "127.0.0.1".to_string(),
+            local: true,
+            outbound: false,
+            outcome: "ok".to_string(),
+            detail: String::new(),
+        };
+        let writes = vec![
+            ClassificationGroupWrite {
+                group_id: content,
+                label_id: Some(bill),
+                score_value: None,
+                confidence: Some(0.9),
+                summary: "账单".to_string(),
+            },
+            ClassificationGroupWrite {
+                group_id: 999_999,
+                label_id: Some(bill),
+                score_value: None,
+                confidence: Some(0.8),
+                summary: "故意让第二组失败".to_string(),
+            },
+        ];
+
+        store
+            .save_classification_batch(message, &writes, audit)
+            .expect_err("第二组失败应让整批回滚");
+        assert!(
+            store
+                .message_group_result(message, content)
+                .expect("读取第一组结果")
+                .is_none(),
+            "第一组不能留下半套结果"
+        );
+        assert_eq!(store.ai_audit_count().expect("数审计"), 0, "审计也要回滚");
     }
 
     #[test]

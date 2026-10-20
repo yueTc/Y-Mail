@@ -489,7 +489,7 @@ export default function AiProviderDialog({
                   }}
                 >
                   {(Object.keys(KIND_LABEL) as AiProviderKind[])
-                    .filter((kind) => kind !== "typesafe" || editing.kind === "typesafe")
+                    .filter((kind) => kind !== "typesafe" || provider?.kind === "typesafe")
                     .map((kind) => (
                       <option key={kind} value={kind}>
                         {t(KIND_LABEL[kind])}

@@ -35,7 +35,8 @@ pub use contacts::{
 pub use error::StoreError;
 pub use inbox::{AccountInboxSummary, InboxFolder, InboxMessage, InboxQuery, InboxThread};
 pub use label::{
-    LabelGroup, LabelGroupKind, MailLabel, MailLabelSource, MessageGroupResult, MAIL_LABEL_COLORS,
+    ClassificationGroupWrite, LabelGroup, LabelGroupKind, MailLabel, MailLabelSource, MessageGroupResult,
+    MAIL_LABEL_COLORS,
 };
 pub use mcp::{McpAuditRecord, MCP_ENABLED_KEY, MCP_WRITE_TOOLS_KEY};
 pub use migrations::{MigrationOutcome, MigrationReport};

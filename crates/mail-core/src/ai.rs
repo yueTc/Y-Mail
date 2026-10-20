@@ -11,16 +11,17 @@
 use std::time::{Duration, Instant};
 
 use mail_ai::{
-    anchor_targets, chat, classify_mail, classify_mail_groups, is_local_host, list_models,
-    normalize_base_url, parse_verification, prompt, split_html, split_text, translate, AiError, ChatOutcome,
-    Endpoint, GroupAnswer, GroupQuestion, GroupQuestionKind, ProviderFunction, ProviderKind, ThinkingLevel,
+    anchor_targets, chat, classify_mail_groups, is_local_host, list_models, normalize_base_url,
+    parse_verification, prompt, split_html, split_text, translate, AiError, ChatOutcome, Endpoint,
+    GroupAnswer, GroupQuestion, GroupQuestionKind, ProviderFunction, ProviderKind, ThinkingLevel,
     TranslationOutcome, VerificationFinding,
 };
 use mail_domain::account::AccountProxyMode;
 use mail_domain::proxy::Secret;
 use mail_store::{
-    AiFunction, AiModelMapEntry, AiProviderKind, AiThinkingLevel, LabelGroup, LabelGroupKind, MailLabel,
-    MailLabelSource, MessageGroupResult, NewAiAudit, NewAiProvider, StoredAiAudit, StoredAiProvider,
+    AiFunction, AiModelMapEntry, AiProviderKind, AiThinkingLevel, ClassificationGroupWrite, LabelGroup,
+    LabelGroupKind, MailLabel, MailLabelSource, MessageGroupResult, NewAiAudit, NewAiProvider, StoredAiAudit,
+    StoredAiProvider,
 };
 
 use crate::engine::{EngineError, MailEngine};
@@ -39,7 +40,7 @@ pub const CLASSIFY_BODY_MAX_CHARS: usize = 2000;
 pub const AI_AUTHORIZATION_TTL: Duration = Duration::from_secs(300);
 
 /// 站点类型在存储层与 AI 层之间的映射。
-fn provider_kind(kind: AiProviderKind) -> ProviderKind {
+pub(crate) fn provider_kind(kind: AiProviderKind) -> ProviderKind {
     match kind {
         AiProviderKind::OpenAiCompatible => ProviderKind::OpenAiCompatible,
         AiProviderKind::DeepL => ProviderKind::DeepL,
@@ -529,20 +530,30 @@ impl MailEngine {
             api_key: secret,
         };
         if provider_kind(kind).is_decision() {
-            // 决策站点没有「拉模型列表」接口，测试连接改成一次极小的试探分类请求。
-            let choices = prompt::TYPESAFE_PROBE_CHOICES
-                .iter()
-                .map(|choice| (*choice).to_string())
-                .collect::<Vec<_>>();
-            classify_mail(
+            // 决策站点没有「拉模型列表」接口，用固定是否题探针确认协议和答案都能走通。
+            let questions = vec![GroupQuestion {
+                group_id: 1,
+                kind: GroupQuestionKind::Boolean,
+                instructions: prompt::TYPESAFE_PROBE_QUESTION.to_string(),
+                criteria: Vec::new(),
+                score_min: None,
+                score_max: None,
+            }];
+            let answers = classify_mail_groups(
                 route.as_ref(),
                 &endpoint,
                 model,
                 prompt::TYPESAFE_PROBE_STATE,
-                &choices,
+                &questions,
                 NOTIFICATION_VERIFY_TIMEOUT,
             )
             .await?;
+            if !answers
+                .iter()
+                .any(|(_, answer)| matches!(answer, GroupAnswer::Boolean { .. }))
+            {
+                return Err(AiError::Protocol.into());
+            }
             return Ok(vec![model.to_string()]);
         }
         Ok(list_models(route.as_ref(), &endpoint, AI_TIMEOUT).await?)
@@ -952,43 +963,39 @@ impl MailEngine {
         .await
         .map_err(|err| self.audit_ai_error(AiFunction::Classify, &target, err))?;
 
-        let mut summary = Vec::new();
+        let mut writes = Vec::new();
         for (group, labels, _) in &plans {
-            let existing = self.store().message_group_result(message_id, group.id)?;
-            if existing
-                .map(|result| result.source == MailLabelSource::Manual)
-                .unwrap_or(false)
-            {
-                continue;
-            }
             let Some((_, answer)) = answers.iter().find(|(id, _)| *id == group.id) else {
                 continue;
             };
             let Some(write) = resolve_group_write(group, labels, answer) else {
                 continue;
             };
-            self.store().set_message_group_value(
-                message_id,
-                group.id,
-                write.label_id,
-                write.score_value,
-                MailLabelSource::Auto,
-                write.confidence,
-            )?;
-            summary.push(format!("{}={}", group.name, write.summary));
+            writes.push(ClassificationGroupWrite {
+                group_id: group.id,
+                label_id: write.label_id,
+                score_value: write.score_value,
+                confidence: write.confidence,
+                summary: format!("{}={}", group.name, write.summary),
+            });
         }
 
-        self.store().insert_ai_audit(&NewAiAudit {
-            function: AiFunction::Classify.as_str().to_string(),
-            provider_id: Some(target.provider_id),
-            provider_label: target.provider_label.clone(),
-            model: target.model.clone(),
-            target_host: host_of(&target.base_url),
-            local: target.local,
-            outbound: !target.local,
-            outcome: "ok".to_string(),
-            detail: format!("各组结果：{}", summary.join("；")),
-        })?;
+        self.store().save_classification_batch(
+            message_id,
+            &writes,
+            NewAiAudit {
+                function: AiFunction::Classify.as_str().to_string(),
+                provider_id: Some(target.provider_id),
+                provider_label: target.provider_label.clone(),
+                model: target.model.clone(),
+                target_host: host_of(&target.base_url),
+                local: target.local,
+                outbound: !target.local,
+                outcome: "ok".to_string(),
+                // 存储层按真正提交的组生成摘要；手动锁定的组不会误报。
+                detail: String::new(),
+            },
+        )?;
 
         Ok(self.store().list_message_group_results(message_id)?)
     }
@@ -2140,10 +2147,7 @@ mod tests {
 
     #[tokio::test]
     async fn 通用决策站点测试连接使用完整地址() {
-        let (port, captured) = fake_capture_server(
-            r#"{"answers":{"category":{"type":"choice","choice":"账单","confidence":0.99}}}"#,
-        )
-        .await;
+        let (port, captured) = fake_capture_server(r#"{"answers":{"g1":{"type":"noul","noul":0.99}}}"#).await;
         let base = format!("http://127.0.0.1:{port}/v1/decisions");
         let dir = tempfile::tempdir().expect("临时目录");
         let engine = engine(dir.path());
@@ -2162,14 +2166,18 @@ mod tests {
         let request = captured.recv().expect("收到请求");
         assert!(request.starts_with("POST /v1/decisions "), "{request}");
         assert!(request.contains("\"model\":\"startlux-decision-27b-autothink\""));
+        assert!(
+            request.contains("\"type\":\"noul\""),
+            "探针必须是是否题：{request}"
+        );
+        assert!(request.contains(prompt::TYPESAFE_PROBE_STATE), "{request}");
     }
 
     #[tokio::test]
     async fn typesafe_test_connection_uses_selected_relay_model() {
         let dir = tempfile::tempdir().expect("临时目录");
         let engine = engine(dir.path());
-        let (port, captured) =
-            fake_capture_server(r#"{"answers":{"category":{"choice":"账单","confidence":0.92}}}"#).await;
+        let (port, captured) = fake_capture_server(r#"{"answers":{"g1":{"type":"noul","noul":0.92}}}"#).await;
         let base = format!("http://127.0.0.1:{port}/v1");
 
         let models = engine
@@ -2191,8 +2199,32 @@ mod tests {
             request.contains(prompt::TYPESAFE_PROBE_STATE),
             "请求体里应是固定探针：{request}"
         );
+        assert!(
+            request.contains("\"type\":\"noul\""),
+            "探针必须是是否题：{request}"
+        );
         assert!(request.contains("\"model\":\"relay/jev-custom\""), "{request}");
         assert!(engine.list_ai_providers().expect("站点列表").is_empty());
+    }
+
+    #[tokio::test]
+    async fn 决策站点探针没有合法是否题答案时失败() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let (port, _captured) = fake_capture_server(r#"{"answers":{"g1":{"type":"noul","noul":1.2}}}"#).await;
+        let base = format!("http://127.0.0.1:{port}/v1/decisions");
+        let error = engine
+            .test_ai_provider(
+                AiProviderKind::DecisionApi,
+                &base,
+                "startlux-decision-27b-autothink",
+                Some(&Secret::new("test-key")),
+                None,
+                AccountProxyMode::Direct,
+            )
+            .await
+            .expect_err("没有合法是否题答案不能算测试成功");
+        assert!(format!("{error}").contains("响应无法识别"), "{error}");
     }
 
     #[tokio::test]
@@ -2200,8 +2232,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("临时目录");
         let secrets = std::sync::Arc::new(crate::secrets::MemorySecretStore::new());
         let engine = MailEngine::initialize_with_secrets(dir.path(), secrets.clone()).expect("初始化");
-        let (port, captured) =
-            fake_capture_server(r#"{"answers":{"category":{"choice":"账单","confidence":0.92}}}"#).await;
+        let (port, captured) = fake_capture_server(r#"{"answers":{"g1":{"type":"noul","noul":0.92}}}"#).await;
         let base = format!("http://127.0.0.1:{port}/v1");
         let saved = engine
             .save_ai_provider(
@@ -2632,7 +2663,7 @@ mod tests {
         let group_id = enable_group(&engine, "紧急程度", 0.75);
         // 5 档里最高概率是第 3 档（下标 2），换算成数字 1 + 2 = 3。
         let payload = format!(
-            r#"{{"answers":{{"g{group_id}":{{"type":"score","probabilities":{{"0":0.05,"1":0.10,"2":0.60,"3":0.15,"4":0.10}},"confidence":0.90}}}}}}"#
+            r#"{{"answers":{{"g{group_id}":{{"type":"score","probabilities":{{"0":0.05,"1":0.10,"2":0.60,"3":0.15,"4":0.10}}}}}}}}"#
         );
         let port = fake_chat_server(&payload).await;
         let provider_id = add_typesafe_at(&engine, format!("http://127.0.0.1:{port}/v1"));
@@ -2643,6 +2674,7 @@ mod tests {
         let results = engine.classify_message_groups(message).await.expect("分类应成功");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].score_value, Some(3));
+        assert_eq!(results[0].confidence, Some(0.60), "把握程度应取最高概率");
         assert!(results[0].label.is_none());
         assert_eq!(results[0].source, MailLabelSource::Auto);
     }

@@ -365,21 +365,20 @@ fn parse_boolean_answer(answer: &Value, answer_type: Option<&str>) -> Option<Gro
     if answer_type.is_some_and(|kind| !matches!(kind, "noul" | "bool")) {
         return None;
     }
-    // 官方文档字段是 `noul`；`probability` 是未真机验证的备用形状。
-    let probability = answer
-        .get("noul")
-        .or_else(|| answer.get("probability"))
-        .and_then(|value| {
-            value
-                .as_f64()
-                .or_else(|| value.as_bool().map(|flag| if flag { 1.0 } else { 0.0 }))
-        })?;
-    if !valid_confidence(probability) {
-        return None;
+    // 按 `noul`、`probability` 顺序逐个尝试；前一个字段非法不能挡住后一个。
+    for field in ["noul", "probability"] {
+        let Some(value) = answer.get(field) else {
+            continue;
+        };
+        let probability = value
+            .as_f64()
+            .or_else(|| value.as_bool().map(|flag| if flag { 1.0 } else { 0.0 }));
+        if let Some(probability) = probability.filter(|value| valid_confidence(*value)) {
+            return Some(GroupAnswer::Boolean { probability });
+        }
     }
-    Some(GroupAnswer::Boolean { probability })
+    None
 }
-
 /// 解析打分题答案；类型不符、档位越界或把握程度越界都返回 `None`。
 fn parse_score_answer(
     answer: &Value,
@@ -390,49 +389,54 @@ fn parse_score_answer(
         return None;
     }
     let (min, max) = (question.score_min?, question.score_max?);
-    let level = score_level_from_answer(answer, min, max)?;
+    let (level, confidence) = if answer.get("probabilities").is_some() {
+        score_from_probabilities(answer, min, max)?
+    } else {
+        let level = score_level_from_answer(answer, min, max)?;
+        let confidence = answer.get("confidence").and_then(Value::as_f64)?;
+        if !valid_confidence(confidence) {
+            return None;
+        }
+        (level, confidence)
+    };
     if !(min..=max).contains(&level) {
-        return None;
-    }
-    let confidence = answer.get("confidence").and_then(Value::as_f64)?;
-    if !valid_confidence(confidence) {
         return None;
     }
     Some(GroupAnswer::Score { level, confidence })
 }
 
-/// 从打分题答案里取整数档位。
-///
-/// 官方形状（未真机验证）是 `probabilities: {"0": 0.0, "1": 0.57, "2": 0.43}`，
-/// 按规格 3.4 取概率最高的一档，换算成数字：`min + 下标`。
-/// 找不到 `probabilities` 时读整数 `score`，也兼容旧 `level` 字段。
-fn score_level_from_answer(answer: &Value, min: i64, max: i64) -> Option<i64> {
+/// 从概率表取最高档位，并把该最高概率直接作为把握程度。
+fn score_from_probabilities(answer: &Value, min: i64, max: i64) -> Option<(i64, f64)> {
     let count = max.checked_sub(min).and_then(|diff| diff.checked_add(1))?;
     if !(2..=10).contains(&count) {
         return None;
     }
-    if let Some(probabilities) = answer.get("probabilities") {
-        let probabilities = probabilities.as_object()?;
-        let mut best: Option<(i64, f64)> = None;
-        for (level, probability) in probabilities {
-            let index: i64 = level.parse().ok()?;
-            let value = probability.as_f64()?;
-            if !valid_confidence(value) || !(0..count).contains(&index) {
-                return None;
-            }
-            if best.is_none_or(|(_, top)| value > top) {
-                best = Some((index, value));
-            }
-        }
-        let (index, _) = best?;
-        return min.checked_add(index);
+    let probabilities = answer.get("probabilities")?.as_object()?;
+    if probabilities.is_empty() {
+        return None;
     }
+    let mut best: Option<(i64, f64)> = None;
+    for (level, probability) in probabilities {
+        let index: i64 = level.parse().ok()?;
+        let value = probability.as_f64()?;
+        if !valid_confidence(value) || !(0..count).contains(&index) {
+            return None;
+        }
+        if best.is_none_or(|(_, top)| value > top) {
+            best = Some((index, value));
+        }
+    }
+    let (index, confidence) = best?;
+    Some((min.checked_add(index)?, confidence))
+}
+
+/// 旧形状从整数 `score` 读取，缺失时兼容 `level`；非法 `score` 不回退 `level`。
+fn score_level_from_answer(answer: &Value, min: i64, max: i64) -> Option<i64> {
     if let Some(score) = answer.get("score") {
         return score.as_i64().filter(|level| (min..=max).contains(level));
     }
     answer.get("level").and_then(Value::as_i64)
 }
-
 /// 选择题优先读把握程度；缺省时从概率中取最大值。
 fn answer_confidence(answer: &Value) -> Option<f64> {
     // 有概率表时逐项校验，不能丢掉坏项后继续使用其它值。
@@ -895,6 +899,11 @@ mod tests {
             parse_boolean_answer(&json!({"probability":false}), None),
             Some(GroupAnswer::Boolean { probability: 0.0 })
         );
+        assert_eq!(
+            parse_boolean_answer(&json!({"noul":1.2,"probability":0.8}), None),
+            Some(GroupAnswer::Boolean { probability: 0.8 }),
+            "noul 非法时应继续尝试 probability"
+        );
         for probability in [json!(-0.1), json!(1.1), json!("true"), Value::Null] {
             assert!(parse_boolean_answer(&json!({"noul":probability}), None).is_none());
         }
@@ -912,6 +921,18 @@ mod tests {
                 level: 0,
                 confidence: 0.8
             })
+        );
+        assert_eq!(
+            parse_score_answer(
+                &json!({"probabilities":{"0":0.10,"1":0.20,"2":0.70}}),
+                None,
+                &question,
+            ),
+            Some(GroupAnswer::Score {
+                level: 1,
+                confidence: 0.70
+            }),
+            "概率表本身要有最高档位和最高概率，不能强求单独的 confidence"
         );
         for answer in [
             json!({"score":2,"confidence":0.8}),
@@ -1536,7 +1557,7 @@ mod tests {
         match &answers[2] {
             (3, GroupAnswer::Score { level, confidence }) => {
                 assert_eq!(*level, 3);
-                assert!((confidence - 0.7).abs() < 0.0001);
+                assert!((confidence - 0.6).abs() < 0.0001, "概率表存在时取最高概率");
             }
             other => panic!("g3 应是打分题答案：{other:?}"),
         }

@@ -362,6 +362,33 @@ fn row_to_audit(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredAiAudit> {
     })
 }
 
+fn insert_ai_audit_on(conn: &rusqlite::Connection, audit: &NewAiAudit) -> Result<i64, StoreError> {
+    conn.execute(
+        "INSERT INTO ai_audit
+             (function, provider_id, provider_label, model, target_host, local, outbound, outcome, detail)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            audit.function,
+            audit.provider_id,
+            audit.provider_label,
+            audit.model,
+            audit.target_host,
+            i64::from(audit.local),
+            i64::from(audit.outbound),
+            audit.outcome,
+            audit.detail,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub(crate) fn insert_ai_audit_in(
+    tx: &rusqlite::Transaction<'_>,
+    audit: &NewAiAudit,
+) -> Result<i64, StoreError> {
+    insert_ai_audit_on(tx, audit)
+}
+
 impl Store {
     /// 列出全部 AI 站点。
     pub fn list_ai_providers(&self) -> Result<Vec<StoredAiProvider>, StoreError> {
@@ -595,23 +622,7 @@ impl Store {
 
     /// 写入一条 AI 审计。
     pub fn insert_ai_audit(&self, audit: &NewAiAudit) -> Result<i64, StoreError> {
-        self.conn().execute(
-            "INSERT INTO ai_audit
-                 (function, provider_id, provider_label, model, target_host, local, outbound, outcome, detail)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            rusqlite::params![
-                audit.function,
-                audit.provider_id,
-                audit.provider_label,
-                audit.model,
-                audit.target_host,
-                i64::from(audit.local),
-                i64::from(audit.outbound),
-                audit.outcome,
-                audit.detail,
-            ],
-        )?;
-        Ok(self.conn().last_insert_rowid())
+        insert_ai_audit_on(self.conn(), audit)
     }
 
     /// 读取最近 AI 审计，按时间倒序。

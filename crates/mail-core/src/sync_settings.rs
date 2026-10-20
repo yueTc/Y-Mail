@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
+use mail_ai::normalize_base_url;
 use mail_domain::account::{AccountDraft, AccountProxyMode, AuthType, OAuthProvider, Security, ServerConfig};
 use mail_domain::proxy::{GlobalProxyMode, Secret};
 use mail_store::{
@@ -891,7 +892,7 @@ impl MailEngine {
             )));
         }
 
-        let mut plan = build_import_plan(snapshot);
+        let mut plan = build_import_plan(snapshot)?;
 
         // 先写保险箱，记下旧值以便回滚。
         let mut written: Vec<(String, Option<Secret>)> = Vec::new();
@@ -958,7 +959,7 @@ fn read_secret(engine: &MailEngine, key: Option<&str>) -> Result<Option<String>,
 }
 
 /// 把快照里的配置部分转成存储层的导入计划（密钥引用留空，稍后填）。
-fn build_import_plan(snapshot: &SettingsSnapshot) -> SettingsImportPlan {
+fn build_import_plan(snapshot: &SettingsSnapshot) -> Result<SettingsImportPlan, EngineError> {
     let proxies = snapshot
         .proxies
         .iter()
@@ -1000,23 +1001,28 @@ fn build_import_plan(snapshot: &SettingsSnapshot) -> SettingsImportPlan {
         })
         .collect();
 
-    let ai_providers = snapshot
-        .ai_providers
-        .iter()
-        .map(|provider| AiProviderImport {
+    let mut ai_providers = Vec::with_capacity(snapshot.ai_providers.len());
+    for provider in &snapshot.ai_providers {
+        // 导入必须在写保险箱和数据库之前走与界面保存完全相同的地址校验。
+        let base_url = normalize_base_url(&provider.base_url, crate::ai::provider_kind(provider.kind))?;
+        let default_model = provider.default_model.trim();
+        if provider.kind == AiProviderKind::DecisionApi && default_model.is_empty() {
+            return Err(EngineError::BadRequest("决策模型站点必须填写模型".to_string()));
+        }
+        ai_providers.push(AiProviderImport {
             key: provider.key.clone(),
             provider: NewAiProvider {
                 label: provider.label.clone(),
                 kind: provider.kind,
-                base_url: provider.base_url.clone(),
-                default_model: provider.default_model.clone(),
+                base_url,
+                default_model: default_model.to_string(),
                 models: provider.models.clone(),
                 thinking_level: provider.thinking_level,
                 enabled: provider.enabled,
                 proxy: AccountProxyMode::InheritGlobal,
             },
-        })
-        .collect();
+        });
+    }
 
     let ai_model_map = snapshot
         .ai_model_map
@@ -1029,7 +1035,7 @@ fn build_import_plan(snapshot: &SettingsSnapshot) -> SettingsImportPlan {
         })
         .collect();
 
-    SettingsImportPlan {
+    Ok(SettingsImportPlan {
         proxies,
         accounts,
         global_proxy,
@@ -1045,7 +1051,7 @@ fn build_import_plan(snapshot: &SettingsSnapshot) -> SettingsImportPlan {
             start_minimized_to_tray: snapshot.settings.start_minimized_to_tray,
         },
         secrets: HashMap::new(),
-    }
+    })
 }
 
 /// 把快照里的账号还原成新建 / 更新用的草稿（不含凭据）。
@@ -1514,7 +1520,7 @@ mod tests {
             "https://api.bamboonode.dev/v1/decisions"
         );
 
-        let plan = super::build_import_plan(&snapshot);
+        let plan = super::build_import_plan(&snapshot).expect("导入计划应合法");
         assert_eq!(plan.ai_providers[0].provider.kind, AiProviderKind::DecisionApi);
         assert_eq!(
             plan.ai_providers[0].provider.default_model,
@@ -1534,6 +1540,86 @@ mod tests {
         assert_eq!(stored[0].default_model, "startlux-decision-27b-autothink");
         assert_eq!(stored[0].base_url, "https://api.bamboonode.dev/v1/decisions");
     }
+    fn rejected_snapshot_error(snapshot: SettingsSnapshot) -> String {
+        let target_dir = tempfile::tempdir().expect("目标目录");
+        let (target, secrets) = engine(target_dir.path());
+        let error = target
+            .import_settings_snapshot(&snapshot)
+            .expect_err("恶意快照必须被拒绝");
+        assert!(
+            target.store().list_ai_providers().expect("列站点").is_empty(),
+            "校验失败前不能写站点"
+        );
+        assert!(
+            target.store().list_accounts().expect("列账号").is_empty(),
+            "校验失败前不能写账号"
+        );
+        assert!(
+            target.store().list_proxies().expect("列代理").is_empty(),
+            "校验失败前不能写代理"
+        );
+        assert!(secrets.is_empty(), "校验失败前不能写保险箱");
+        error.to_string()
+    }
+
+    #[test]
+    fn 设置快照导入拒绝非本机明文站点() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (source, _secrets) = seeded(dir.path());
+        let mut snapshot = source.export_settings_snapshot("dev-a", "本机", 1).expect("导出");
+        snapshot.ai_providers[0].kind = AiProviderKind::OpenAiCompatible;
+        snapshot.ai_providers[0].base_url = "http://api.example.com/v1".to_string();
+
+        let error = rejected_snapshot_error(snapshot);
+        assert!(error.contains("HTTPS"), "{error}");
+    }
+
+    #[test]
+    fn 设置快照导入拒绝密钥查询参数且不回显密钥() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (source, _secrets) = seeded(dir.path());
+        let mut snapshot = source.export_settings_snapshot("dev-a", "本机", 1).expect("导出");
+        let fake_key = "sk-fake-import-secret";
+        snapshot.ai_providers[0].kind = AiProviderKind::OpenAiCompatible;
+        snapshot.ai_providers[0].base_url = format!("https://api.example.com/v1?api_key={fake_key}");
+
+        let error = rejected_snapshot_error(snapshot);
+        assert!(error.contains("密钥框"), "{error}");
+        assert!(!error.contains(fake_key), "错误不能回显密钥：{error}");
+    }
+
+    #[test]
+    fn 设置快照导入拒绝空模型的决策站点() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (source, _secrets) = seeded(dir.path());
+        let mut snapshot = source.export_settings_snapshot("dev-a", "本机", 1).expect("导出");
+        snapshot.ai_providers[0].kind = AiProviderKind::DecisionApi;
+        snapshot.ai_providers[0].base_url = "https://api.bamboonode.dev/v1/decisions".to_string();
+        snapshot.ai_providers[0].default_model = "   ".to_string();
+
+        let error = rejected_snapshot_error(snapshot);
+        assert!(error.contains("必须填写模型"), "{error}");
+    }
+
+    #[test]
+    fn 设置快照导入保留合法完整地址和查询参数() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let (source, _secrets) = seeded(dir.path());
+        let mut snapshot = source.export_settings_snapshot("dev-a", "本机", 1).expect("导出");
+        let base_url = "https://api.bamboonode.dev/v1/decisions?region=cn&version=2";
+        snapshot.ai_providers[0].kind = AiProviderKind::DecisionApi;
+        snapshot.ai_providers[0].base_url = base_url.to_string();
+        snapshot.ai_providers[0].default_model = "startlux-decision-27b-autothink".to_string();
+
+        let target_dir = tempfile::tempdir().expect("目标目录");
+        let (target, _secrets) = engine(target_dir.path());
+        target
+            .import_settings_snapshot(&snapshot)
+            .expect("合法地址应能导入");
+        let stored = target.store().list_ai_providers().expect("列站点");
+        assert_eq!(stored[0].base_url, base_url, "完整地址不能改写或丢掉查询参数");
+    }
+
     #[test]
     fn 快照序列化往返一致() {
         let dir = tempfile::tempdir().expect("临时目录");

@@ -14,6 +14,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use url::Url;
 
 use crate::error::AiError;
+use crate::provider::is_local_host;
 
 /// 一次 HTTP 响应的状态码与正文。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +30,10 @@ pub(crate) struct HttpResponse {
 /// 不少站点（TypeSafe 前面的 Cloudflare 就是）会对没有 User-Agent 的请求直接回
 /// 403 挑战页，正文是一整段网页；这里固定带一个可识别的名字，别让请求像爬虫。
 const USER_AGENT: &str = concat!("Y-Mail/", env!("CARGO_PKG_VERSION"));
+
+/// 临时拥塞最多额外重试两次；其它错误不重试。
+const MAX_TRANSIENT_RETRIES: usize = 2;
+const RETRY_BASE_DELAY_MS: u64 = 200;
 
 /// 发一次请求。`body` 为 `None` 表示不带正文（GET）。
 #[allow(clippy::too_many_arguments)]
@@ -47,7 +52,13 @@ pub(crate) async fn request(
         .to_string();
     let secure = match url.scheme() {
         "https" => true,
-        "http" => false,
+        "http" => {
+            // 请求层再兜一道底：就算上游漏了校验，也绝不向非本机明文发送。
+            if !is_local_host(&host) {
+                return Err(AiError::InsecureEndpoint(host));
+            }
+            false
+        }
         _ => return Err(AiError::Config("站点地址协议不受支持")),
     };
     let port = url
@@ -77,12 +88,32 @@ pub(crate) async fn request(
     }
     head.push_str("Connection: close\r\n\r\n");
 
+    for attempt in 0..=MAX_TRANSIENT_RETRIES {
+        let response = request_once(route, &host, port, secure, &head, payload, timeout).await?;
+        if !matches!(response.status, 429 | 529) || attempt == MAX_TRANSIENT_RETRIES {
+            return Ok(response);
+        }
+        let delay = Duration::from_millis(RETRY_BASE_DELAY_MS * (1_u64 << attempt));
+        tokio::time::sleep(delay).await;
+    }
+    unreachable!("重试循环至少有返回分支")
+}
+
+async fn request_once(
+    route: Option<&ProxyRoute>,
+    host: &str,
+    port: u16,
+    secure: bool,
+    head: &str,
+    payload: &str,
+    timeout: Duration,
+) -> Result<HttpResponse, AiError> {
     let exchange = async {
-        let tcp = mail_net::connect_tcp(&host, port, route, timeout)
+        let tcp = mail_net::connect_tcp(host, port, route, timeout)
             .await
             .map_err(AiError::Network)?;
         let mut stream = if secure {
-            mail_net::tls_wrap(tcp, &host).await.map_err(AiError::Network)?
+            mail_net::tls_wrap(tcp, host).await.map_err(AiError::Network)?
         } else {
             Stream::plain(tcp)
         };
@@ -110,7 +141,6 @@ pub(crate) async fn request(
         .map_err(|_| AiError::Timeout)??;
     parse_response(&raw)
 }
-
 /// 拆状态行、头部与正文；正文支持定长与分块两种传输方式。
 fn parse_response(raw: &[u8]) -> Result<HttpResponse, AiError> {
     let split = raw
@@ -245,6 +275,82 @@ mod tests {
             "应该是接口自己的 JSON 错误：{}",
             &body[..body.len().min(200)]
         );
+    }
+
+    async fn fake_status_sequence(
+        statuses: Vec<&'static str>,
+    ) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定成功");
+        let port = listener.local_addr().expect("取地址").port();
+        let count = Arc::new(AtomicUsize::new(0));
+        let seen = count.clone();
+        tokio::spawn(async move {
+            for status in statuses {
+                let (mut socket, _) = listener.accept().await.expect("接受连接");
+                let _ = read_request(&mut socket).await;
+                seen.fetch_add(1, Ordering::SeqCst);
+                let payload = "{}";
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    payload.len()
+                );
+                socket.write_all(response.as_bytes()).await.expect("写响应");
+            }
+        });
+        (port, count)
+    }
+
+    #[tokio::test]
+    async fn 非本机明文请求在联网前被拒绝() {
+        let error = request(
+            None,
+            "POST",
+            "http://example.invalid/v1/decisions",
+            &[],
+            Some("{}"),
+            Duration::from_secs(1),
+        )
+        .await
+        .expect_err("非本机明文请求必须被拒");
+        assert!(matches!(error, AiError::InsecureEndpoint(_)), "{error}");
+    }
+
+    #[tokio::test]
+    async fn 网关繁忙时只对429和529最多重试两次() {
+        use std::sync::atomic::Ordering;
+
+        let (port, count) = fake_status_sequence(vec!["429 Too Many Requests", "529 Busy", "200 OK"]).await;
+        let endpoint = format!("http://127.0.0.1:{port}/v1/decisions");
+        let response = request(None, "POST", &endpoint, &[], Some("{}"), Duration::from_secs(5))
+            .await
+            .expect("最终应成功");
+        assert_eq!(response.status, 200);
+        assert_eq!(count.load(Ordering::SeqCst), 3, "应额外重试两次");
+
+        for (status, expected) in [
+            ("401 Unauthorized", 401),
+            ("403 Forbidden", 403),
+            ("404 Not Found", 404),
+            ("422 Bad Request", 422),
+        ] {
+            let (never_port, never_count) = fake_status_sequence(vec![status]).await;
+            let never_endpoint = format!("http://127.0.0.1:{never_port}/v1/decisions");
+            let response = request(
+                None,
+                "POST",
+                &never_endpoint,
+                &[],
+                Some("{}"),
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("普通错误也要返回响应");
+            assert_eq!(response.status, expected);
+            assert_eq!(never_count.load(Ordering::SeqCst), 1, "普通错误不能重试");
+        }
     }
 
     #[tokio::test]

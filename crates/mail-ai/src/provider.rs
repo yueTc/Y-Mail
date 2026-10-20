@@ -202,7 +202,19 @@ pub fn normalize_base_url(raw: &str, kind: ProviderKind) -> Result<String, AiErr
         let lowered = name.trim().to_ascii_lowercase();
         if matches!(
             lowered.as_str(),
-            "key" | "api_key" | "apikey" | "cdkey" | "token" | "access_token" | "secret" | "password"
+            "token"
+                | "key"
+                | "api_key"
+                | "apikey"
+                | "cdkey"
+                | "access_token"
+                | "secret"
+                | "auth"
+                | "authorization"
+                | "password"
+                | "passwd"
+                | "signature"
+                | "sig"
         ) {
             return Err(AiError::Config(
                 "站点地址里不能带账号或密码，请把密钥填在密钥框里",
@@ -375,6 +387,29 @@ mod tests {
         assert!(!text.contains("sk-live"), "{text}");
 
         // 普通查询参数不该被误伤。
+        for name in [
+            "token",
+            "key",
+            "api_key",
+            "apikey",
+            "secret",
+            "auth",
+            "authorization",
+            "password",
+            "passwd",
+            "signature",
+            "sig",
+        ] {
+            assert!(
+                normalize_base_url(
+                    &format!("https://api.example.com/v1?{name}=not-a-real-secret"),
+                    ProviderKind::OpenAiCompatible,
+                )
+                .is_err(),
+                "敏感参数 {name} 必须被拒绝"
+            );
+        }
+
         let ok = normalize_base_url(
             "https://api.example.com/v1?api-version=2024-02-01",
             ProviderKind::OpenAiCompatible,
