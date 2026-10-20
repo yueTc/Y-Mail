@@ -574,6 +574,9 @@ export const EN: Record<string, string> = {
   "旧版 TypeSafe jev（兼容）": "Legacy TypeSafe jev (compatible)",
   "填写完整请求地址，例如 https://api.bamboonode.dev/v1/decisions":
     "Enter the full request URL, e.g. https://api.bamboonode.dev/v1/decisions",
+  "完整接口地址": "Full API URL",
+  "填写完整请求地址，例如 https://api.bamboonode.dev/v1/decisions 或 https://api.typesafe.ai/v1/systemone":
+    "Enter the full request URL, e.g. https://api.bamboonode.dev/v1/decisions or https://api.typesafe.ai/v1/systemone",
   "请先在「邮件分类」里选择决策模型站点，再打开组开关。":
     "Choose a decision model site under Email classification before enabling a group.",
   "邮件分类只支持决策模型站点。":

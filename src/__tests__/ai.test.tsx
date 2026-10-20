@@ -663,10 +663,14 @@ describe("AI 站点设置弹窗", () => {
     expect(kindLabels).toContain("决策模型站点");
     expect(kindLabels).not.toContain("旧版 TypeSafe jev（兼容）");
     fireEvent.change(kindSelect, { target: { value: "decision_api" } });
-    expect((within(dialog).getByLabelText("AI 站点地址") as HTMLInputElement).value)
-      .toBe("https://api.bamboonode.dev/v1/decisions");
-    expect((within(dialog).getByLabelText("AI 站点地址") as HTMLInputElement).placeholder)
-      .toContain("填写完整请求地址");
+    expect(within(dialog).getByText("完整接口地址")).toBeTruthy();
+    const addressInput = within(dialog).getByLabelText("完整接口地址") as HTMLInputElement;
+    expect(addressInput.value).toBe("https://api.bamboonode.dev/v1/decisions");
+    expect(
+      within(dialog).getByText(
+        "填写完整请求地址，例如 https://api.bamboonode.dev/v1/decisions 或 https://api.typesafe.ai/v1/systemone",
+      ),
+    ).toBeTruthy();
     expect((within(dialog).getByLabelText("默认模型") as HTMLInputElement).value)
       .toBe("startlux-decision-27b-autothink");
     expect(within(dialog).getByLabelText("测试模型")).toBeTruthy();

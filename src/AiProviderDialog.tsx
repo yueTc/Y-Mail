@@ -404,6 +404,10 @@ export default function AiProviderDialog({
     }
   }, [apiKey, editing, selectedTestModel]);
 
+  const baseUrlFieldLabel = editing.kind === "decision_api" ? "完整接口地址" : "站点地址";
+  const decisionAddressHint =
+    "填写完整请求地址，例如 https://api.bamboonode.dev/v1/decisions 或 https://api.typesafe.ai/v1/systemone";
+
   // 关着的时候渲染一个空片段：既满足 JSX.Element 返回类型，也不会挂载表单。
   if (!open) return <></>;
 
@@ -494,13 +498,16 @@ export default function AiProviderDialog({
                 </select>
               </label>
             </div>
-            <label className="secret-field">
-              {t("站点地址")}<input
-                aria-label={t("AI 站点地址")}
+            <label className="secret-field" htmlFor="ai-provider-base-url">
+              {t(baseUrlFieldLabel)}<input
+                id="ai-provider-base-url"
                 value={editing.baseUrl}
+                aria-describedby={
+                  editing.kind === "decision_api" ? "ai-provider-base-url-hint" : undefined
+                }
                 placeholder={
                   editing.kind === "decision_api"
-                    ? t("填写完整请求地址，例如 https://api.bamboonode.dev/v1/decisions")
+                    ? t(decisionAddressHint)
                     : editing.kind === "typesafe"
                       ? t("填到 /v1 为止，例如 https://api.typesafe.ai/v1，不要带 /systemone")
                       : t("例如 https://api.example.com/v1，本机 Ollama 可填 http://127.0.0.1:11434")
@@ -508,6 +515,11 @@ export default function AiProviderDialog({
                 onChange={(event) => setEditing((old) => ({ ...old, baseUrl: event.target.value }))}
               />
             </label>
+            {editing.kind === "decision_api" && (
+              <p id="ai-provider-base-url-hint" className="hint">
+                {t(decisionAddressHint)}
+              </p>
+            )}
             <label className="secret-field">
               CDKey / API Key
               <span className="secret-input-row">
