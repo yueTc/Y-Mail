@@ -1,7 +1,7 @@
 //! 站点类型与思考程度抽象。
 //!
-//! 站点分四类：OpenAI 兼容（第三方中转站 / 自建网关）、DeepL（只做翻译）、
-//! 本机 Ollama（零外传）、TypeSafe jev（只做邮件分类）。
+//! 站点类型：OpenAI 兼容（第三方中转站 / 自建网关）、DeepL（只做翻译）、
+//! 本机 Ollama（零外传）、TypeSafe jev 与通用决策模型站点（只做邮件分类）。
 //! 思考程度是四档抽象，由这里映射成各家参数。
 
 use crate::error::AiError;
@@ -37,6 +37,8 @@ pub enum ProviderKind {
     Ollama,
     /// TypeSafe jev；只做邮件分类。
     TypeSafe,
+    /// 通用决策模型站点；只做邮件分类。
+    DecisionApi,
 }
 
 impl ProviderKind {
@@ -47,6 +49,7 @@ impl ProviderKind {
             Self::DeepL => "deepl",
             Self::Ollama => "ollama",
             Self::TypeSafe => "typesafe",
+            Self::DecisionApi => "decision_api",
         }
     }
 
@@ -57,6 +60,7 @@ impl ProviderKind {
             "deepl" => Some(Self::DeepL),
             "ollama" => Some(Self::Ollama),
             "typesafe" | "type_safe" | "jev" => Some(Self::TypeSafe),
+            "decision_api" | "decision" | "generic_decision" => Some(Self::DecisionApi),
             _ => None,
         }
     }
@@ -68,6 +72,7 @@ impl ProviderKind {
             Self::DeepL => "DeepL 翻译",
             Self::Ollama => "本机 Ollama",
             Self::TypeSafe => "TypeSafe jev",
+            Self::DecisionApi => "决策模型站点",
         }
     }
 
@@ -78,10 +83,11 @@ impl ProviderKind {
             Self::DeepL => "https://api-free.deepl.com",
             Self::Ollama => "http://127.0.0.1:11434/v1",
             Self::TypeSafe => "https://api.typesafe.ai/v1",
+            Self::DecisionApi => "https://api.bamboonode.dev/v1/decisions",
         }
     }
 
-    /// 这个站点类型能不能承担某个功能。分类只认 TypeSafe jev。
+    /// 这个站点类型能不能承担某个功能。分类只认决策模型站点。
     pub fn supports(self, function: ProviderFunction) -> bool {
         use ProviderFunction as F;
         match self {
@@ -90,8 +96,13 @@ impl ProviderKind {
                 F::Translation | F::Summary | F::Polish | F::Draft | F::NotificationVerify
             ),
             Self::DeepL => matches!(function, F::Translation),
-            Self::TypeSafe => matches!(function, F::Classification),
+            Self::TypeSafe | Self::DecisionApi => matches!(function, F::Classification),
         }
+    }
+
+    /// 是不是决策模型站点。
+    pub fn is_decision(self) -> bool {
+        matches!(self, Self::TypeSafe | Self::DecisionApi)
     }
 
     /// 是不是只能翻译。
@@ -228,6 +239,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn 决策模型类型可解析且同时支持分类() {
+        let kind = ProviderKind::parse("decision_api").expect("应能解析");
+        assert_eq!(kind, ProviderKind::DecisionApi);
+        assert_eq!(kind.as_str(), "decision_api");
+        assert_eq!(kind.label(), "决策模型站点");
+        assert!(kind.supports(ProviderFunction::Classification));
+        assert!(!kind.supports(ProviderFunction::Summary));
+        assert!(kind.is_decision());
+        assert!(ProviderKind::TypeSafe.is_decision());
+        assert_eq!(kind.default_base_url(), "https://api.bamboonode.dev/v1/decisions");
+        for alias in ["decision", "generic_decision"] {
+            assert_eq!(ProviderKind::parse(alias), Some(kind));
+        }
+        for function in [
+            ProviderFunction::Translation,
+            ProviderFunction::Polish,
+            ProviderFunction::Draft,
+            ProviderFunction::NotificationVerify,
+        ] {
+            assert!(!kind.supports(function));
+        }
+    }
+    #[test]
     fn typesafe_only_supports_classification() {
         assert!(ProviderKind::TypeSafe.supports(ProviderFunction::Classification));
         assert!(!ProviderKind::TypeSafe.supports(ProviderFunction::Translation));
@@ -255,6 +289,8 @@ mod tests {
             ProviderKind::OpenAiCompatible,
             ProviderKind::DeepL,
             ProviderKind::Ollama,
+            ProviderKind::TypeSafe,
+            ProviderKind::DecisionApi,
         ] {
             assert_eq!(ProviderKind::parse(kind.as_str()), Some(kind));
         }

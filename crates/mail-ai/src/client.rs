@@ -18,7 +18,7 @@ use crate::provider::{join_url, ProviderKind, ThinkingLevel};
 pub struct Endpoint<'a> {
     /// 站点类型。
     pub kind: ProviderKind,
-    /// 站点根地址；已经过 `normalize_base_url` 校验。
+    /// 站点地址；通用决策站点填写完整请求地址，已经过 `normalize_base_url` 校验。
     pub base_url: &'a str,
     /// CDKey / API Key；本机 Ollama 可以不填。
     pub api_key: Option<&'a Secret>,
@@ -48,7 +48,7 @@ pub async fn list_models(
     endpoint: &Endpoint<'_>,
     timeout: Duration,
 ) -> Result<Vec<String>, AiError> {
-    if endpoint.kind.translation_only() || endpoint.kind == ProviderKind::TypeSafe {
+    if endpoint.kind.translation_only() || endpoint.kind.is_decision() {
         return Err(AiError::Unsupported("拉取模型列表"));
     }
     let url = join_url(endpoint.base_url, "models");
@@ -86,19 +86,21 @@ pub async fn list_models(
     Ok(models)
 }
 
-/// TypeSafe 分类接口的地址。
-///
-/// 站点地址填到 `/v1` 就行；如果用户直接把完整地址 `.../systemone` 填了进来，
-/// 也不能再拼一次，否则会变成 `/v1/systemone/systemone` 这种 404 路径。
-fn systemone_url(base_url: &str) -> String {
+/// 决策请求地址；通用站点用完整地址，旧 TypeSafe 地址按原规则补路径。
+fn decision_endpoint_url(base_url: &str, kind: ProviderKind) -> String {
     let trimmed = base_url.trim().trim_end_matches('/');
-    if trimmed.to_ascii_lowercase().ends_with("/systemone") {
-        trimmed.to_string()
-    } else {
-        join_url(trimmed, "systemone")
+    match kind {
+        ProviderKind::TypeSafe => {
+            if trimmed.to_ascii_lowercase().ends_with("/systemone") {
+                trimmed.to_string()
+            } else {
+                join_url(trimmed, "systemone")
+            }
+        }
+        ProviderKind::DecisionApi => trimmed.to_string(),
+        _ => trimmed.to_string(),
     }
 }
-
 /// 一次邮件分类的结果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassifyOutcome {
@@ -108,7 +110,7 @@ pub struct ClassifyOutcome {
     pub confidence: f64,
 }
 
-/// 调 TypeSafe jev 做一次邮件分类。
+/// 调决策模型站点做一次邮件分类。
 ///
 /// `state` 是邮件正文纯文本（调用方负责截断与安全处理），`choices` 是当前
 /// 本地标签名。返回模型选中的标签与把握程度；结果不合法一律按协议错误处理。
@@ -120,7 +122,7 @@ pub async fn classify_mail(
     choices: &[String],
     timeout: Duration,
 ) -> Result<ClassifyOutcome, AiError> {
-    if endpoint.kind != ProviderKind::TypeSafe {
+    if !endpoint.kind.is_decision() {
         return Err(AiError::Unsupported("邮件分类"));
     }
     if model.trim().is_empty() {
@@ -129,7 +131,7 @@ pub async fn classify_mail(
     if state.trim().is_empty() || choices.is_empty() {
         return Err(AiError::Protocol);
     }
-    let url = systemone_url(endpoint.base_url);
+    let url = decision_endpoint_url(endpoint.base_url, endpoint.kind);
     let headers = auth_headers(endpoint)?;
     // 官方形状（docs.typesafe.ai/api）：
     // - questions 是「问题编号 → 问题对象」的对象，不是数组；
@@ -170,13 +172,7 @@ pub async fn classify_mail(
     if !choices.iter().any(|candidate| candidate == &choice) {
         return Err(AiError::Protocol);
     }
-    let confidence = answer
-        .get("confidence")
-        .and_then(Value::as_f64)
-        .ok_or(AiError::Protocol)?;
-    if !(0.0..=1.0).contains(&confidence) {
-        return Err(AiError::Protocol);
-    }
+    let confidence = answer_confidence(answer).ok_or(AiError::Protocol)?;
     Ok(ClassifyOutcome { choice, confidence })
 }
 
@@ -251,7 +247,7 @@ pub async fn classify_mail_groups(
     questions: &[GroupQuestion],
     timeout: Duration,
 ) -> Result<Vec<(i64, GroupAnswer)>, AiError> {
-    if endpoint.kind != ProviderKind::TypeSafe {
+    if !endpoint.kind.is_decision() {
         return Err(AiError::Unsupported("邮件分类"));
     }
     if model.trim().is_empty() {
@@ -260,7 +256,7 @@ pub async fn classify_mail_groups(
     if state.trim().is_empty() || questions.is_empty() {
         return Err(AiError::Protocol);
     }
-    let url = systemone_url(endpoint.base_url);
+    let url = decision_endpoint_url(endpoint.base_url, endpoint.kind);
     let headers = auth_headers(endpoint)?;
     let mut question_map = serde_json::Map::new();
     for question in questions {
@@ -311,9 +307,11 @@ pub async fn classify_mail_groups(
         let Some(answer) = answers.get(&key) else {
             continue;
         };
-        let Some(answer_type) = answer.get("type").and_then(Value::as_str) else {
+        // 缺省类型可以按题型解析；显式给了非法类型则只跳过这一组。
+        if answer.get("type").is_some_and(|kind| !kind.is_string()) {
             continue;
-        };
+        }
+        let answer_type = answer.get("type").and_then(Value::as_str);
         let one = match question.kind {
             GroupQuestionKind::Choice => parse_choice_answer(answer, answer_type, question),
             GroupQuestionKind::Boolean => parse_boolean_answer(answer, answer_type),
@@ -327,8 +325,12 @@ pub async fn classify_mail_groups(
 }
 
 /// 解析选择题答案；类型不符、选项不在候选里或把握程度越界都返回 `None`。
-fn parse_choice_answer(answer: &Value, answer_type: &str, question: &GroupQuestion) -> Option<GroupAnswer> {
-    if answer_type != "choice" {
+fn parse_choice_answer(
+    answer: &Value,
+    answer_type: Option<&str>,
+    question: &GroupQuestion,
+) -> Option<GroupAnswer> {
+    if answer_type.is_some_and(|kind| kind != "choice") {
         return None;
     }
     let label = answer
@@ -340,23 +342,33 @@ fn parse_choice_answer(answer: &Value, answer_type: &str, question: &GroupQuesti
     if !question.criteria.iter().any(|candidate| candidate == &label) {
         return None;
     }
-    let confidence = answer.get("confidence").and_then(Value::as_f64)?;
-    if !valid_confidence(confidence) {
-        return None;
+    if let Some(probabilities) = answer.get("probabilities") {
+        if probabilities
+            .as_object()?
+            .keys()
+            .any(|label| !question.criteria.contains(label))
+        {
+            return None;
+        }
     }
+    let confidence = answer_confidence(answer)?;
     Some(GroupAnswer::Choice { label, confidence })
 }
 
 /// 解析是否题答案；类型不符或概率越界都返回 `None`。
-fn parse_boolean_answer(answer: &Value, answer_type: &str) -> Option<GroupAnswer> {
-    if answer_type != "noul" {
+fn parse_boolean_answer(answer: &Value, answer_type: Option<&str>) -> Option<GroupAnswer> {
+    if answer_type.is_some_and(|kind| !matches!(kind, "noul" | "bool")) {
         return None;
     }
     // 官方文档字段是 `noul`；`probability` 是未真机验证的备用形状。
     let probability = answer
         .get("noul")
         .or_else(|| answer.get("probability"))
-        .and_then(Value::as_f64)?;
+        .and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_bool().map(|flag| if flag { 1.0 } else { 0.0 }))
+        })?;
     if !valid_confidence(probability) {
         return None;
     }
@@ -364,8 +376,12 @@ fn parse_boolean_answer(answer: &Value, answer_type: &str) -> Option<GroupAnswer
 }
 
 /// 解析打分题答案；类型不符、档位越界或把握程度越界都返回 `None`。
-fn parse_score_answer(answer: &Value, answer_type: &str, question: &GroupQuestion) -> Option<GroupAnswer> {
-    if answer_type != "score" {
+fn parse_score_answer(
+    answer: &Value,
+    answer_type: Option<&str>,
+    question: &GroupQuestion,
+) -> Option<GroupAnswer> {
+    if answer_type.is_some_and(|kind| kind != "score") {
         return None;
     }
     let (min, max) = (question.score_min?, question.score_max?);
@@ -384,7 +400,7 @@ fn parse_score_answer(answer: &Value, answer_type: &str, question: &GroupQuestio
 ///
 /// 官方形状（未真机验证）是 `probabilities: {"0": 0.0, "1": 0.57, "2": 0.43}`，
 /// 按规格 3.4 取概率最高的一档，换算成数字：`min + 下标`。
-/// 找不到 `probabilities` 时回退读未验证的 `level` 字段。
+/// 找不到 `probabilities` 时读整数 `score`，也兼容旧 `level` 字段。
 fn score_level_from_answer(answer: &Value, min: i64, max: i64) -> Option<i64> {
     let count = max.checked_sub(min).and_then(|diff| diff.checked_add(1))?;
     if !(2..=10).contains(&count) {
@@ -406,9 +422,35 @@ fn score_level_from_answer(answer: &Value, min: i64, max: i64) -> Option<i64> {
         let (index, _) = best?;
         return min.checked_add(index);
     }
-    answer.get("level").and_then(Value::as_i64)
+    answer
+        .get("score")
+        .and_then(Value::as_i64)
+        .or_else(|| answer.get("level").and_then(Value::as_i64))
 }
 
+/// 选择题优先读把握程度；缺省时从概率中取最大值。
+fn answer_confidence(answer: &Value) -> Option<f64> {
+    // 有概率表时逐项校验，不能丢掉坏项后继续使用其它值。
+    let mut maximum: Option<f64> = None;
+    if let Some(probabilities) = answer.get("probabilities") {
+        let probabilities = probabilities.as_object()?;
+        if probabilities.is_empty() {
+            return None;
+        }
+        for probability in probabilities.values() {
+            let probability = probability.as_f64()?;
+            if !valid_confidence(probability) {
+                return None;
+            }
+            maximum = Some(maximum.map_or(probability, |top| top.max(probability)));
+        }
+    }
+    if let Some(confidence) = answer.get("confidence") {
+        let confidence = confidence.as_f64()?;
+        return valid_confidence(confidence).then_some(confidence);
+    }
+    maximum
+}
 /// 把握程度 / 概率必须在 0 到 1 之间。
 fn valid_confidence(value: f64) -> bool {
     (0.0..=1.0).contains(&value)
@@ -424,7 +466,7 @@ pub async fn chat(
     user: &str,
     timeout: Duration,
 ) -> Result<ChatOutcome, AiError> {
-    if endpoint.kind.translation_only() {
+    if endpoint.kind.translation_only() || endpoint.kind.is_decision() {
         return Err(AiError::Unsupported("摘要与润色"));
     }
     if model.trim().is_empty() {
@@ -751,17 +793,304 @@ mod tests {
             .unwrap_or(0)
     }
     #[test]
+    fn 决策站点选择题拒绝非法概率和把握程度() {
+        let question = group_question(
+            1,
+            GroupQuestionKind::Choice,
+            "分类",
+            vec!["账单".to_string(), "其他".to_string()],
+            None,
+            None,
+        );
+        for answer in [
+            json!({"choice":"账单","probabilities":{"账单":0.9,"其他":-0.1}}),
+            json!({"choice":"账单","probabilities":{"账单":0.9,"其他":"无效"}}),
+            json!({"choice":"账单","confidence":"无效","probabilities":{"账单":0.9}}),
+            json!({"choice":"账单","confidence":0.9,"probabilities":{"账单":1.1}}),
+            json!({"choice":"账单","probabilities":{"未知选项":0.9}}),
+            json!({"choice":"账单","probabilities":{}}),
+        ] {
+            assert!(
+                parse_choice_answer(&answer, None, &question).is_none(),
+                "{answer}"
+            );
+        }
+    }
+
+    #[test]
+    fn 决策站点是否题和打分题严格校验() {
+        assert_eq!(
+            parse_boolean_answer(&json!({"probability":false}), None),
+            Some(GroupAnswer::Boolean { probability: 0.0 })
+        );
+        for probability in [json!(-0.1), json!(1.1), json!("true"), Value::Null] {
+            assert!(parse_boolean_answer(&json!({"noul":probability}), None).is_none());
+        }
+        let question = group_question(
+            1,
+            GroupQuestionKind::Score,
+            "打分",
+            prompt::score_levels(-1, 1),
+            Some(-1),
+            Some(1),
+        );
+        assert_eq!(
+            parse_score_answer(&json!({"score":0,"confidence":0.8}), None, &question),
+            Some(GroupAnswer::Score {
+                level: 0,
+                confidence: 0.8
+            })
+        );
+        for answer in [
+            json!({"score":2,"confidence":0.8}),
+            json!({"score":0.5,"confidence":0.8}),
+            json!({"score":0,"confidence":1.1}),
+            json!({"score":0}),
+            json!({"probabilities":{"0":0.9,"1":-0.1},"confidence":0.8}),
+            json!({"probabilities":{"3":0.9},"confidence":0.8}),
+        ] {
+            assert!(parse_score_answer(&answer, None, &question).is_none(), "{answer}");
+        }
+    }
+
+    #[tokio::test]
+    async fn 决策站点两种分类调用均保留完整路径和查询参数() {
+        for grouped in [false, true] {
+            let (port, captured) = fake_capture_server(
+                r#"{"answers":{"category":{"choice":"账单","probabilities":{"账单":0.9,"其他":0.1}},"g1":{"choice":"账单","probabilities":{"账单":0.9,"其他":0.1}}}}"#
+            ).await;
+            let base = format!("http://127.0.0.1:{port}/custom/decision?version=2");
+            let endpoint = endpoint(ProviderKind::DecisionApi, &base);
+            let choices = vec!["账单".to_string(), "其他".to_string()];
+            if grouped {
+                let questions = vec![group_question(
+                    1,
+                    GroupQuestionKind::Choice,
+                    "分类",
+                    choices,
+                    None,
+                    None,
+                )];
+                let answers = classify_mail_groups(
+                    None,
+                    &endpoint,
+                    "测试模型",
+                    "虚构测试正文",
+                    &questions,
+                    Duration::from_secs(5),
+                )
+                .await
+                .expect("应能分类");
+                assert_eq!(
+                    answers,
+                    vec![(
+                        1,
+                        GroupAnswer::Choice {
+                            label: "账单".to_string(),
+                            confidence: 0.9,
+                        }
+                    )]
+                );
+            } else {
+                let answer = classify_mail(
+                    None,
+                    &endpoint,
+                    "测试模型",
+                    "虚构测试正文",
+                    &choices,
+                    Duration::from_secs(5),
+                )
+                .await
+                .expect("应能分类");
+                assert_eq!(
+                    answer,
+                    ClassifyOutcome {
+                        choice: "账单".to_string(),
+                        confidence: 0.9
+                    }
+                );
+            }
+            let raw = captured.recv().expect("收到请求");
+            assert!(
+                raw.starts_with("POST /custom/decision?version=2 HTTP/1.1\r\n"),
+                "{raw}"
+            );
+            let body = request_body(&raw);
+            assert_eq!(body["model"], "测试模型");
+            assert_eq!(body["state"], "虚构测试正文");
+        }
+    }
+
+    #[tokio::test]
+    async fn 决策站点非法分组不影响其他答案() {
+        let (port, captured) = fake_capture_server(
+            r#"{"answers":{
+            "g1":{"type":123,"choice":"账单","confidence":0.9},
+            "g2":{"type":"bool","noul":true},
+            "g3":{"score":0,"confidence":0.8},
+            "g4":{"choice":"账单","probabilities":{"账单":0.9,"其他":1.1}},
+            "g5":{"choice":"其他","confidence":0.7}
+        }}"#,
+        )
+        .await;
+        let base = format!("http://127.0.0.1:{port}/v1/decisions");
+        let endpoint = endpoint(ProviderKind::DecisionApi, &base);
+        let choice = |id| {
+            group_question(
+                id,
+                GroupQuestionKind::Choice,
+                "分类",
+                vec!["账单".to_string(), "其他".to_string()],
+                None,
+                None,
+            )
+        };
+        let questions = vec![
+            choice(1),
+            group_question(2, GroupQuestionKind::Boolean, "是否", vec![], None, None),
+            group_question(
+                3,
+                GroupQuestionKind::Score,
+                "打分",
+                prompt::score_levels(-1, 1),
+                Some(-1),
+                Some(1),
+            ),
+            choice(4),
+            choice(5),
+        ];
+        let answers = classify_mail_groups(
+            None,
+            &endpoint,
+            "测试模型",
+            "虚构测试正文",
+            &questions,
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("整批成功");
+        assert_eq!(
+            answers,
+            vec![
+                (2, GroupAnswer::Boolean { probability: 1.0 }),
+                (
+                    3,
+                    GroupAnswer::Score {
+                        level: 0,
+                        confidence: 0.8
+                    }
+                ),
+                (
+                    5,
+                    GroupAnswer::Choice {
+                        label: "其他".to_string(),
+                        confidence: 0.7
+                    }
+                )
+            ]
+        );
+        assert!(captured
+            .recv()
+            .expect("收到请求")
+            .starts_with("POST /v1/decisions HTTP/1.1\r\n"));
+    }
+
+    #[tokio::test]
+    async fn 决策站点不走聊天和模型列表() {
+        for kind in [ProviderKind::TypeSafe, ProviderKind::DecisionApi] {
+            let endpoint = endpoint(kind, "http://127.0.0.1:1/unreachable");
+            assert!(matches!(
+                list_models(None, &endpoint, Duration::from_secs(1)).await,
+                Err(AiError::Unsupported("拉取模型列表"))
+            ));
+            assert!(matches!(
+                chat(
+                    None,
+                    &endpoint,
+                    "测试模型",
+                    ThinkingLevel::Off,
+                    "测试指令",
+                    "虚构测试正文",
+                    Duration::from_secs(1)
+                )
+                .await,
+                Err(AiError::Unsupported("摘要与润色"))
+            ));
+        }
+    }
+    #[test]
+    fn 决策站点是否题兼容布尔值和类型别名() {
+        let answer = serde_json::json!({"type":"bool","noul":true});
+        assert_eq!(
+            parse_boolean_answer(&answer, Some("bool")),
+            Some(GroupAnswer::Boolean { probability: 1.0 })
+        );
+        assert!(parse_boolean_answer(&serde_json::json!({"type":"noul","value":2}), Some("noul")).is_none());
+    }
+
+    #[test]
+    fn 决策站点选择题可从概率推导把握程度() {
+        let question = GroupQuestion {
+            group_id: 1,
+            kind: GroupQuestionKind::Choice,
+            instructions: "分类".to_string(),
+            criteria: vec!["账单".to_string(), "其他".to_string()],
+            score_min: None,
+            score_max: None,
+        };
+        let answer = serde_json::json!({
+            "choice":"账单",
+            "probabilities":{"账单":0.9,"其他":0.1}
+        });
+        assert_eq!(
+            parse_choice_answer(&answer, None, &question),
+            Some(GroupAnswer::Choice {
+                label: "账单".to_string(),
+                confidence: 0.9,
+            })
+        );
+    }
+    #[test]
+    fn 通用决策站点完整地址原样使用() {
+        assert_eq!(
+            decision_endpoint_url(
+                "https://api.bamboonode.dev/v1/decisions",
+                ProviderKind::DecisionApi,
+            ),
+            "https://api.bamboonode.dev/v1/decisions"
+        );
+        assert_eq!(
+            decision_endpoint_url(
+                " https://example.test/custom/path?version=2 ",
+                ProviderKind::DecisionApi
+            ),
+            "https://example.test/custom/path?version=2"
+        );
+        assert_eq!(
+            decision_endpoint_url("https://example.test/custom/", ProviderKind::DecisionApi),
+            "https://example.test/custom"
+        );
+        assert_eq!(
+            decision_endpoint_url(" https://example.test/v1/SYSTEMONE/ ", ProviderKind::TypeSafe),
+            "https://example.test/v1/SYSTEMONE"
+        );
+        assert_eq!(
+            decision_endpoint_url("https://api.typesafe.ai/v1", ProviderKind::TypeSafe),
+            "https://api.typesafe.ai/v1/systemone"
+        );
+    }
+    #[test]
     fn systemone_地址不会重复拼() {
         assert_eq!(
-            systemone_url("https://pool.futureppo.top/v1"),
+            decision_endpoint_url("https://pool.futureppo.top/v1", ProviderKind::TypeSafe),
             "https://pool.futureppo.top/v1/systemone"
         );
         assert_eq!(
-            systemone_url("https://pool.futureppo.top/v1/systemone"),
+            decision_endpoint_url("https://pool.futureppo.top/v1/systemone", ProviderKind::TypeSafe),
             "https://pool.futureppo.top/v1/systemone"
         );
         assert_eq!(
-            systemone_url("https://pool.futureppo.top/v1/systemone/"),
+            decision_endpoint_url("https://pool.futureppo.top/v1/systemone/", ProviderKind::TypeSafe),
             "https://pool.futureppo.top/v1/systemone"
         );
     }
