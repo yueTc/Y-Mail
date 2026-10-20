@@ -3059,6 +3059,55 @@ mod tests {
     }
 
     #[test]
+    fn 保存站点拒绝敏感查询参数变体且保留普通参数() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let fake_value = "fake-query-credential";
+        for name in ["x-api-key", "client_secret", "access_key", "api-key"] {
+            let input = AiProviderInput {
+                id: None,
+                label: format!("变形{name}"),
+                kind: AiProviderKind::OpenAiCompatible,
+                base_url: format!("https://api.example.com/v1?{name}={fake_value}"),
+                default_model: "m".to_string(),
+                models: Vec::new(),
+                thinking_level: AiThinkingLevel::Off,
+                enabled: true,
+                proxy: AccountProxyMode::InheritGlobal,
+            };
+            let error = engine
+                .save_ai_provider(&input, None)
+                .expect_err("变形敏感参数必须拒绝");
+            let text = error.to_string();
+            assert!(text.contains("密钥框"), "{text}");
+            assert!(!text.contains(fake_value), "错误不能回显虚构值：{text}");
+        }
+        assert!(
+            engine.list_ai_providers().expect("列站点").is_empty(),
+            "被拒站点不能写入数据库"
+        );
+
+        let base_url = "https://api.example.com/v1?region=cn&version=2";
+        let saved = engine
+            .save_ai_provider(
+                &AiProviderInput {
+                    id: None,
+                    label: "普通参数".to_string(),
+                    kind: AiProviderKind::OpenAiCompatible,
+                    base_url: base_url.to_string(),
+                    default_model: "m".to_string(),
+                    models: Vec::new(),
+                    thinking_level: AiThinkingLevel::Off,
+                    enabled: true,
+                    proxy: AccountProxyMode::InheritGlobal,
+                },
+                None,
+            )
+            .expect("普通查询参数应能保存");
+        assert_eq!(saved.base_url, base_url);
+    }
+
+    #[test]
     fn 本机地址允许明文并可以预览() {
         let dir = tempfile::tempdir().expect("临时目录");
         let engine = engine(dir.path());

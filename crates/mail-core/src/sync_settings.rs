@@ -1575,17 +1575,20 @@ mod tests {
     }
 
     #[test]
-    fn 设置快照导入拒绝密钥查询参数且不回显密钥() {
+    fn 设置快照导入拒绝密钥查询参数变体且不回显密钥() {
         let dir = tempfile::tempdir().expect("临时目录");
         let (source, _secrets) = seeded(dir.path());
         let mut snapshot = source.export_settings_snapshot("dev-a", "本机", 1).expect("导出");
-        let fake_key = "sk-fake-import-secret";
         snapshot.ai_providers[0].kind = AiProviderKind::OpenAiCompatible;
-        snapshot.ai_providers[0].base_url = format!("https://api.example.com/v1?api_key={fake_key}");
+        for name in ["x-api-key", "client_secret", "access_key", "api-key"] {
+            let fake_key = "sk-fake-import-secret";
+            let mut candidate = snapshot.clone();
+            candidate.ai_providers[0].base_url = format!("https://api.example.com/v1?{name}={fake_key}");
 
-        let error = rejected_snapshot_error(snapshot);
-        assert!(error.contains("密钥框"), "{error}");
-        assert!(!error.contains(fake_key), "错误不能回显密钥：{error}");
+            let error = rejected_snapshot_error(candidate);
+            assert!(error.contains("密钥框"), "{error}");
+            assert!(!error.contains(fake_key), "错误不能回显密钥：{error}");
+        }
     }
 
     #[test]

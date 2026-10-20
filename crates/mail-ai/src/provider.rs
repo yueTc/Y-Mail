@@ -185,6 +185,29 @@ pub fn is_local_host(host: &str) -> bool {
     false
 }
 
+/// 查询参数名是否像密钥：忽略大小写和所有非字母数字字符后判断。
+fn is_sensitive_query_parameter(name: &str) -> bool {
+    let normalized: String = name
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect();
+    matches!(normalized.as_str(), "auth" | "sig")
+        || [
+            "token",
+            "apikey",
+            "secret",
+            "password",
+            "passwd",
+            "signature",
+            "credential",
+            "authorization",
+        ]
+        .iter()
+        .any(|needle| normalized.contains(needle))
+        || normalized.ends_with("key")
+}
+
 /// 校验并规整站点地址：去掉末尾斜杠；非本机必须 HTTPS。
 pub fn normalize_base_url(raw: &str, kind: ProviderKind) -> Result<String, AiError> {
     let trimmed = raw.trim();
@@ -198,28 +221,14 @@ pub fn normalize_base_url(raw: &str, kind: ProviderKind) -> Result<String, AiErr
         ));
     }
     // 有些站点会把密钥塞进查询串；这种地址一旦入库就等于密钥落库，必须拦住。
-    for (name, _) in url.query_pairs() {
-        let lowered = name.trim().to_ascii_lowercase();
-        if matches!(
-            lowered.as_str(),
-            "token"
-                | "key"
-                | "api_key"
-                | "apikey"
-                | "cdkey"
-                | "access_token"
-                | "secret"
-                | "auth"
-                | "authorization"
-                | "password"
-                | "passwd"
-                | "signature"
-                | "sig"
-        ) {
-            return Err(AiError::Config(
-                "站点地址里不能带账号或密码，请把密钥填在密钥框里",
-            ));
-        }
+    // 参数名先去掉大小写、下划线、连字符等噪声，再判断，防止变形绕过。
+    if url
+        .query_pairs()
+        .any(|(name, _)| is_sensitive_query_parameter(&name))
+    {
+        return Err(AiError::Config(
+            "站点地址里不能带账号或密码，请把密钥填在密钥框里",
+        ));
     }
     let host = url
         .host_str()
@@ -399,6 +408,10 @@ mod tests {
             "passwd",
             "signature",
             "sig",
+            "x-api-key",
+            "client_secret",
+            "access_key",
+            "api-key",
         ] {
             assert!(
                 normalize_base_url(
