@@ -45,6 +45,7 @@ fn provider_kind(kind: AiProviderKind) -> ProviderKind {
         AiProviderKind::DeepL => ProviderKind::DeepL,
         AiProviderKind::Ollama => ProviderKind::Ollama,
         AiProviderKind::TypeSafe => ProviderKind::TypeSafe,
+        AiProviderKind::DecisionApi => ProviderKind::DecisionApi,
     }
 }
 
@@ -363,6 +364,10 @@ impl MailEngine {
             return Err(EngineError::BadRequest("请填写站点名称".to_string()));
         }
         let base_url = normalize_base_url(&input.base_url, provider_kind(input.kind))?;
+        let default_model = input.default_model.trim();
+        if input.kind == AiProviderKind::DecisionApi && default_model.is_empty() {
+            return Err(EngineError::BadRequest("决策模型站点必须填写模型".to_string()));
+        }
         if let AccountProxyMode::Custom(id) = input.proxy {
             if self.store().get_proxy(id)?.is_none() {
                 return Err(EngineError::ProxyNotFound(id.0));
@@ -372,7 +377,7 @@ impl MailEngine {
             label: label.to_string(),
             kind: input.kind,
             base_url,
-            default_model: input.default_model.trim().to_string(),
+            default_model: default_model.to_string(),
             models: input.models.clone(),
             thinking_level: input.thinking_level,
             enabled: input.enabled,
@@ -502,7 +507,7 @@ impl MailEngine {
     ) -> Result<Vec<String>, EngineError> {
         let base_url = normalize_base_url(base_url, provider_kind(kind))?;
         let model = model.trim();
-        if kind == AiProviderKind::TypeSafe && model.is_empty() {
+        if provider_kind(kind).is_decision() && model.is_empty() {
             return Err(EngineError::BadRequest("请选择或填写测试模型".to_string()));
         }
         if let AccountProxyMode::Custom(id) = proxy {
@@ -523,7 +528,7 @@ impl MailEngine {
             base_url: &base_url,
             api_key: secret,
         };
-        if kind == AiProviderKind::TypeSafe {
+        if provider_kind(kind).is_decision() {
             // jev 没有「拉模型列表」接口，测试连接改成一次极小的试探分类请求。
             let choices = prompt::TYPESAFE_PROBE_CHOICES
                 .iter()
@@ -1680,9 +1685,9 @@ impl MailEngine {
                 .ok_or(EngineError::AiProviderNotFound(entry.provider_id))?,
             None => {
                 if function == AiFunction::Classify {
-                    // 分类只认显式配好的 TypeSafe jev，绝不回退到第一个启用站点。
+                    // 分类只认显式配好的决策模型站点，绝不回退到第一个启用站点。
                     return Err(EngineError::BadRequest(
-                        "邮件分类还没有配置 TypeSafe jev 站点".to_string(),
+                        "邮件分类还没有配置决策模型站点".to_string(),
                     ));
                 }
                 self.store()
@@ -1692,7 +1697,7 @@ impl MailEngine {
                     .ok_or(EngineError::AiDisabled)?
             }
         };
-        // 站点能力校验：分类只认 TypeSafe jev，聊天类站点也做不了分类。
+        // 站点能力校验：分类只认决策模型站点，聊天类站点也做不了分类。
         if !provider_kind(provider.kind).supports(provider_function(function)) {
             return Err(EngineError::BadRequest(format!(
                 "站点「{}」不支持这个功能，请到设置里换成支持的站点",
@@ -2114,6 +2119,51 @@ mod tests {
             })
             .unwrap_or(0)
     }
+    #[tokio::test]
+    async fn 通用决策站点必须填写模型() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let input = AiProviderInput {
+            id: None,
+            label: "决策".to_string(),
+            kind: AiProviderKind::DecisionApi,
+            base_url: "https://api.bamboonode.dev/v1/decisions".to_string(),
+            default_model: "   ".to_string(),
+            models: Vec::new(),
+            thinking_level: AiThinkingLevel::Off,
+            enabled: true,
+            proxy: AccountProxyMode::Direct,
+        };
+        let error = engine.save_ai_provider(&input, None).expect_err("空模型应被拒绝");
+        assert!(format!("{error}").contains("决策模型站点必须填写模型"));
+    }
+
+    #[tokio::test]
+    async fn 通用决策站点测试连接使用完整地址() {
+        let (port, captured) = fake_capture_server(
+            r#"{"answers":{"category":{"type":"choice","choice":"账单","confidence":0.99}}}"#,
+        )
+        .await;
+        let base = format!("http://127.0.0.1:{port}/v1/decisions");
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = engine(dir.path());
+        let models = engine
+            .test_ai_provider(
+                AiProviderKind::DecisionApi,
+                &base,
+                "startlux-decision-27b-autothink",
+                Some(&Secret::new("test-key")),
+                None,
+                AccountProxyMode::Direct,
+            )
+            .await
+            .expect("测试连接");
+        assert_eq!(models, vec!["startlux-decision-27b-autothink"]);
+        let request = captured.recv().expect("收到请求");
+        assert!(request.starts_with("POST /v1/decisions "), "{request}");
+        assert!(request.contains("\"model\":\"startlux-decision-27b-autothink\""));
+    }
+
     #[tokio::test]
     async fn typesafe_test_connection_uses_selected_relay_model() {
         let dir = tempfile::tempdir().expect("临时目录");
