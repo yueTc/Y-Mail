@@ -2,9 +2,8 @@
 //!
 //! 关键约束：
 //! 1. `rusqlite::Connection` 可以跨线程移动（`Send`），但不能被多个线程共享（不是 `Sync`）。
-//!    Tauri 的应用状态要求 `Send + Sync`，所以引擎句柄必须套一层锁。
-//! 2. 连接自检最长可跑十几秒，不能阻塞界面线程，所以锁用 `tokio::sync::Mutex`：
-//!    命令是 `async` 的，自检期间会让出执行权，界面照常响应。
+//!    这个约束由引擎内部的短锁解决，外壳不再给整个引擎套全局锁。
+//! 2. 分类、自检等长任务可以各自持有共享引擎句柄；读信等其它命令不会被长任务挡住。
 //! 3. 状态里同时保存不可变的初始化摘要，避免每次查询都加锁。
 //! 4. 存储目录与通知开关存在默认应用数据目录的 `settings.json`，界面改完立刻写盘。
 
@@ -12,16 +11,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use tokio::sync::{Mutex, MutexGuard};
-
 use mail_core::{EngineInit, MailEngine};
 
 use crate::logging::Logging;
 use crate::settings::AppSettings;
 
-/// 外壳状态：引擎句柄（加锁）+ 只读摘要 + 日志句柄 + 应用设置。
+/// 外壳状态：共享引擎句柄 + 只读摘要 + 日志句柄 + 应用设置。
 pub struct AppState {
-    engine: Mutex<MailEngine>,
+    engine: Arc<MailEngine>,
     init: EngineInit,
     /// 日志句柄：字段本身不再被读，但必须留着——它一被丢弃，后台写日志的线程就停了。
     #[allow(dead_code)]
@@ -70,7 +67,7 @@ impl AppState {
         let block_remote_images = engine.block_remote_images_handle();
         block_remote_images.store(settings.block_remote_images_by_default, Ordering::Relaxed);
         Self {
-            engine: Mutex::new(engine),
+            engine: Arc::new(engine),
             init,
             logging,
             default_data_dir,
@@ -87,9 +84,9 @@ impl AppState {
         }
     }
 
-    /// 取得引擎句柄；调用方持有返回值期间独占引擎（自检、写库都经它）。
-    pub(crate) async fn engine(&self) -> MutexGuard<'_, MailEngine> {
-        self.engine.lock().await
+    /// 取得共享引擎句柄；多个命令可以并行持有，内部数据库锁仍只包住同步操作。
+    pub(crate) async fn engine(&self) -> Arc<MailEngine> {
+        self.engine.clone()
     }
 
     /// 默认应用数据目录。
@@ -193,5 +190,44 @@ impl AppState {
     /// 当前引擎实际在用的附件目录。
     pub fn active_attachment_dir(&self) -> &str {
         &self.init.attachment_dir
+    }
+}
+
+#[cfg(test)]
+mod engine_concurrency_tests {
+    use std::sync::atomic::{AtomicBool, AtomicU8};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use mail_core::{MailEngine, MemorySecretStore};
+
+    use super::AppState;
+    use crate::logging::Logging;
+    use crate::settings::AppSettings;
+
+    #[tokio::test]
+    async fn 取引擎句柄不会等待另一个长任务() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let engine = MailEngine::initialize_with_secrets(dir.path(), Arc::new(MemorySecretStore::new()))
+            .expect("初始化引擎");
+        let settings = AppSettings::default();
+        let state = AppState::new(
+            engine,
+            Logging::init(dir.path().join("logs")),
+            dir.path().to_path_buf(),
+            settings.clone(),
+            Arc::new(AtomicBool::new(settings.notify_new_mail)),
+            Arc::new(AtomicBool::new(settings.notify_ai_enabled)),
+            Arc::new(AtomicU8::new(settings.notify_new_mail_when.code())),
+            Arc::new(AtomicBool::new(settings.classify_enabled)),
+            Arc::new(AtomicU8::new(settings.normalized_classify_confidence_percent())),
+            false,
+        );
+
+        // 模拟一个长任务已经拿到引擎句柄；其它命令仍应马上拿到自己的句柄。
+        let first = state.engine().await;
+        let second = tokio::time::timeout(Duration::from_millis(50), state.engine()).await;
+        assert!(second.is_ok(), "全局引擎锁不应阻塞其它命令");
+        drop(first);
     }
 }
