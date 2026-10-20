@@ -110,6 +110,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "0017_ai_provider_proxy",
         sql: include_str!("sql/0017_ai_provider_proxy.sql"),
     },
+    Migration {
+        version: 18,
+        name: "0018_decision_provider_kind",
+        sql: include_str!("sql/0018_decision_provider_kind.sql"),
+    },
 ];
 
 /// 单条迁移的执行结果。
@@ -320,8 +325,8 @@ mod tests {
         let mut store = Store::open_in_memory().expect("打开内存库");
 
         let first = store.run_migrations().expect("首次迁移");
-        assert_eq!(first.applied_count(), 17, "首次应应用 17 条迁移");
-        assert_eq!(first.current_version, 17);
+        assert_eq!(first.applied_count(), 18, "首次应应用 18 条迁移");
+        assert_eq!(first.current_version, 18);
         assert_eq!(first.applied[0].name, "0001_core_bootstrap");
         assert!(!first.applied[0].applied_at.is_empty(), "登记时间不应为空");
 
@@ -330,7 +335,7 @@ mod tests {
 
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
         );
     }
 
@@ -397,7 +402,7 @@ mod tests {
         store.run_migrations().expect("升级到三号库");
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
         );
 
         // 升级到七号库后，旧账号的授权字段应为空（NULL / 空串），不影响既有数据。
@@ -451,7 +456,7 @@ mod tests {
         store.run_migrations().expect("升级到十二号库");
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
         );
 
         // 旧 translate 映射要保留；新增 notification_verify 要能写；非法值仍被拒。
@@ -555,7 +560,7 @@ mod tests {
         store.run_migrations().expect("升级到十三号库");
         assert_eq!(
             store.applied_migration_versions().expect("读取版本"),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
         );
 
         let conn = store.raw_connection_for_test();
@@ -754,9 +759,72 @@ mod tests {
         );
     }
     #[test]
+    fn 从十七号库升级后可写决策模型站点() {
+        let mut store = Store::open_in_memory().expect("打开内存库");
+        {
+            let conn = store.raw_connection_for_test();
+            conn.execute_batch(super::MIGRATION_TABLE_SQL).expect("建登记表");
+            for migration in &MIGRATIONS[..17] {
+                conn.execute_batch(migration.sql).expect("应用旧迁移");
+                conn.execute(
+                    "INSERT INTO schema_migration (version, name, checksum) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![migration.version, migration.name, checksum(migration.sql)],
+                )
+                .expect("登记旧迁移");
+            }
+            conn.execute(
+                "INSERT INTO ai_provider (label, kind, base_url, default_model) \
+                 VALUES ('旧 JEV', 'typesafe', 'https://api.typesafe.ai/v1', 'jev-latest')",
+                [],
+            )
+            .expect("插入旧决策站点");
+            conn.execute_batch(
+                "INSERT INTO proxy (id, label, kind, host, port) VALUES (18, '测试代理', 'http', '127.0.0.1', 8080);
+                 UPDATE ai_provider SET models_json = '[\"jev-latest\"]', thinking_level = 'high',
+                     enabled = 0, api_key_ref = 'ai/test-reference-only', proxy_mode = 'custom', proxy_id = 18,
+                     created_at = '2026-10-19T00:00:00Z', updated_at = '2026-10-20T00:00:00Z';
+                 INSERT INTO ai_model_map (function, provider_id, model, thinking_level, updated_at)
+                     VALUES ('classify', 1, 'jev-latest', 'low', '2026-10-20T00:00:00Z');",
+            )
+            .expect("准备旧站点字段与映射");
+        }
+
+        let old_providers = store.list_ai_providers().expect("读取旧站点快照");
+        let old_maps = store.list_ai_model_maps().expect("读取旧映射快照");
+        store.run_migrations().expect("升级到十八号库");
+        assert_eq!(store.list_ai_providers().expect("读取升级后站点"), old_providers);
+        assert_eq!(store.list_ai_model_maps().expect("读取升级后映射"), old_maps);
+        assert_eq!(
+            store.applied_migration_versions().expect("读取版本"),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+        );
+
+        let conn = store.raw_connection_for_test();
+        let old_kind: String = conn
+            .query_row("SELECT kind FROM ai_provider WHERE label = '旧 JEV'", [], |row| {
+                row.get(0)
+            })
+            .expect("旧站点应保留");
+        assert_eq!(old_kind, "typesafe");
+        conn.execute(
+            "INSERT INTO ai_provider (label, kind, base_url, default_model) \
+             VALUES ('StartLux', 'decision_api', 'https://api.bamboonode.dev/v1/decisions', \
+                     'startlux-decision-27b-autothink')",
+            [],
+        )
+        .expect("升级后应能写 decision_api 站点");
+        assert!(conn
+            .execute(
+                "INSERT INTO ai_provider (label, kind, base_url) VALUES ('坏', 'nope', 'https://x')",
+                [],
+            )
+            .is_err());
+    }
+
+    #[test]
     fn 迁移清单与校验和的基本性质() {
-        assert_eq!(MIGRATIONS.len(), 17);
-        assert_eq!(supported_version(), 17);
+        assert_eq!(MIGRATIONS.len(), 18);
+        assert_eq!(supported_version(), 18);
         assert_eq!(checksum("abc"), checksum("abc"));
         assert_ne!(checksum("abc"), checksum("abd"));
     }

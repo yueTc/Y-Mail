@@ -25,6 +25,9 @@ pub enum AiProviderKind {
     /// TypeSafe jev；只做邮件分类。
     #[serde(rename = "typesafe")]
     TypeSafe,
+    /// 通用决策模型站点；只做邮件分类。
+    #[serde(rename = "decision_api")]
+    DecisionApi,
 }
 
 impl AiProviderKind {
@@ -35,6 +38,7 @@ impl AiProviderKind {
             Self::DeepL => "deepl",
             Self::Ollama => "ollama",
             Self::TypeSafe => "typesafe",
+            Self::DecisionApi => "decision_api",
         }
     }
 
@@ -45,6 +49,7 @@ impl AiProviderKind {
             "deepl" => Some(Self::DeepL),
             "ollama" => Some(Self::Ollama),
             "typesafe" | "type_safe" | "jev" => Some(Self::TypeSafe),
+            "decision_api" | "decision" | "generic_decision" => Some(Self::DecisionApi),
             _ => None,
         }
     }
@@ -640,6 +645,31 @@ mod tests {
         let mut store = Store::open_in_memory().expect("打开内存库");
         store.run_migrations().expect("迁移");
         store
+    }
+
+    #[test]
+    fn decision_api_类型可解析且可写回() {
+        assert_eq!(
+            AiProviderKind::parse("decision_api"),
+            Some(AiProviderKind::DecisionApi)
+        );
+        assert_eq!(
+            AiProviderKind::parse("decision"),
+            Some(AiProviderKind::DecisionApi)
+        );
+        assert_eq!(AiProviderKind::DecisionApi.as_str(), "decision_api");
+        assert_eq!(
+            AiProviderKind::parse("generic_decision"),
+            Some(AiProviderKind::DecisionApi)
+        );
+        assert_eq!(
+            serde_json::to_string(&AiProviderKind::DecisionApi).expect("序列化站点类型"),
+            "\"decision_api\""
+        );
+        assert_eq!(
+            serde_json::from_str::<AiProviderKind>("\"decision_api\"").expect("还原站点类型"),
+            AiProviderKind::DecisionApi
+        );
     }
 
     fn provider() -> NewAiProvider {
