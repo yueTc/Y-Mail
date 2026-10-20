@@ -12,6 +12,7 @@ import MessageReader, {
 } from "../MessageReader";
 import ComposePanel from "../ComposePanel";
 import AiPanel from "../AiPanel";
+import AiProviderDialog from "../AiProviderDialog";
 import type {
   AccountInboxSummary,
   AiAuthorization,
@@ -647,6 +648,71 @@ describe("AI 站点设置弹窗", () => {
     hasPassword: false,
   };
 
+  it("选择通用决策站点时预填完整地址和 StartLux 模型", async () => {
+    render(
+      <AiProviderDialog
+        open
+        provider={null}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    const dialog = await screen.findByRole("dialog");
+    const kindSelect = within(dialog).getByLabelText("AI 站点类型") as HTMLSelectElement;
+    const kindLabels = within(kindSelect).getAllByRole("option").map((option) => option.textContent);
+    expect(kindLabels).toContain("决策模型站点");
+    expect(kindLabels).not.toContain("旧版 TypeSafe jev（兼容）");
+    fireEvent.change(kindSelect, { target: { value: "decision_api" } });
+    expect((within(dialog).getByLabelText("AI 站点地址") as HTMLInputElement).value)
+      .toBe("https://api.bamboonode.dev/v1/decisions");
+    expect((within(dialog).getByLabelText("AI 站点地址") as HTMLInputElement).placeholder)
+      .toContain("填写完整请求地址");
+    expect((within(dialog).getByLabelText("默认模型") as HTMLInputElement).value)
+      .toBe("startlux-decision-27b-autothink");
+    expect(within(dialog).getByLabelText("测试模型")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "测试连接" })).toBeTruthy();
+  });
+
+  it("编辑旧 TypeSafe 站点时保留兼容类型名称", async () => {
+    render(
+      <AiProviderDialog
+        open
+        provider={provider({
+          kind: "typesafe",
+          baseUrl: "https://api.typesafe.ai/v1",
+          defaultModel: "jev-latest",
+        })}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    const dialog = await screen.findByRole("dialog");
+    const kindSelect = within(dialog).getByLabelText("AI 站点类型") as HTMLSelectElement;
+    expect(kindSelect.value).toBe("typesafe");
+    expect(within(kindSelect).getAllByRole("option").map((option) => option.textContent))
+      .toContain("旧版 TypeSafe jev（兼容）");
+  });
+
+  it("通用决策站点测试模型为空时不发请求", async () => {
+    render(
+      <AiProviderDialog
+        open
+        provider={null}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("AI 站点类型"), {
+      target: { value: "decision_api" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("默认模型"), { target: { value: "" } });
+    fireEvent.change(within(dialog).getByLabelText("手填测试模型"), { target: { value: "   " } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "测试连接" }));
+    expect((await within(dialog).findByRole("alert")).textContent)
+      .toContain("请选择或填写测试模型");
+    expect(api.testAiProvider).not.toHaveBeenCalled();
+  });
   it("点「新增 AI 站点」弹出独立弹窗，Esc 能关掉", async () => {
     render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={async () => {}} />);
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -1012,26 +1078,44 @@ describe("邮件自动分类设置", () => {
     proxy: { mode: "inherit" },
   };
 
+  const decisionProvider: AiProvider = {
+    id: 3,
+    label: "StartLux",
+    kind: "decision_api",
+    baseUrl: "https://api.bamboonode.dev/v1/decisions",
+    defaultModel: "startlux-decision-27b-autothink",
+    models: ["startlux-decision-27b-autothink"],
+    thinkingLevel: "off",
+    enabled: true,
+    hasKey: true,
+    supportedFunctions: ["classify"],
+    proxy: { mode: "inherit" },
+  };
+
   function prepare() {
-    vi.mocked(api.listAiProviders).mockResolvedValue([openAiProvider, typeSafeProvider]);
-    vi.mocked(api.listAiModelMaps).mockResolvedValue([]);
+    vi.mocked(api.listAiProviders).mockResolvedValue([
+      openAiProvider,
+      typeSafeProvider,
+      decisionProvider,
+    ]);    vi.mocked(api.listAiModelMaps).mockResolvedValue([]);
     vi.mocked(api.listAiAudit).mockResolvedValue([]);
     vi.mocked(api.listLabelGroups).mockResolvedValue([]);
     return render(<AiPanel notifyAiEnabled={false} onNotifyAiEnabledChange={vi.fn()} />);
   }
 
-  it("邮件分类的站点下拉只列支持分类的 TypeSafe jev", async () => {
+  it("邮件分类站点同时列出新决策站点和旧 TypeSafe", async () => {
     prepare();
     fireEvent.click(await screen.findByRole("button", { name: "展开邮件分类" }));
     const select = await screen.findByLabelText("邮件分类站点");
     const texts = within(select)
       .getAllByRole("option")
       .map((option) => option.textContent ?? "");
+    expect(texts.some((text) => text.includes("StartLux"))).toBe(true);
     expect(texts.some((text) => text.includes("jev"))).toBe(true);
     expect(texts.some((text) => text.includes("中转站"))).toBe(false);
   });
 
-  it("没有 TypeSafe jev 站点时明确提示去哪儿新增", async () => {
+  it("没有决策模型站点时明确提示去哪儿新增", async () => {
     vi.mocked(api.listAiProviders).mockResolvedValue([openAiProvider]);
     vi.mocked(api.listAiModelMaps).mockResolvedValue([]);
     vi.mocked(api.listAiAudit).mockResolvedValue([]);
@@ -1040,7 +1124,7 @@ describe("邮件自动分类设置", () => {
     fireEvent.click(await screen.findByRole("button", { name: "展开邮件分类" }));
     expect(
       await screen.findByText(
-        "还没有 TypeSafe jev 站点：请先到上面的「AI 站点」里新增一个，再回来选。",
+        "还没有可用的决策模型站点：请先到上面的「AI 站点」里新增一个，再回来选。",
       ),
     ).toBeTruthy();
   });
@@ -1428,6 +1512,26 @@ describe("TypeSafe 测试模型选择", () => {
     expect(api.testAiProvider).not.toHaveBeenCalled();
   });
 
+  it("通用决策站点卡片也显示测试模型选择器并使用测试连接", async () => {
+    const card = await prepare({
+      kind: "decision_api",
+      baseUrl: "https://api.bamboonode.dev/v1/decisions",
+      defaultModel: "startlux-decision-27b-autothink",
+      models: ["startlux-decision-27b-autothink"],
+    });
+    fireEvent.click(within(card).getByRole("button", { name: "展开分类中转" }));
+    expect(within(card).getByText("决策模型站点")).toBeTruthy();
+    expect(within(card).getByLabelText("测试模型")).toBeTruthy();
+    fireEvent.click(within(card).getByRole("button", { name: "测试连接" }));
+    await waitFor(() => expect(api.testAiProvider).toHaveBeenCalledWith(
+      "decision_api",
+      "https://api.bamboonode.dev/v1/decisions",
+      undefined,
+      7,
+      { mode: "direct" },
+      "startlux-decision-27b-autothink",
+    ));
+  });
   it("编辑弹窗使用当前选择测试，成功不覆盖原模型列表或默认模型", async () => {
     const card = await prepare();
     fireEvent.click(within(card).getByRole("button", { name: "编辑" }));

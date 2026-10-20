@@ -570,6 +570,18 @@ export const EN: Record<string, string> = {
   "粉": "Pink",
   "填到 /v1 为止，例如 https://api.typesafe.ai/v1，不要带 /systemone": "Fill in up to /v1, e.g. https://api.typesafe.ai/v1; do not append /systemone",
   "TypeSafe jev": "TypeSafe jev",
+  "决策模型站点": "Decision model site",
+  "旧版 TypeSafe jev（兼容）": "Legacy TypeSafe jev (compatible)",
+  "填写完整请求地址，例如 https://api.bamboonode.dev/v1/decisions":
+    "Enter the full request URL, e.g. https://api.bamboonode.dev/v1/decisions",
+  "请先在「邮件分类」里选择决策模型站点，再打开组开关。":
+    "Choose a decision model site under Email classification before enabling a group.",
+  "邮件分类只支持决策模型站点。":
+    "Email classification supports decision model sites only.",
+  "还没有可用的决策模型站点：请先到上面的「AI 站点」里新增一个，再回来选。":
+    "No decision model site yet: add one under AI sites above, then come back and choose it.",
+  "请先在「邮件分类」里选择决策模型站点，再打开自动分类。":
+    "Choose a decision model site under Email classification before enabling automatic classification.",
   "邮件分类": "Email classification",
   "邮件自动分类": "Automatic email classification",
   "开启邮件自动分类": "Turn on automatic email classification",

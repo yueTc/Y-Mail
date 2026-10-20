@@ -590,8 +590,13 @@ export interface Signature {
 }
 // ============================ AI 与翻译类型（Wave 7） ============================
 
-/** AI 站点类型：OpenAI 兼容、DeepL、本机 Ollama、TypeSafe jev。 */
-export type AiProviderKind = "openai_compatible" | "deepl" | "ollama" | "typesafe";
+/** AI 站点类型：OpenAI 兼容、DeepL、本机 Ollama、旧 TypeSafe 和通用决策模型。 */
+export type AiProviderKind =
+  | "openai_compatible"
+  | "deepl"
+  | "ollama"
+  | "typesafe"
+  | "decision_api";
 
 /** 思考程度四档。 */
 export type AiThinkingLevel = "off" | "low" | "medium" | "high";
@@ -623,7 +628,7 @@ export interface AiProviderDraft {
 export interface AiProvider extends AiProviderDraft {
   id: number;
   hasKey: boolean;
-  /** 这个站点类型支持的功能标识；邮件分类只认 TypeSafe jev。 */
+  /** 这个站点类型支持的功能标识；邮件分类只认带 classify 能力的站点。 */
   supportedFunctions: AiFunction[];
 }
 

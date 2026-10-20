@@ -24,6 +24,7 @@ import {
   type Proxy,
 } from "./api";
 import AiProviderDialog, {
+  isDecisionKind,
   KIND_LABEL,
   THINKING_LABEL,
   THINKING_ORDER,
@@ -135,13 +136,13 @@ function groupEnableBlockReason(
   provider: AiProvider | undefined,
 ): string {
   if (!draft.providerId || !provider) {
-    return t("请先在「邮件分类」里选择 TypeSafe jev 站点，再打开组开关。");
+    return t("请先在「邮件分类」里选择决策模型站点，再打开组开关。");
   }
   if (!provider.enabled) {
     return t("所选站点已停用，请先启用或换一个站点。");
   }
-  if (provider.kind !== "typesafe") {
-    return t("邮件分类只支持 TypeSafe jev 站点。");
+  if (!isDecisionKind(provider.kind)) {
+    return t("邮件分类只支持决策模型站点。");
   }
   const model = draft.model.trim() || provider.defaultModel.trim();
   if (model === "") {
@@ -361,7 +362,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
     [refresh],
   );
 
-  /** 测试一个已存站点的连接；TypeSafe jev 没有模型列表接口，只做一次试探分类。 */
+  /** 测试一个已存决策站点的连接；这类站点没有模型列表接口，只做一次试探分类。 */
   const testProvider = useCallback(async (provider: AiProvider, model: string) => {
     setError("");
     setNotice("");
@@ -428,15 +429,15 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
         return;
       }
       if (!classifyDraft.providerId || !classifyProvider) {
-        setClassifyError(t("请先在「邮件分类」里选择 TypeSafe jev 站点，再打开自动分类。"));
+        setClassifyError(t("请先在「邮件分类」里选择决策模型站点，再打开自动分类。"));
         return;
       }
       if (!classifyProvider.enabled) {
         setClassifyError(t("所选站点已停用，请先启用或换一个站点。"));
         return;
       }
-      if (classifyProvider.kind !== "typesafe") {
-        setClassifyError(t("邮件分类只支持 TypeSafe jev 站点。"));
+      if (!isDecisionKind(classifyProvider.kind)) {
+        setClassifyError(t("邮件分类只支持决策模型站点。"));
         return;
       }
       const model = classifyDraft.model.trim() || classifyProvider.defaultModel.trim();
@@ -1042,7 +1043,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
                     </div>
                     <div className="card-sub">{t("代理策略：")}{proxyText(provider.proxy, proxies)}</div>
                   </div>
-                  {provider.kind === "typesafe" && (
+                  {isDecisionKind(provider.kind) && (
                     <div className="ai-provider-test">
                       <AiTestModelPicker
                         value={testModel}
@@ -1091,7 +1092,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
       <div className="ai-feature-list">
         {FUNCTION_ORDER.map((fn) => {
           const draft = featureDrafts[fn] ?? { providerId: "", model: "", thinkingLevel: "" };
-          // 只列支持这个功能的站点：分类这一行就只会出现 TypeSafe jev。
+          // 只列支持这个功能的站点：分类这一行会列出新决策站点和旧 TypeSafe。
           const candidates = providers.filter((provider) =>
             provider.supportedFunctions.includes(fn),
           );
@@ -1147,7 +1148,7 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
                 {candidates.length === 0 && (
                   <p className="hint">
                     {fn === "classify"
-                      ? t("还没有 TypeSafe jev 站点：请先到上面的「AI 站点」里新增一个，再回来选。")
+                      ? t("还没有可用的决策模型站点：请先到上面的「AI 站点」里新增一个，再回来选。")
                       : t("还没有支持这个功能的站点。")}
                   </p>
                 )}

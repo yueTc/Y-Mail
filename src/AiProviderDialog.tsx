@@ -38,12 +38,18 @@ export const THINKING_LABEL: Record<AiThinkingLevel, string> = {
 
 export const THINKING_ORDER: AiThinkingLevel[] = ["off", "low", "medium", "high"];
 
+/** 需要选测试模型的决策站点：通用决策模型和旧 TypeSafe。 */
+export function isDecisionKind(kind: AiProviderKind): boolean {
+  return kind === "decision_api" || kind === "typesafe";
+}
+
 /** 站点类型的中文名；站点卡片列站点时也用同一份。 */
 export const KIND_LABEL: Record<AiProviderKind, string> = {
   openai_compatible: "OpenAI 兼容站点",
   deepl: "DeepL",
   ollama: "本机 Ollama",
-  typesafe: "TypeSafe jev",
+  typesafe: "旧版 TypeSafe jev（兼容）",
+  decision_api: "决策模型站点",
 };
 
 export type AiProviderDialogProps = {
@@ -363,7 +369,7 @@ export default function AiProviderDialog({
 
   const testDraft = useCallback(async () => {
     setModelsHint("");
-    if (editing.kind === "typesafe" && selectedTestModel.trim() === "") {
+    if (isDecisionKind(editing.kind) && selectedTestModel.trim() === "") {
       setError(t("请选择或填写测试模型"));
       return;
     }
@@ -381,14 +387,14 @@ export default function AiProviderDialog({
         apiKey === "" ? undefined : apiKey,
         editing.id,
         proxy,
-        editing.kind === "typesafe" ? selectedTestModel.trim() : undefined,
+        isDecisionKind(editing.kind) ? selectedTestModel.trim() : undefined,
       );
       setModelsHint(
-        editing.kind === "typesafe"
+        isDecisionKind(editing.kind)
           ? t("连接成功，测试模型：{0}", [selectedTestModel.trim()])
           : t("连接成功，拉到 {0} 个模型。", [models.length]),
       );
-      if (editing.kind !== "typesafe" && models.length > 0) {
+      if (!isDecisionKind(editing.kind) && models.length > 0) {
         setEditing((old) => ({ ...old, modelsText: models.join("\n") }));
       }
     } catch (caught) {
@@ -455,11 +461,16 @@ export default function AiProviderDialog({
                     setTestModel(null);
                     setModelsHint("");
                     setEditing((old) => {
-                      // TypeSafe jev 只有分类接口：地址与模型都有官方默认值，空着就预填。
+                      // 决策模型站点都有官方默认值，空着就预填；旧 TypeSafe 继续兼容。
                       const preset =
-                        kind === "typesafe"
-                          ? { baseUrl: "https://api.typesafe.ai/v1", defaultModel: "jev-latest" }
-                          : undefined;
+                        kind === "decision_api"
+                          ? {
+                              baseUrl: "https://api.bamboonode.dev/v1/decisions",
+                              defaultModel: "startlux-decision-27b-autothink",
+                            }
+                          : kind === "typesafe"
+                            ? { baseUrl: "https://api.typesafe.ai/v1", defaultModel: "jev-latest" }
+                            : undefined;
                       return {
                         ...old,
                         kind,
@@ -473,11 +484,13 @@ export default function AiProviderDialog({
                     });
                   }}
                 >
-                  {(Object.keys(KIND_LABEL) as AiProviderKind[]).map((kind) => (
-                    <option key={kind} value={kind}>
-                      {t(KIND_LABEL[kind])}
-                    </option>
-                  ))}
+                  {(Object.keys(KIND_LABEL) as AiProviderKind[])
+                    .filter((kind) => kind !== "typesafe" || editing.kind === "typesafe")
+                    .map((kind) => (
+                      <option key={kind} value={kind}>
+                        {t(KIND_LABEL[kind])}
+                      </option>
+                    ))}
                 </select>
               </label>
             </div>
@@ -486,9 +499,11 @@ export default function AiProviderDialog({
                 aria-label={t("AI 站点地址")}
                 value={editing.baseUrl}
                 placeholder={
-                  editing.kind === "typesafe"
-                    ? t("填到 /v1 为止，例如 https://api.typesafe.ai/v1，不要带 /systemone")
-                    : t("例如 https://api.example.com/v1，本机 Ollama 可填 http://127.0.0.1:11434")
+                  editing.kind === "decision_api"
+                    ? t("填写完整请求地址，例如 https://api.bamboonode.dev/v1/decisions")
+                    : editing.kind === "typesafe"
+                      ? t("填到 /v1 为止，例如 https://api.typesafe.ai/v1，不要带 /systemone")
+                      : t("例如 https://api.example.com/v1，本机 Ollama 可填 http://127.0.0.1:11434")
                 }
                 onChange={(event) => setEditing((old) => ({ ...old, baseUrl: event.target.value }))}
               />
@@ -609,7 +624,7 @@ export default function AiProviderDialog({
                 }
               />
               {t("启用这个站点")}</label>
-            {editing.kind === "typesafe" && (
+            {isDecisionKind(editing.kind) && (
               <AiTestModelPicker
                 value={selectedTestModel}
                 defaultModel={editing.defaultModel}
@@ -626,7 +641,7 @@ export default function AiProviderDialog({
               <button type="button" className="primary" onClick={() => void saveProvider()} disabled={busy}>
                 {t("保存")}</button>
               <button type="button" onClick={() => void testDraft()} disabled={busy}>
-                {editing.kind === "typesafe" ? t("测试连接") : t("测试连接并拉取模型")}</button>
+                {isDecisionKind(editing.kind) ? t("测试连接") : t("测试连接并拉取模型")}</button>
               <button type="button" onClick={requestClose} disabled={busy}>
                 {t("取消")}</button>
             </div>
