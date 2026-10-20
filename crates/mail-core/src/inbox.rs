@@ -84,6 +84,22 @@ impl MailEngine {
         Ok(self.store().list_inbox_folders()?)
     }
 
+    /// 把当前账号或指定文件夹里的未读邮件一次改为已读。
+    ///
+    /// 只写本机库，不访问网络，也不生成服务器回写任务。
+    pub fn mark_all_read(&self, account_id: i64, folder_id: Option<i64>) -> Result<usize, EngineError> {
+        self.get_account(mail_domain::account::AccountId(account_id))?;
+        if let Some(folder_id) = folder_id {
+            let folder = self
+                .store()
+                .get_folder_by_id(folder_id)?
+                .ok_or_else(|| EngineError::BadRequest("文件夹不存在或已被删除".to_string()))?;
+            if folder.account_id != account_id {
+                return Err(EngineError::BadRequest("文件夹不属于这个邮箱".to_string()));
+            }
+        }
+        Ok(self.store().mark_all_read(account_id, folder_id)?)
+    }
     /// 切换一封邮件的已读状态，并同步维护所在文件夹的未读数。
     ///
     /// 返回 `true` 表示状态确实变了（调用方据此决定是否回写服务器）；
@@ -125,5 +141,13 @@ mod tests {
 
         assert!(engine.inbox_account_summary().expect("汇总").is_empty());
         assert!(engine.inbox_folders().expect("文件夹").is_empty());
+    }
+    #[test]
+    fn 批量已读会拒绝不存在的账号() {
+        let dir = tempfile::tempdir().expect("创建临时目录");
+        let engine = MailEngine::initialize_with_secrets(dir.path(), Arc::new(MemorySecretStore::new()))
+            .expect("初始化引擎");
+        let error = engine.mark_all_read(999, None).expect_err("不存在的账号应拒绝");
+        assert!(error.to_string().contains("账号不存在"));
     }
 }
