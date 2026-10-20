@@ -3355,13 +3355,18 @@ pub struct AiProviderDraftDto {
     pub proxy: AccountProxyDto,
 }
 
+/// AI 站点类型的统一错误提示。
+const AI_PROVIDER_KIND_ERROR: &str =
+    "AI 站点类型只能是 openai_compatible、deepl、ollama、typesafe 或 decision_api";
+
+/// 解析命令入口收到的站点类型，并复用同一份提示。
+fn parse_ai_provider_kind(kind: &str) -> Result<AiProviderKind, CommandError> {
+    AiProviderKind::parse(kind).ok_or_else(|| CommandError::input(AI_PROVIDER_KIND_ERROR))
+}
+
 impl AiProviderDraftDto {
     fn to_input(&self) -> Result<AiProviderInput, CommandError> {
-        let kind = AiProviderKind::parse(&self.kind).ok_or_else(|| {
-            CommandError::input(
-                "AI 站点类型只能是 openai_compatible、deepl、ollama、typesafe 或 decision_api",
-            )
-        })?;
+        let kind = parse_ai_provider_kind(&self.kind)?;
         let level = self.thinking_level.trim().to_ascii_lowercase();
         if !matches!(level.as_str(), "" | "off" | "low" | "medium" | "high") {
             return Err(CommandError::input("思考程度只能是 off、low、medium 或 high"));
@@ -3908,9 +3913,7 @@ pub async fn test_ai_provider(
     proxy: Option<AccountProxyDto>,
     model: Option<String>,
 ) -> Result<Vec<String>, CommandError> {
-    let kind = AiProviderKind::parse(&kind).ok_or_else(|| {
-        CommandError::input("AI 站点类型只能是 openai_compatible、deepl、ollama、typesafe 或 decision_api")
-    })?;
+    let kind = parse_ai_provider_kind(&kind)?;
     let proxy = match proxy {
         Some(proxy) => proxy.to_domain()?,
         None => AccountProxyMode::InheritGlobal,
@@ -4458,8 +4461,9 @@ pub async fn classify_messages(
 mod tests {
     use super::{
         clamp_ui_zoom, create_label_group_snapshot, default_account_proxy, is_external_link,
-        label_groups_snapshot, migrate_classify_confidence, set_message_group_value_snapshot,
-        strip_verbatim_prefix, AiProviderDraftDto, AiProviderDto, MailLabelDto,
+        label_groups_snapshot, migrate_classify_confidence, parse_ai_provider_kind,
+        set_message_group_value_snapshot, strip_verbatim_prefix, AiProviderDraftDto, AiProviderDto,
+        MailLabelDto,
     };
     use crate::settings::AppSettings;
     use mail_core::{AiProviderKind, AiProviderView, AiThinkingLevel, MailEngine};
@@ -4505,6 +4509,12 @@ mod tests {
             has_key: true,
         });
         assert_eq!(dto.supported_functions, vec!["classify"]);
+    }
+    #[test]
+    fn command_test_ai_provider_rejects_unknown_kind_with_decision_api() {
+        // `test_ai_provider` 需要 Tauri 的 State；这里直接测它进入网络逻辑前共用的解析函数。
+        let error = parse_ai_provider_kind("unknown").expect_err("未知站点类型应被拒");
+        assert!(error.message.contains("decision_api"), "{}", error.message);
     }
     #[test]
     fn label_group_commands_round_trip() {

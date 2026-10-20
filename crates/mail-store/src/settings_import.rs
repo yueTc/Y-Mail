@@ -841,6 +841,10 @@ mod tests {
             AiProviderKind::DecisionApi
         );
         assert_eq!(
+            store.list_ai_providers().expect("列站点")[1].default_model,
+            "startlux-decision-27b-autothink"
+        );
+        assert_eq!(
             store.global_proxy_mode().expect("全局代理"),
             GlobalProxyMode::Custom(ProxyId(1))
         );

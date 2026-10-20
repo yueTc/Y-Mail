@@ -1485,7 +1485,7 @@ mod tests {
     #[test]
     fn 设置快照保留通用决策站点() {
         let dir = tempfile::tempdir().expect("临时目录");
-        let (engine, _secrets) = engine(dir.path());
+        let (source, _secrets) = engine(dir.path());
         let input = AiProviderInput {
             id: None,
             label: "StartLux".to_string(),
@@ -1497,20 +1497,42 @@ mod tests {
             enabled: true,
             proxy: AccountProxyMode::Direct,
         };
-        engine
+        source
             .save_ai_provider(&input, Some(&Secret::new("fake-key")))
             .expect("保存站点");
-        let snapshot = engine
+        let snapshot = source
             .export_settings_snapshot("device-a", "本机", 1)
             .expect("导出快照");
         assert_eq!(snapshot.ai_providers.len(), 1);
         assert_eq!(snapshot.ai_providers[0].kind, AiProviderKind::DecisionApi);
+        assert_eq!(
+            snapshot.ai_providers[0].default_model,
+            "startlux-decision-27b-autothink"
+        );
+        assert_eq!(
+            snapshot.ai_providers[0].base_url,
+            "https://api.bamboonode.dev/v1/decisions"
+        );
+
         let plan = super::build_import_plan(&snapshot);
         assert_eq!(plan.ai_providers[0].provider.kind, AiProviderKind::DecisionApi);
+        assert_eq!(
+            plan.ai_providers[0].provider.default_model,
+            "startlux-decision-27b-autothink"
+        );
         assert_eq!(
             plan.ai_providers[0].provider.base_url,
             "https://api.bamboonode.dev/v1/decisions"
         );
+
+        let target_dir = tempfile::tempdir().expect("目标目录");
+        let (target, _target_secrets) = engine(target_dir.path());
+        target.import_settings_snapshot(&snapshot).expect("导入快照");
+        let stored = target.store().list_ai_providers().expect("列站点");
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].kind, AiProviderKind::DecisionApi);
+        assert_eq!(stored[0].default_model, "startlux-decision-27b-autothink");
+        assert_eq!(stored[0].base_url, "https://api.bamboonode.dev/v1/decisions");
     }
     #[test]
     fn 快照序列化往返一致() {
