@@ -102,6 +102,7 @@ pub fn run() {
             commands::list_inbox_threads,
             commands::list_thread_messages,
             commands::set_message_read,
+            commands::mark_all_read,
             commands::set_message_flagged,
             commands::preview_delete_message,
             commands::delete_message,
