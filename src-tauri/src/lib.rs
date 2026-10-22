@@ -503,19 +503,36 @@ pub(crate) fn show_main_window(app: &tauri::AppHandle) {
     // 通知回调来自后台线程；窗口操作排到主线程，保证恢复后再请求焦点。
     let handle = app.clone();
     if let Err(error) = app.run_on_main_thread(move || {
-        if let Some(window) = handle.get_webview_window("main") {
-            if let Err(error) = window.show() {
-                tracing::debug!(error = %error, "显示主窗口失败");
-            }
-            if let Err(error) = window.unminimize() {
-                tracing::debug!(error = %error, "恢复主窗口失败");
-            }
-            if let Err(error) = window.set_focus() {
-                tracing::debug!(error = %error, "主窗口置前失败");
-            }
+        let Some(window) = handle.get_webview_window("main") else {
+            return;
+        };
+        if let Err(error) = window.show() {
+            tracing::warn!(error = %error, "显示主窗口失败");
         }
+        if let Err(error) = window.unminimize() {
+            tracing::warn!(error = %error, "恢复主窗口失败");
+        }
+
+        // show/unminimize 会把真正的窗口操作排到事件循环；紧接着调用 set_focus 时，
+        // 窗口状态仍可能是“隐藏/最小化”，底层会直接跳过激活。等事件循环处理完再聚焦。
+        let focus_handle = handle.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            let inner_handle = focus_handle.clone();
+            if let Err(error) = focus_handle.run_on_main_thread(move || {
+                if let Some(window) = inner_handle.get_webview_window("main") {
+                    if let Err(error) = window.set_focus() {
+                        tracing::warn!(error = %error, "主窗口置前失败");
+                    } else {
+                        tracing::info!("主窗口已恢复并请求置前");
+                    }
+                }
+            }) {
+                tracing::warn!(error = %error, "调度主窗口置前失败");
+            }
+        });
     }) {
-        tracing::debug!(error = %error, "调度主窗口置前失败");
+        tracing::warn!(error = %error, "调度主窗口显示失败");
     }
 }
 
