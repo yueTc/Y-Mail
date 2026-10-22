@@ -1821,6 +1821,11 @@ textarea:focus {
   margin: 8px 14px 0;
 }
 
+.inbox-status-note {
+  margin-left: 14px;
+  margin-right: 14px;
+}
+
 /* 搜索命令说明：命令和解释分成两列，扫一眼就能抄。 */
 .search-help-modal {
   width: min(620px, 100%);

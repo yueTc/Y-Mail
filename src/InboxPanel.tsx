@@ -625,6 +625,13 @@ export default function InboxPanel({
   // 批量标为已读进行中，挡住重复触发。
   const [bulkReadBusy, setBulkReadBusy] = useState(false);
 
+  // 短提示只停留 3 秒；新提示会让旧计时自动失效。
+  useEffect(() => {
+    if (!statusNote) return;
+    const timer = window.setTimeout(() => setStatusNote(""), 3000);
+    return () => window.clearTimeout(timer);
+  }, [statusNote]);
+
   // 搜索相关状态：输入值、已提交的查询、命中结果与深拉提示。
   const [searchInput, setSearchInput] = useState("");
   const [searchRaw, setSearchRaw] = useState("");

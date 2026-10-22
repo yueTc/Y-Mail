@@ -512,7 +512,7 @@ describe("批量标为已读", () => {
     expect(searchBox.value).toBe("安全提醒");
   });
 
-  it("账号右键确认后覆盖整个账号并提示数量", async () => {
+  it("账号右键确认后覆盖整个账号，提示数量并在 3 秒后消失", async () => {
     vi.mocked(api.listInboxFolders).mockResolvedValue([
       folder({ folderId: 1, fullPath: "INBOX", kind: "inbox" }),
     ]);
@@ -525,6 +525,9 @@ describe("批量标为已读", () => {
 
     await waitFor(() => expect(api.markAllRead).toHaveBeenCalledWith(1, undefined));
     expect(await screen.findByText("已将 4 封邮件标为已读")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText("已将 4 封邮件标为已读")).toBeNull(), {
+      timeout: 4_000,
+    });
   });
 
   it("文件夹右键直接处理当前文件夹", async () => {
