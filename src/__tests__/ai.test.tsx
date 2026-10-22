@@ -1227,11 +1227,11 @@ describe("标签组管理", () => {
     fireEvent.click(await screen.findByRole("button", { name: `展开${name}` }));
   }
 
-  function prepare() {
+  function prepare(groups: LabelGroup[] = DEFAULT_GROUPS) {
     vi.mocked(api.listAiProviders).mockResolvedValue([]);
     vi.mocked(api.listAiModelMaps).mockResolvedValue([]);
     vi.mocked(api.listAiAudit).mockResolvedValue([]);
-    vi.mocked(api.listLabelGroups).mockResolvedValue(DEFAULT_GROUPS);
+    vi.mocked(api.listLabelGroups).mockResolvedValue(groups);
     vi.mocked(api.createMailLabel).mockResolvedValue(CONTENT_LABELS[0]);
     vi.mocked(api.renameMailLabel).mockResolvedValue(undefined);
     vi.mocked(api.setMailLabelColor).mockResolvedValue(undefined);
@@ -1384,6 +1384,7 @@ describe("标签组管理", () => {
     await waitFor(() =>
       expect(vi.mocked(api.reorderLabelGroups)).toHaveBeenCalledWith([2, 1, 3]),
     );
+    await expandGroup("需要我回复");
     const rename = screen.getByLabelText("需要我回复组名");
     fireEvent.change(rename, { target: { value: "要不要回复" } });
     fireEvent.blur(rename);
@@ -1424,6 +1425,52 @@ describe("标签组管理", () => {
       expect(screen.getByLabelText("内容分类门槛")).toBeTruthy();
     });
     expect(screen.getByRole("button", { name: "折叠内容分类" })).toBeTruthy();
+  });
+
+  it("点标签组名称也能展开，输入框只负责改名", async () => {
+    const { container } = prepare();
+    const toggle = await screen.findByRole("button", { name: "展开内容分类" });
+    const head = toggle.closest(".ai-label-group-head") as HTMLElement;
+
+    expect(toggle.textContent).toContain("内容分类");
+    for (const name of [
+      "上移内容分类",
+      "下移内容分类",
+      "删除内容分类",
+      "开启或关闭内容分类",
+    ]) {
+      const control = within(head).getByRole(
+        name.startsWith("开启") ? "checkbox" : "button",
+        { name },
+      );
+      expect(toggle.contains(control)).toBe(false);
+    }
+
+    fireEvent.click(toggle);
+    const expandedToggle = await screen.findByRole("button", { name: "折叠内容分类" });
+    const detailsId = expandedToggle.getAttribute("aria-controls");
+    const details = document.getElementById(detailsId as string);
+    const groupName = screen.getByLabelText("内容分类组名");
+    const body = container.querySelector(".ai-label-group-body") as HTMLElement;
+
+    expect(detailsId).toBeTruthy();
+    expect(details).toBeTruthy();
+    expect(details?.contains(groupName)).toBe(true);
+    expect(body.id).toBe(detailsId);
+    fireEvent.click(groupName);
+    expect(expandedToggle.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("超长标签组名的按钮和右侧操作不嵌套", async () => {
+    const longName = "这是一个很长的标签组名称用于验证标题与右侧操作不会互相嵌套";
+    prepare([{ ...DEFAULT_GROUPS[0], name: longName }, ...DEFAULT_GROUPS.slice(1)]);
+
+    const toggle = await screen.findByRole("button", { name: `展开${longName}` });
+    const head = toggle.closest(".ai-label-group-head") as HTMLElement;
+    const moveUp = within(head).getByRole("button", { name: `上移${longName}` });
+
+    expect(toggle.textContent).toContain(longName);
+    expect(toggle.contains(moveUp)).toBe(false);
   });
 
   it("功能级模型卡片默认折叠，可单独展开再折叠", async () => {

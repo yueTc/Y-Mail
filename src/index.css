@@ -3881,9 +3881,28 @@ body.screenshot-body {
   background: transparent;
 }
 .ai-label-group-toggle {
-  flex: 0 0 auto;
-  min-width: 2rem;
-  padding-inline: 0.5rem;
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 4px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.ai-label-group-toggle:focus-visible {
+  outline: 2px solid var(--state-focus-ring);
+  outline-offset: 3px;
+}
+.ai-label-group-chevron {
+  flex: 0 0 1em;
+  color: var(--text-muted);
+}
+.ai-label-group-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .ai-label-group-actions {
   display: flex;
@@ -3964,8 +3983,11 @@ body.screenshot-body {
   gap: 8px;
   flex-wrap: wrap;
 }
+.ai-label-group-name-field {
+  max-width: 32rem;
+}
 .ai-label-name {
-  flex: 1 1 10em;
+  width: 100%;
   min-width: 6em;
 }
 /* 读信页标签下拉：和 AI 工具按钮同一列，浅深主题都沿用面板配色。 */

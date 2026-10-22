@@ -1410,17 +1410,19 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
             const blockReason = groupEnableBlockReason(group, classifyDraft, classifyProvider);
             const expanded = expandedGroups[group.id] === true;
             const collapsed = !expanded;
+            const detailsId = `ai-label-group-details-${group.id}`;
             return (
               <li
                 key={group.id}
                 className="ai-label-group"
-                data-collapsed={collapsed ? "true" : "false"}
+                data-expanded={expanded ? "true" : "false"}
               >
                 <div className="ai-label-group-head">
                   <button
                     type="button"
                     className="ai-label-group-toggle"
                     aria-expanded={expanded}
+                    aria-controls={detailsId}
                     aria-label={
                       collapsed
                         ? t("展开{0}", [group.name])
@@ -1429,17 +1431,12 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
                     title={collapsed ? t("展开这一组") : t("折叠这一组")}
                     onClick={() => toggleGroupExpanded(group.id)}
                   >
-                    {collapsed ? "▸" : "▾"}
+                    <span className="ai-label-group-chevron" aria-hidden="true">
+                      {collapsed ? "▸" : "▾"}
+                    </span>
+                    <span className="ai-label-group-name">{group.name}</span>
                   </button>
                   <span className="tag">{t(GROUP_KIND_LABEL[group.kind] ?? group.kind)}</span>
-                  <input
-                    className="ai-label-name"
-                    aria-label={t("{0}组名", [group.name])}
-                    value={group.name}
-                    maxLength={64}
-                    onChange={(event) => setGroupNameDraft(group.id, event.target.value)}
-                    onBlur={() => void saveGroupName(group)}
-                  />
                   <div className="ai-label-group-actions">
                     <button
                       type="button"
@@ -1476,7 +1473,17 @@ export default function AiPanel({ notifyAiEnabled, onNotifyAiEnabledChange }: Ai
                   </div>
                 </div>
                 {!collapsed && (
-                  <div className="ai-label-group-body">
+                  <div id={detailsId} className="ai-label-group-body">
+                    <label className="secret-field ai-label-group-name-field">
+                      {t("组名")}<input
+                        className="ai-label-name"
+                        aria-label={t("{0}组名", [group.name])}
+                        value={group.name}
+                        maxLength={64}
+                        onChange={(event) => setGroupNameDraft(group.id, event.target.value)}
+                        onBlur={() => void saveGroupName(group)}
+                      />
+                    </label>
                     <div className="ai-label-group-params">
                       <label className="secret-field">
                         {t("门槛")}<input
