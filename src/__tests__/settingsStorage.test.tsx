@@ -223,7 +223,7 @@ describe("设置页通用分组", () => {
     const help = await screen.findByRole("img", { name: "远程图片说明" });
     expect(help.tagName.toLowerCase()).toBe("svg");
     expect(help.textContent).toBe(
-      "远程图片默认拦截。被记住的发件人会直接显示图片，要恢复拦截就在「读信与远程图片」里移除。",
+      "远程图片默认拦截。被记住的发件人会直接显示图片，要恢复拦截就在「设置 > 通用」里移除。",
     );
   });
 

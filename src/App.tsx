@@ -156,6 +156,7 @@ export default function App() {
         settings={
           <SettingsWorkspace
             onBackToInbox={handleBackToInbox}
+            active={mode === "settings"}
             proxiesVersion={proxiesVersion}
             syncOpenRequest={syncOpenRequest}
             onGitHubProfileChanged={setGitHubProfile}

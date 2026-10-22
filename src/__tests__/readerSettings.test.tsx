@@ -43,11 +43,27 @@ describe("读信设置的记住发件人", () => {
     expect(screen.getByText("b@example.com")).toBeTruthy();
   });
 
-  it("没有记住发件人时不显示列表，页面还能正常用", async () => {
+  it("没有记住发件人时保留标题并给出说明", async () => {
     vi.mocked(api.listTrustedRemoteSenders).mockResolvedValue([]);
     render(<ReaderSettingsPanel />);
     expect(await screen.findByText("读信与远程图片")).toBeTruthy();
+    expect(await screen.findByText(/暂无记住的发件人/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "移除" })).toBeNull();
+  });
+
+  it("隐藏时不读名单，重新显示时刷新记住的发件人", async () => {
+    const { rerender } = render(<ReaderSettingsPanel active={false} />);
+    expect(api.listTrustedRemoteSenders).not.toHaveBeenCalled();
+
+    rerender(<ReaderSettingsPanel active />);
+    await vi.waitFor(() => expect(api.listTrustedRemoteSenders).toHaveBeenCalledTimes(1));
+
+    vi.mocked(api.listTrustedRemoteSenders).mockResolvedValueOnce(["c@example.com"]);
+    rerender(<ReaderSettingsPanel active={false} />);
+    rerender(<ReaderSettingsPanel active />);
+
+    expect(await screen.findByText("c@example.com")).toBeTruthy();
+    expect(api.listTrustedRemoteSenders).toHaveBeenCalledTimes(2);
   });
 
   it("深色模式开关不在这里，已经搬到外观分组", async () => {
