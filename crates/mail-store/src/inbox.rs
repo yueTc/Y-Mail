@@ -385,6 +385,53 @@ impl Store {
         Ok(message)
     }
 
+    /// 把范围内未读邮件一次改为已读，并按实际邮件重算受影响文件夹未读数。
+    ///
+    /// `folder_id` 为空表示整个账号，非空表示只处理这个文件夹。
+    /// 所有写入在同一个事务里完成；返回实际由未读变为已读的邮件数量。
+    pub fn mark_all_read(&self, account_id: i64, folder_id: Option<i64>) -> Result<usize, StoreError> {
+        let tx = self.conn().unchecked_transaction()?;
+        let changed = match folder_id {
+            Some(folder_id) => tx.execute(
+                "UPDATE message SET is_read = 1, \
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+                 WHERE account_id = ?1 AND folder_id = ?2 AND is_read = 0",
+                rusqlite::params![account_id, folder_id],
+            )?,
+            None => tx.execute(
+                "UPDATE message SET is_read = 1, \
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+                 WHERE account_id = ?1 AND is_read = 0",
+                [account_id],
+            )?,
+        };
+
+        match folder_id {
+            Some(folder_id) => {
+                tx.execute(
+                    "UPDATE folder SET unread_count = \
+                     (SELECT COUNT(*) FROM message m \
+                      WHERE m.folder_id = folder.id AND m.is_read = 0), \
+                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+                     WHERE account_id = ?1 AND id = ?2",
+                    rusqlite::params![account_id, folder_id],
+                )?;
+            }
+            None => {
+                tx.execute(
+                    "UPDATE folder SET unread_count = \
+                     (SELECT COUNT(*) FROM message m \
+                      WHERE m.folder_id = folder.id AND m.is_read = 0), \
+                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+                     WHERE account_id = ?1",
+                    [account_id],
+                )?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(changed)
+    }
     /// 按主键切换一封邮件的已读状态，并同步维护所在文件夹的未读数。
     ///
     /// 返回值表示状态是否真的发生变化：邮件不存在或已经是目标状态时返回 `false`。
@@ -1141,5 +1188,86 @@ mod tests {
             .expect("查询文件夹")
             .expect("文件夹存在");
         assert_eq!(folder.unread_count, 0, "未读数不应为负");
+    }
+    #[test]
+    fn 账号批量已读覆盖全部文件夹且不影响其它账号() {
+        let store = migrated();
+        let a = account(&store, "a@example.com", "#111111");
+        let b = account(&store, "b@example.com", "#222222");
+        let a_inbox = inbox(&store, a);
+        let a_custom = store
+            .upsert_folder(a, "工作", "/", FolderKind::Custom)
+            .expect("插入自定义文件夹");
+        let b_inbox = inbox(&store, b);
+        store
+            .insert_messages(&[
+                message(a, a_inbox, 1, "a1", "<a1@x>", "2026-10-01T00:00:00Z", false),
+                message(a, a_inbox, 2, "a2", "<a2@x>", "2026-10-01T01:00:00Z", false),
+                message(a, a_custom, 1, "a3", "<a3@x>", "2026-10-01T02:00:00Z", false),
+                message(b, b_inbox, 1, "b1", "<b1@x>", "2026-10-01T03:00:00Z", false),
+            ])
+            .expect("插入邮件");
+
+        assert_eq!(store.mark_all_read(a, None).expect("账号批量已读"), 3);
+        let folders = store.list_inbox_folders().expect("列文件夹");
+        assert!(folders
+            .iter()
+            .filter(|folder| folder.account_id == a)
+            .all(|folder| folder.unread_count == 0));
+        assert_eq!(
+            folders
+                .iter()
+                .find(|folder| folder.account_id == b)
+                .expect("b 收件箱")
+                .unread_count,
+            1
+        );
+    }
+
+    #[test]
+    fn 文件夹批量已读只处理当前文件夹() {
+        let store = migrated();
+        let a = account(&store, "a@example.com", "#111111");
+        let first = inbox(&store, a);
+        let second = store
+            .upsert_folder(a, "工作", "/", FolderKind::Custom)
+            .expect("插入自定义文件夹");
+        store
+            .insert_messages(&[
+                message(a, first, 1, "t1", "<m1@x>", "2026-10-01T00:00:00Z", false),
+                message(a, second, 1, "t2", "<m2@x>", "2026-10-01T01:00:00Z", false),
+            ])
+            .expect("插入邮件");
+
+        assert_eq!(store.mark_all_read(a, Some(second)).expect("文件夹批量已读"), 1);
+        let folders = store.list_inbox_folders().expect("列文件夹");
+        assert_eq!(
+            folders
+                .iter()
+                .find(|folder| folder.folder_id == first)
+                .expect("收件箱")
+                .unread_count,
+            1
+        );
+        assert_eq!(
+            folders
+                .iter()
+                .find(|folder| folder.folder_id == second)
+                .expect("工作")
+                .unread_count,
+            0
+        );
+    }
+
+    #[test]
+    fn 没有未读时批量已读返回零() {
+        let store = migrated();
+        let a = account(&store, "a@example.com", "#111111");
+        let fa = inbox(&store, a);
+        store
+            .insert_messages(&[message(a, fa, 1, "t1", "<m1@x>", "2026-10-01T00:00:00Z", true)])
+            .expect("插入邮件");
+
+        assert_eq!(store.mark_all_read(a, None).expect("批量已读"), 0);
     }
 }

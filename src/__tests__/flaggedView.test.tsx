@@ -491,7 +491,7 @@ describe("邮箱栏右键添加和删除", () => {
     fireEvent.contextMenu(account);
     const menu = screen.getByRole("menu", { name: "邮箱菜单" });
     expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
-      "编辑", "新建文件夹", "删除邮箱",
+      "全部标为已读", "编辑", "新建文件夹", "删除邮箱",
     ]);
     expect(within(menu).queryByRole("menuitem", { name: "添加邮箱" })).toBeNull();
   });

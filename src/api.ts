@@ -1027,6 +1027,12 @@ export const api = {
   setMessageRead: (messageId: number, read: boolean) =>
     call<void>("set_message_read", { messageId, read }),
 
+  /** 批量把当前账号或指定文件夹里的未读邮件标为已读；只改本机。 */
+  markAllRead: (accountId: number, folderId?: number) =>
+    call<{ changed: number }>(
+      "mark_all_read",
+      folderId === undefined ? { accountId } : { accountId, folderId },
+    ),
   /** 切换一封邮件的红旗状态；本地立即生效，返回服务器是否已确认。 */
   setMessageFlagged: (messageId: number, flagged: boolean) =>
     call<{ changed: boolean; synced: boolean }>("set_message_flagged", { messageId, flagged }),

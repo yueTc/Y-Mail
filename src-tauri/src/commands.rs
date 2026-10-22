@@ -2070,6 +2070,33 @@ pub async fn set_message_read(
     Ok(())
 }
 
+/// 批量标为已读的结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkAllReadDto {
+    /// 本次由未读变为已读的邮件数量。
+    pub changed: usize,
+}
+
+/// 把当前账号或指定文件夹里的未读邮件一次改为已读，只写本机库。
+#[tauri::command]
+pub async fn mark_all_read(
+    state: tauri::State<'_, AppState>,
+    account_id: i64,
+    folder_id: Option<i64>,
+) -> Result<MarkAllReadDto, String> {
+    if account_id <= 0 {
+        return Err("邮箱编号不合法".to_string());
+    }
+    if folder_id.is_some_and(|id| id <= 0) {
+        return Err("文件夹编号不合法".to_string());
+    }
+    let engine = state.engine().await;
+    let changed = engine
+        .mark_all_read(account_id, folder_id)
+        .map_err(|err| err.to_string())?;
+    Ok(MarkAllReadDto { changed })
+}
 /// 按编号取一封邮件；通知被点击时用来定位并打开具体邮件。
 #[tauri::command]
 pub async fn get_inbox_message(
