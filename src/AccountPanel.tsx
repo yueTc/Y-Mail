@@ -8,9 +8,11 @@ import { t } from "./i18n";
 interface Props {
   /** 代理列表变化时由外壳递增，用来触发本面板重新拉取可选代理。 */
   proxiesVersion: number;
+  /** 设置同步导入账号后由外层递增，触发账号列表重读。 */
+  accountsVersion?: number;
 }
 
-export default function AccountPanel({ proxiesVersion }: Props) {
+export default function AccountPanel({ proxiesVersion, accountsVersion = 0 }: Props) {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -30,7 +32,7 @@ export default function AccountPanel({ proxiesVersion }: Props) {
 
   useEffect(() => {
     void reload();
-  }, [reload]);
+  }, [reload, accountsVersion]);
 
   function openCreate() {
     setError(null);

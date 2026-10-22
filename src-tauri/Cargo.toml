@@ -51,6 +51,8 @@ tauri-plugin-single-instance = "2.5.2"
 arboard = { version = "3", default-features = false }
 # 直接保留系统点击回调，避免横幅消失后丢失通知中心的点击。
 tauri-winrt-notification = "0.8.1"
+# 生成带应用身份的 Windows 开始菜单快捷方式；没有它，系统通知点击回不到本应用。
+rclip-shell-link = { version = "0.1.0", features = ["std"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

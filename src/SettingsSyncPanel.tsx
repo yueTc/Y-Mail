@@ -23,9 +23,14 @@ const MIN_PASSWORD_CHARS = 8;
 
 type SettingsSyncPanelProps = {
   onProfileChanged?: (profile: GitHubLoginView | null) => void;
+  /** 下载并导入本机配置后通知外层重读账号、代理等数据。 */
+  onSettingsImported?: () => void;
 };
 
-export default function SettingsSyncPanel({ onProfileChanged }: SettingsSyncPanelProps) {
+export default function SettingsSyncPanel({
+  onProfileChanged,
+  onSettingsImported,
+}: SettingsSyncPanelProps) {
   const [profile, setProfile] = useState<GitHubLoginView | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -148,8 +153,9 @@ export default function SettingsSyncPanel({ onProfileChanged }: SettingsSyncPane
     });
     if (next) {
       setMessage(t("已从云端下载。"));
+      onSettingsImported?.();
     }
-  }, [password, deviceLabel, run]);
+  }, [password, deviceLabel, run, onSettingsImported]);
 
   const hasSyncScope = profile?.scope === "sync";
 

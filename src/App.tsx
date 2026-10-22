@@ -26,6 +26,8 @@ export default function App() {
   const [language] = useLanguage();
   const [mode, setMode] = useState<WorkspaceMode>("inbox");
   const [proxiesVersion, setProxiesVersion] = useState(0);
+  // 设置同步导入账号后递增，让收件箱和设置里的账号列表立即重读。
+  const [accountsVersion, setAccountsVersion] = useState(0);
   const [githubProfile, setGitHubProfile] = useState<GitHubLoginView | null>(null);
   // 每点一次账号都重新打开同步分类，包括已经停留在设置页时。
   const [syncOpenRequest, setSyncOpenRequest] = useState(0);
@@ -122,6 +124,9 @@ export default function App() {
   }, []);
 
   const handleComposeSeedConsumed = useCallback(() => setComposeSeed(undefined), []);
+  const handleSettingsImported = useCallback(() => {
+    setAccountsVersion((value) => value + 1);
+  }, []);
   const handleBackToInbox = useCallback(() => setMode("inbox"), []);
   const handleOpenContacts = useCallback(() => setMode("contacts"), []);
   const handleOpenSettings = useCallback(() => setMode("settings"), []);
@@ -136,6 +141,7 @@ export default function App() {
             onComposeSeedConsumed={handleComposeSeedConsumed}
             onNotificationOpen={handleBackToInbox}
             githubProfile={githubProfile}
+            accountsVersion={accountsVersion}
             onOpenContacts={handleOpenContacts}
             onOpenSettings={handleOpenSettings}
             onOpenSyncSettings={openSyncSettings}
@@ -150,9 +156,12 @@ export default function App() {
         settings={
           <SettingsWorkspace
             onBackToInbox={handleBackToInbox}
+            active={mode === "settings"}
             proxiesVersion={proxiesVersion}
             syncOpenRequest={syncOpenRequest}
             onGitHubProfileChanged={setGitHubProfile}
+            accountsVersion={accountsVersion}
+            onSettingsImported={handleSettingsImported}
             onProxiesChanged={() => setProxiesVersion((value) => value + 1)}
             hasUpdateNotice={availableUpdateVersion !== null}
             onAboutOpened={markUpdateNotified}

@@ -15,6 +15,8 @@
 //! [`register_notification_identity`]。
 
 use std::collections::HashMap;
+#[cfg(windows)]
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -474,6 +476,7 @@ fn show_windows_toast(
 ) {
     let app = app.clone();
     let toast = toast.on_activated(move |action| {
+        tracing::info!(message_id, action = ?action, "收到系统通知点击");
         let response = action.map_or(
             notify_rust::NotificationResponse::Default,
             notify_rust::NotificationResponse::Action,
@@ -512,6 +515,177 @@ fn notification_display_name(product_name: Option<&str>) -> String {
     }
 }
 
+/// 生成 `System.AppUserModel.ID` 属性；Windows 靠它把开始菜单快捷方式和 Toast 认成同一个应用。
+#[cfg(windows)]
+fn app_user_model_property_store(app_id: &str) -> Vec<u8> {
+    // 一条 VT_LPWSTR 属性：ValueSize + 属性编号 + 保留字节 + 类型头 + 字符串长度 + UTF-16 文本。
+    let units = app_id.encode_utf16().count() as u32 + 1;
+    let value_size = 17 + units * 2;
+    let mut property = Vec::with_capacity(value_size as usize);
+    property.extend_from_slice(&value_size.to_le_bytes());
+    property.extend_from_slice(&5u32.to_le_bytes()); // System.AppUserModel.ID
+    property.push(0);
+    property.extend_from_slice(&0x001fu16.to_le_bytes()); // VT_LPWSTR
+    property.extend_from_slice(&0u16.to_le_bytes());
+    property.extend_from_slice(&units.to_le_bytes());
+    for unit in app_id.encode_utf16().chain(std::iter::once(0)) {
+        property.extend_from_slice(&unit.to_le_bytes());
+    }
+
+    let storage_size = 24 + property.len() as u32 + 4;
+    let mut store = Vec::with_capacity(storage_size as usize + 4);
+    store.extend_from_slice(&storage_size.to_le_bytes());
+    store.extend_from_slice(&0x5350_5331u32.to_le_bytes()); // "1SPS"
+
+    // {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}
+    store.extend_from_slice(&[
+        0x55, 0x28, 0x4c, 0x9f, 0x79, 0x9f, 0x39, 0x4b, 0xa8, 0xd0, 0xe1, 0xd4, 0x2d, 0xe1, 0xd5, 0xf3,
+    ]);
+    store.extend_from_slice(&property);
+    store.extend_from_slice(&0u32.to_le_bytes());
+    store.extend_from_slice(&0u32.to_le_bytes());
+    store
+}
+
+/// 把显示名变成可安全放进开始菜单路径的文件夹名。
+#[cfg(windows)]
+fn notification_shortcut_name(display_name: &str) -> String {
+    let cleaned: String = display_name
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+                '_'
+            } else {
+                ch
+            }
+        })
+        .collect();
+    let cleaned = cleaned.trim_matches(|ch| ch == ' ' || ch == '.').to_string();
+    if cleaned.is_empty() {
+        DEFAULT_NOTIFICATION_NAME.to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// 当前用户开始菜单里的通知身份快捷方式。
+#[cfg(windows)]
+fn notification_shortcut_path(display_name: &str) -> Result<PathBuf, String> {
+    let app_data = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .ok_or_else(|| "读不到当前用户的 APPDATA，无法修复通知快捷方式".to_string())?;
+    let folder = notification_shortcut_name(display_name);
+    Ok(app_data
+        .join("Microsoft")
+        .join("Windows")
+        .join("Start Menu")
+        .join("Programs")
+        .join(&folder)
+        .join(format!("{folder}.lnk")))
+}
+
+/// 检查快捷方式是否已经带同一个应用身份。
+#[cfg(windows)]
+fn shortcut_has_app_id(path: &Path, app_id: &str) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let Ok(link) = rclip_shell_link::ShellLink::parse(&bytes) else {
+        return false;
+    };
+    link.app_user_model_id()
+        .is_some_and(|value| value.to_string_lossy() == app_id)
+}
+
+/// 检查快捷方式是否指向当前这份程序；新旧安装目录切换后要重写，避免点到旧程序。
+#[cfg(windows)]
+fn shortcut_targets(path: &Path, target: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let Ok(link) = rclip_shell_link::ShellLink::parse(&bytes) else {
+        return false;
+    };
+    link.link_info
+        .and_then(|info| info.local_base_path().ok().flatten())
+        .is_some_and(|value| {
+            value
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&target.to_string_lossy())
+        })
+}
+
+/// 生成一个带应用身份的开始菜单快捷方式，并先自检再落盘。
+#[cfg(windows)]
+fn write_notification_shortcut(
+    path: &Path,
+    target: &Path,
+    app_id: &str,
+    display_name: &str,
+) -> Result<(), String> {
+    let target_text = target.to_string_lossy();
+    let working_dir = target.parent().unwrap_or(target).to_string_lossy();
+    let property_store = app_user_model_property_store(app_id);
+    let bytes = rclip_shell_link::ShellLinkBuilder::new()
+        .name(display_name)
+        .local_path(&target_text)
+        .working_dir(&working_dir)
+        .icon_location(&target_text)
+        .show_command(rclip_shell_link::ShowCommand::NORMAL)
+        .extra_block(rclip_shell_link::extra::SIG_PROPERTY_STORE, &property_store)
+        .build()
+        .map_err(|error| format!("生成通知快捷方式失败：{error}"))?;
+
+    let check = rclip_shell_link::ShellLink::parse(&bytes)
+        .map_err(|error| format!("检查通知快捷方式失败：{error}"))?;
+    if !check
+        .app_user_model_id()
+        .is_some_and(|value| value.to_string_lossy() == app_id)
+    {
+        return Err("生成的通知快捷方式没有带上应用身份".to_string());
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| format!("创建通知快捷方式目录失败：{error}"))?;
+    }
+    let temp = path.with_extension("lnk.tmp");
+    std::fs::write(&temp, bytes).map_err(|error| format!("写通知快捷方式临时文件失败：{error}"))?;
+    let backup = path.with_extension("lnk.bak");
+    let had_old = path.exists();
+    if had_old {
+        std::fs::rename(path, &backup).map_err(|error| format!("备份旧通知快捷方式失败：{error}"))?;
+    }
+    match std::fs::rename(&temp, path) {
+        Ok(()) => {
+            if had_old {
+                let _ = std::fs::remove_file(backup);
+            }
+            Ok(())
+        }
+        Err(error) => {
+            if had_old {
+                let _ = std::fs::rename(&backup, path);
+            }
+            let _ = std::fs::remove_file(temp);
+            Err(format!("替换通知快捷方式失败：{error}"))
+        }
+    }
+}
+
+/// 确保开始菜单里有带应用身份的快捷方式；这是 Windows Toast 点击能回到应用的系统要求。
+#[cfg(windows)]
+fn ensure_notification_shortcut(app_id: &str, display_name: &str) -> Result<PathBuf, String> {
+    let path = notification_shortcut_path(display_name)?;
+    let target = std::env::current_exe()
+        .map_err(|error| format!("读不到当前程序路径，无法修复通知快捷方式：{error}"))?;
+    if shortcut_has_app_id(&path, app_id) && shortcut_targets(&path, &target) {
+        return Ok(path);
+    }
+    write_notification_shortcut(&path, &target, app_id, display_name)?;
+    Ok(path)
+}
+
 /// 把「应用编号 → Y-Mail」登记进当前用户注册表，让 Windows 通知写对名字。
 ///
 /// 为什么非登记不可：Windows 只认登记过的应用编号；没登记时通知上的名字会退回到唤起
@@ -534,6 +708,13 @@ pub fn register_notification_identity(app: &AppHandle) {
             Err(error) => tracing::warn!(error = %error, "写通知应用名失败"),
         },
         Err(error) => tracing::warn!(error = %error, "登记通知应用名失败"),
+    }
+
+    match ensure_notification_shortcut(&app_id, &display_name) {
+        Ok(path) => {
+            tracing::info!(path = %path.display(), "通知快捷方式已带应用身份")
+        }
+        Err(error) => tracing::warn!(error = %error, "修复通知快捷方式失败，点击通知可能无法打开邮件"),
     }
 }
 
@@ -558,9 +739,10 @@ fn show_system_notification(app: &AppHandle, title: String, body: String, messag
 /// 用户点了通知体：把主窗口叫回前台，再让界面定位并打开那封邮件。
 #[cfg(windows)]
 fn open_message_from_notification(app: &AppHandle, message_id: i64) {
+    tracing::info!(message_id, "通知点击：恢复主窗口并打开邮件");
     crate::show_main_window(app);
     if let Err(error) = app.emit(OPEN_MESSAGE_EVENT, OpenMessageEvent { message_id }) {
-        tracing::debug!(error = %error, "推送打开邮件事件失败");
+        tracing::warn!(error = %error, message_id, "推送打开邮件事件失败");
     }
 }
 
@@ -582,6 +764,36 @@ mod tests {
     use super::{notification_display_name, DEFAULT_NOTIFICATION_NAME};
     use mail_core::NotifyNewMailWhen;
     use mail_core::VerificationFinding;
+
+    #[cfg(windows)]
+    #[test]
+    fn 通知快捷方式带应用身份和程序路径() {
+        use std::path::Path;
+
+        let dir = tempfile::tempdir().expect("临时目录");
+        let shortcut = dir.path().join("Y-Mail.lnk");
+        let target = Path::new(r"C:\Program Files\Y-Mail\ymail.exe");
+        super::write_notification_shortcut(&shortcut, target, "com.ymail.desktop", "Y-Mail")
+            .expect("写通知快捷方式");
+
+        let bytes = std::fs::read(&shortcut).expect("读通知快捷方式");
+        let link = rclip_shell_link::ShellLink::parse(&bytes).expect("快捷方式应能解析");
+        assert_eq!(
+            link.app_user_model_id().expect("应带应用身份").to_string_lossy(),
+            "com.ymail.desktop"
+        );
+        assert_eq!(
+            link.link_info
+                .expect("应有目标路径")
+                .local_base_path()
+                .expect("路径字段应能解析")
+                .expect("应写本地目标")
+                .to_string_lossy(),
+            target.to_string_lossy()
+        );
+        assert!(super::shortcut_has_app_id(&shortcut, "com.ymail.desktop"));
+        assert!(super::shortcut_targets(&shortcut, target));
+    }
 
     #[cfg(windows)]
     #[test]

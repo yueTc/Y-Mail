@@ -96,10 +96,16 @@ function formatStorageSize(bytes: number | null): string {
 type SettingsWorkspaceProps = {
   /** 顶部返回入口；直接渲染设置页的测试可以不传。 */
   onBackToInbox?: () => void;
+  /** 当前是否正在显示设置页；隐藏时不刷新读信名单，重新进入时再读。 */
+  active?: boolean;
   proxiesVersion: number;
   /** 账号入口每次点击递增，确保重复点击仍能跳回同步分类。 */
   syncOpenRequest?: number;
   onGitHubProfileChanged?: (profile: GitHubLoginView | null) => void;
+  /** 设置同步导入了新账号或账号改动时递增，触发账号列表重读。 */
+  accountsVersion?: number;
+  /** 设置同步下载成功后通知外层刷新其它页面。 */
+  onSettingsImported?: () => void;
   onProxiesChanged: () => void;
   /** 左栏「关于」是否显示小红点（有待提醒的新版本）。 */
   hasUpdateNotice?: boolean;
@@ -118,9 +124,12 @@ type SettingsWorkspaceProps = {
  */
 export default function SettingsWorkspace({
   onBackToInbox,
+  active = true,
   proxiesVersion,
   syncOpenRequest = 0,
   onGitHubProfileChanged,
+  accountsVersion = 0,
+  onSettingsImported,
   onProxiesChanged,
   hasUpdateNotice = false,
   onAboutOpened,
@@ -644,7 +653,7 @@ export default function SettingsWorkspace({
               )}
             </section>
 
-            <ReaderSettingsPanel />
+            <ReaderSettingsPanel active={active && activeCategory === "general"} />
 
             <section className="panel" aria-label={t("拦截远程图片")}>
               {storage.kind === "ready" ? (
@@ -662,7 +671,7 @@ export default function SettingsWorkspace({
                           viewBox="0 0 16 16"
                         >
                           <title>
-                            {t("远程图片默认拦截。被记住的发件人会直接显示图片，要恢复拦截就在「读信与远程图片」里移除。")}
+                            {t("远程图片默认拦截。被记住的发件人会直接显示图片，要恢复拦截就在「设置 > 通用」里移除。")}
                           </title>
                           <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.4" />
                           <path
@@ -761,7 +770,7 @@ export default function SettingsWorkspace({
             <h2 className="settings-group-title">{t("账户")}</h2>
             <SyncPollSettingsPanel />
             <SyncPanel />
-            <AccountPanel proxiesVersion={proxiesVersion} />
+            <AccountPanel proxiesVersion={proxiesVersion} accountsVersion={accountsVersion} />
           </section>
 
           <section
@@ -770,7 +779,10 @@ export default function SettingsWorkspace({
             hidden={activeCategory !== "settingsSync"}
           >
             <h2 className="settings-group-title">{t("同步")}</h2>
-            <SettingsSyncPanel onProfileChanged={onGitHubProfileChanged} />
+            <SettingsSyncPanel
+              onProfileChanged={onGitHubProfileChanged}
+              onSettingsImported={onSettingsImported}
+            />
           </section>
 
           <section

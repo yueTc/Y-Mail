@@ -1263,7 +1263,7 @@ export default function MessageReader({
             )}
             {blocked > 0 && allowRemote && rememberedFor === message.id && (
               <p className="hint" role="status">
-                {t("已记住这个发件人，以后自动显示远程图片；可在「账号与代理」设置里移除。")}
+                {t("已记住这个发件人，以后自动显示远程图片；可在「设置 > 通用」里移除。")}
               </p>
             )}
 

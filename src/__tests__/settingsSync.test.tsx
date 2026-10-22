@@ -163,8 +163,18 @@ describe("GitHub 登录面板", () => {
 });
 
 describe("设置同步面板", () => {
-  async function fillForm({ agree = true, password = "password123" } = {}) {
-    const { container } = render(<SettingsSyncPanel />);
+  async function fillForm({
+    agree = true,
+    password = "password123",
+    onSettingsImported,
+  }: {
+    agree?: boolean;
+    password?: string;
+    onSettingsImported?: () => void;
+  } = {}) {
+    const { container } = render(
+      <SettingsSyncPanel onSettingsImported={onSettingsImported} />,
+    );
     const form = await findEl(container, ".settings-sync-enable");
     if (agree) {
       fireEvent.click(within(form).getByLabelText(/私密 Gist/));
@@ -360,6 +370,14 @@ describe("设置同步面板", () => {
     expect(operation).toHaveBeenNthCalledWith(2, "second-password", "测试机", false);
     await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
     expect((within(form).getByLabelText("同步密码") as HTMLInputElement).value).toBe("second-password");
+  });
+
+  it("下载成功后通知外层重读账号", async () => {
+    const onSettingsImported = vi.fn();
+    const form = await fillForm({ onSettingsImported });
+    fireEvent.click(within(form).getByRole("button", { name: "从云端下载" }));
+    expect(await screen.findByText("已从云端下载。")).toBeTruthy();
+    expect(onSettingsImported).toHaveBeenCalledTimes(1);
   });
 
   it("上传成功后直接复用保留的密码下载", async () => {

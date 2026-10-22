@@ -571,6 +571,8 @@ type InboxPanelProps = {
   onNotificationOpen?: () => void;
   /** 邮箱栏底部账号入口的资料。 */
   githubProfile?: GitHubLoginView | null;
+  /** 设置同步导入账号后由外层递增，触发邮箱栏和邮件列表重读。 */
+  accountsVersion?: number;
   /** 顶栏「通讯录」入口。 */
   onOpenContacts?: () => void;
   /** 邮箱栏底部设置齿轮。 */
@@ -585,6 +587,7 @@ export default function InboxPanel({
   onComposeSeedConsumed,
   onNotificationOpen,
   githubProfile = null,
+  accountsVersion = 0,
   onOpenContacts,
   onOpenSettings,
   onOpenSyncSettings,
@@ -606,8 +609,10 @@ export default function InboxPanel({
   const [messages, setMessages] = useState<InboxMessage[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
-  // 删除账号后，即使查询条件没变，也重新读取列表并清掉会话缓存。
+  // 删除账号或设置同步导入账号后，即使查询条件没变，也重新读取列表。
   const [accountRevision, setAccountRevision] = useState(0);
+  // 记住上次处理过的导入版本，避免首次挂载时多刷一次。
+  const loadedAccountsVersion = useRef(accountsVersion);
   const [error, setError] = useState<string>();
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -619,6 +624,13 @@ export default function InboxPanel({
   const [statusNote, setStatusNote] = useState("");
   // 批量标为已读进行中，挡住重复触发。
   const [bulkReadBusy, setBulkReadBusy] = useState(false);
+
+  // 短提示只停留 3 秒；新提示会让旧计时自动失效。
+  useEffect(() => {
+    if (!statusNote) return;
+    const timer = window.setTimeout(() => setStatusNote(""), 3000);
+    return () => window.clearTimeout(timer);
+  }, [statusNote]);
 
   // 搜索相关状态：输入值、已提交的查询、命中结果与深拉提示。
   const [searchInput, setSearchInput] = useState("");
@@ -836,6 +848,14 @@ export default function InboxPanel({
   useEffect(() => {
     void refreshSidebar();
   }, [refreshSidebar]);
+
+  // 设置同步刚导入账号或账号配置：立即重读邮箱栏和当前邮件列表。
+  useEffect(() => {
+    if (loadedAccountsVersion.current === accountsVersion) return;
+    loadedAccountsVersion.current = accountsVersion;
+    setAccountRevision((current) => current + 1);
+    void refreshSidebar();
+  }, [accountsVersion, refreshSidebar]);
 
   // 邮箱栏右键菜单开着时，点别处 / 按 Esc / 一滚动就收起来。
   useEffect(() => {
