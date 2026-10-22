@@ -506,6 +506,11 @@ pub(crate) fn show_main_window(app: &tauri::AppHandle) {
         let Some(window) = handle.get_webview_window("main") else {
             return;
         };
+        // 通知点击时 Windows 可能仍拒绝普通窗口抢前台。先短暂置顶，确保窗口真正
+        // 出现在最前面；焦点请求成功后再恢复普通层级，避免长期遮挡其它程序。
+        if let Err(error) = window.set_always_on_top(true) {
+            tracing::warn!(error = %error, "临时置顶主窗口失败");
+        }
         if let Err(error) = window.show() {
             tracing::warn!(error = %error, "显示主窗口失败");
         }
@@ -513,26 +518,44 @@ pub(crate) fn show_main_window(app: &tauri::AppHandle) {
             tracing::warn!(error = %error, "恢复主窗口失败");
         }
 
-        // show/unminimize 会把真正的窗口操作排到事件循环；紧接着调用 set_focus 时，
-        // 窗口状态仍可能是“隐藏/最小化”，底层会直接跳过激活。等事件循环处理完再聚焦。
         let focus_handle = handle.clone();
         std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(120));
-            let inner_handle = focus_handle.clone();
+            // show/unminimize 会把真正的窗口操作排到事件循环；等它们落地后再请求焦点。
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            request_main_window_focus(&focus_handle);
+            // 第一次可能仍被系统前台锁拦下；再给一次机会，然后恢复普通层级。
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            request_main_window_focus(&focus_handle);
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            let release_handle = focus_handle.clone();
             if let Err(error) = focus_handle.run_on_main_thread(move || {
-                if let Some(window) = inner_handle.get_webview_window("main") {
-                    if let Err(error) = window.set_focus() {
-                        tracing::warn!(error = %error, "主窗口置前失败");
-                    } else {
-                        tracing::info!("主窗口已恢复并请求置前");
+                if let Some(window) = release_handle.get_webview_window("main") {
+                    if let Err(error) = window.set_always_on_top(false) {
+                        tracing::warn!(error = %error, "恢复主窗口普通层级失败");
                     }
                 }
             }) {
-                tracing::warn!(error = %error, "调度主窗口置前失败");
+                tracing::warn!(error = %error, "调度恢复主窗口普通层级失败");
             }
         });
     }) {
         tracing::warn!(error = %error, "调度主窗口显示失败");
+    }
+}
+
+/// 在主线程请求一次主窗口焦点；只负责调度，不阻塞调用线程。
+fn request_main_window_focus(app: &tauri::AppHandle) {
+    let handle = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || {
+        if let Some(window) = handle.get_webview_window("main") {
+            if let Err(error) = window.set_focus() {
+                tracing::warn!(error = %error, "主窗口置前失败");
+            } else {
+                tracing::info!("主窗口已恢复并请求置前");
+            }
+        }
+    }) {
+        tracing::warn!(error = %error, "调度主窗口置前失败");
     }
 }
 
