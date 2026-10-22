@@ -1432,7 +1432,7 @@ describe("标签组管理", () => {
       container.querySelectorAll(".ai-feature-list > .ai-feature-card"),
     ) as HTMLElement[];
     expect(cards.length).toBeGreaterThan(1);
-    expect(cards.every((card) => card.getAttribute("data-collapsed") === "true")).toBe(true);
+    expect(cards.every((card) => card.getAttribute("data-expanded") === "false")).toBe(true);
     expect(screen.queryByLabelText("翻译站点")).toBeNull();
     expect(screen.queryByLabelText("摘要站点")).toBeNull();
     expect(screen.getByRole("button", { name: "展开翻译" })).toBeTruthy();
@@ -1440,15 +1440,36 @@ describe("标签组管理", () => {
     const card = cards[0];
     fireEvent.click(screen.getByRole("button", { name: "展开翻译" }));
     expect(await screen.findByLabelText("翻译站点")).toBeTruthy();
-    expect(card.getAttribute("data-collapsed")).toBe("false");
+    expect(card.getAttribute("data-expanded")).toBe("true");
     // 只影响这一张卡片，别的功能仍然折叠。
     expect(screen.queryByLabelText("摘要站点")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "折叠翻译" }));
     await waitFor(() => {
       expect(screen.queryByLabelText("翻译站点")).toBeNull();
-      expect(card.getAttribute("data-collapsed")).toBe("true");
+      expect(card.getAttribute("data-expanded")).toBe("false");
     });
+  });
+
+  it("点功能名称也能展开，别的功能保持折叠", async () => {
+    const { container } = prepare();
+    const cards = Array.from(
+      container.querySelectorAll(".ai-feature-list > .ai-feature-card"),
+    ) as HTMLElement[];
+    const card = cards[0];
+    const title = within(card).getByText("翻译");
+    const toggle = within(card).getByRole("button", { name: "展开翻译" });
+
+    expect(toggle.contains(title)).toBe(true);
+    fireEvent.click(title);
+    expect(await screen.findByLabelText("翻译站点")).toBeTruthy();
+    expect(card.getAttribute("data-expanded")).toBe("true");
+    expect(screen.queryByLabelText("摘要站点")).toBeNull();
+
+    const expandedToggle = within(card).getByRole("button", { name: "折叠翻译" });
+    const detailsId = expandedToggle.getAttribute("aria-controls");
+    expect(detailsId).toBeTruthy();
+    expect(document.getElementById(detailsId as string)).toBeTruthy();
   });
 });
 
