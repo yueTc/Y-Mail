@@ -662,6 +662,9 @@ export default function InboxPanel({
   const [deleteAccountConfirm, setDeleteAccountConfirm] = useState<AccountInboxSummary>();
   const [accountDeleteBusy, setAccountDeleteBusy] = useState(false);
   const [accountDeleteError, setAccountDeleteError] = useState("");
+  // 正在执行「停止后立即启动」的账号；按账号分开记，避免互相挡住。
+  const [syncingAccounts, setSyncingAccounts] = useState<Set<number>>(new Set());
+  const [accountSyncError, setAccountSyncError] = useState("");
   // 文件夹右键菜单：落在哪个文件夹上、鼠标位置在哪。
   const [folderMenu, setFolderMenu] = useState<{ folder: InboxFolder; x: number; y: number }>();
   // 文件夹操作弹窗：新建根文件夹 / 新建子文件夹 / 重命名 / 删除。
@@ -1679,6 +1682,27 @@ export default function InboxPanel({
     }
   }, [selectedAccount]);
 
+  /** 账号右键「立即同步」：只重启这一账号，复用同步页的停止后再启动做法。 */
+  const syncAccountNow = useCallback(async (account: AccountInboxSummary) => {
+    setAccountMenu(undefined);
+    setAccountSyncError("");
+    setSyncingAccounts((current) => new Set(current).add(account.accountId));
+    setStatusNote(t("正在同步「{0}」", [account.displayName || account.email]));
+    try {
+      await api.stopSync(account.accountId);
+      await api.startSync(account.accountId);
+      setSyncStatuses(await api.syncStatus());
+    } catch (caught) {
+      setAccountSyncError(describeError(caught));
+    } finally {
+      setSyncingAccounts((current) => {
+        const next = new Set(current);
+        next.delete(account.accountId);
+        return next;
+      });
+    }
+  }, []);
+
   const accounts: AccountInboxSummary[] = summary?.accounts ?? [];
   const menuAccount = accountMenu?.account;
 
@@ -2055,6 +2079,11 @@ export default function InboxPanel({
             {t("加载失败：")}{error}
           </p>
         )}
+        {accountSyncError && (
+          <p className="error" role="alert">
+            {t("同步操作失败：")}{accountSyncError}
+          </p>
+        )}
         {searchError && (
           <p className="error" role="alert">
             {t("搜索失败：")}{searchError}
@@ -2178,7 +2207,7 @@ export default function InboxPanel({
         aria-label={t("邮箱菜单")}
         style={{
           left: Math.min(accountMenu.x, Math.max(8, window.innerWidth - 220)),
-          top: Math.min(accountMenu.y, Math.max(8, window.innerHeight - (menuAccount ? 190 : 60))),
+          top: Math.min(accountMenu.y, Math.max(8, window.innerHeight - (menuAccount ? 240 : 60))),
         }}
         onClick={(event) => event.stopPropagation()}
       >
@@ -2205,6 +2234,14 @@ export default function InboxPanel({
               }}
             >
               {t("全部标为已读")}</button>
+            <button
+              type="button"
+              role="menuitem"
+              className="context-menu-item"
+              disabled={syncingAccounts.has(menuAccount.accountId)}
+              onClick={() => void syncAccountNow(menuAccount)}
+            >
+              {t("立即同步")}</button>
             <button
               type="button"
               role="menuitem"

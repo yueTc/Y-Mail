@@ -173,6 +173,7 @@ beforeEach(() => {
   vi.mocked(api.listAccounts).mockResolvedValue([ACCOUNT]);
   vi.mocked(api.listProxies).mockResolvedValue([]);
   vi.mocked(api.stopSync).mockResolvedValue(undefined);
+  vi.mocked(api.startSync).mockResolvedValue(1);
   vi.mocked(api.deleteAccount).mockResolvedValue(undefined);
   vi.mocked(api.listLabelGroups).mockResolvedValue([]);
 });
@@ -491,7 +492,7 @@ describe("邮箱栏右键添加和删除", () => {
     fireEvent.contextMenu(account);
     const menu = screen.getByRole("menu", { name: "邮箱菜单" });
     expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
-      "全部标为已读", "编辑", "新建文件夹", "删除邮箱",
+      "全部标为已读", "立即同步", "编辑", "新建文件夹", "删除邮箱",
     ]);
     expect(within(menu).queryByRole("menuitem", { name: "添加邮箱" })).toBeNull();
   });
@@ -642,6 +643,95 @@ describe("邮箱栏右键添加和删除", () => {
   });
 });
 
+describe("邮箱右键立即同步", () => {
+  function twoAccounts() {
+    return {
+      accounts: [
+        {
+          accountId: 1,
+          email: "a@example.com",
+          displayName: "测试账号",
+          color: "#3366ff",
+          enabled: true,
+          messageCount: 3,
+          unreadCount: 2,
+        },
+        {
+          accountId: 2,
+          email: "b@example.com",
+          displayName: "第二个账号",
+          color: "#ff6633",
+          enabled: true,
+          messageCount: 1,
+          unreadCount: 1,
+        },
+      ],
+      totalUnread: 3,
+      totalMessages: 4,
+    };
+  }
+
+  it("只重启点中的账号，并显示正在同步的短提示", async () => {
+    vi.mocked(api.inboxSummary).mockResolvedValue(twoAccounts());
+    render(<InboxPanel />);
+
+    const account = await screen.findByRole("button", { name: /测试账号/ });
+    fireEvent.contextMenu(account);
+    const menu = screen.getByRole("menu", { name: "邮箱菜单" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "立即同步" }));
+
+    await waitFor(() => expect(api.startSync).toHaveBeenCalledWith(1));
+    expect(api.stopSync).toHaveBeenCalledWith(1);
+    expect(api.stopSync).not.toHaveBeenCalledWith(2);
+    expect(api.startSync).not.toHaveBeenCalledWith(2);
+    expect(vi.mocked(api.stopSync).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(api.startSync).mock.invocationCallOrder[0],
+    );
+    expect(screen.queryByRole("menu", { name: "邮箱菜单" })).toBeNull();
+    expect(screen.getByText("正在同步「测试账号」")).toBeTruthy();
+  });
+
+  it("同步重启期间，同一账号再次右键时按钮禁用", async () => {
+    let finishStop: (() => void) | undefined;
+    vi.mocked(api.stopSync).mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        finishStop = resolve;
+      }),
+    );
+    render(<InboxPanel />);
+
+    const account = await screen.findByRole("button", { name: /测试账号/ });
+    fireEvent.contextMenu(account);
+    fireEvent.click(screen.getByRole("menuitem", { name: "立即同步" }));
+    await waitFor(() => expect(api.stopSync).toHaveBeenCalledWith(1));
+
+    fireEvent.contextMenu(account);
+    const busyMenu = screen.getByRole("menu", { name: "邮箱菜单" });
+    const syncItem = within(busyMenu).getByRole("menuitem", { name: "立即同步" }) as HTMLButtonElement;
+    expect(syncItem.disabled).toBe(true);
+
+    await act(async () => {
+      finishStop?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(api.startSync).toHaveBeenCalledWith(1));
+  });
+
+  it("启动失败时显示错误，忙碌状态恢复并可再次点击", async () => {
+    vi.mocked(api.startSync).mockRejectedValueOnce(new Error("连接失败"));
+    render(<InboxPanel />);
+
+    const account = await screen.findByRole("button", { name: /测试账号/ });
+    fireEvent.contextMenu(account);
+    fireEvent.click(screen.getByRole("menuitem", { name: "立即同步" }));
+
+    expect(await screen.findByText("同步操作失败：连接失败")).toBeTruthy();
+    fireEvent.contextMenu(account);
+    const menu = screen.getByRole("menu", { name: "邮箱菜单" });
+    const syncItem = within(menu).getByRole("menuitem", { name: "立即同步" }) as HTMLButtonElement;
+    expect(syncItem.disabled).toBe(false);
+  });
+});
 describe("列表标签胶囊", () => {
   const billPill: GroupResult = {
     groupId: 1,

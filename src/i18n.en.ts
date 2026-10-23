@@ -353,6 +353,7 @@ export const EN: Record<string, string> = {
   "来自 ": "From ",
   "类型": "Type",
   "立即同步": "Sync now",
+  "正在同步「{0}」": "Syncing “{0}”",
   "立即下载": "Download now",
   "例如 https://api.example.com/v1，本机 Ollama 可填 http://127.0.0.1:11434": "e.g. https://api.example.com/v1; for local Ollama use http://127.0.0.1:11434",
   "例如：公司代理": "e.g. Work proxy",
