@@ -10,9 +10,16 @@ export const COMPOSE_MIN_WIDTH = 480;
 /** 一条栏的宽度上下限。 */
 export type PaneWidthLimits = { min: number; max: number };
 
-/** 收件箱那两栏的上下限（老用户宽度记忆沿用这套，不许改）。 */
-export const SIDEBAR_LIMITS: PaneWidthLimits = { min: 180, max: 320 };
+/** 收件箱左栏可收成更窄的图标栏；中栏上下限保持原样。 */
+export const SIDEBAR_LIMITS: PaneWidthLimits = { min: 48, max: 320 };
 export const LIST_LIMITS: PaneWidthLimits = { min: 300, max: 560 };
+/** 左栏缩到这个宽度及以下时，只显示图标和未读徽标。 */
+export const SIDEBAR_COMPACT_WIDTH = 96;
+
+/** 是否进入邮箱栏图标模式。 */
+export function isSidebarCompact(width: number): boolean {
+  return width <= SIDEBAR_COMPACT_WIDTH;
+}
 
 export type PaneWidths = {
   /** 邮箱栏宽度。 */
@@ -40,7 +47,7 @@ export type PaneProfile = {
   listLimits: PaneWidthLimits;
 };
 
-/** 收件箱档位（历史行为，一个字都不许变）。 */
+/** 收件箱档位；左栏可拖成图标模式，中栏行为保持历史值。 */
 export const INBOX_PANE_PROFILE: PaneProfile = {
   storageKey: "ymail.pane-widths.v1",
   defaults: DEFAULT_PANE_WIDTHS,

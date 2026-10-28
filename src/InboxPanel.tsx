@@ -48,6 +48,7 @@ import {
   COMPOSE_MIN_WIDTH,
   READER_MIN_WIDTH,
   RESIZER_WIDTH,
+  isSidebarCompact,
   usePaneWidths,
 } from "./usePaneWidths";
 import { t } from "./i18n";
@@ -215,6 +216,12 @@ function SidebarEntryIcon({ kind }: { kind: string }) {
           <path d="M4 7h16M9 4h6l1 3H8l1-3Z" />
           <path d="m7 7 1 14h8l1-14" />
           <path d="M10 11v6M14 11v6" />
+        </svg>
+      );
+    case "add":
+      return (
+        <svg {...iconProps}>
+          <path d="M12 5v14M5 12h14" />
         </svg>
       );
     default:
@@ -834,6 +841,57 @@ export default function InboxPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, listThreadMode, accountRevision]);
 
+  /** 后台分类完成后只替换结果字段，列表位置和当前阅读状态都不动。 */
+  const applyClassificationUpdate = useCallback(
+    (messageId: number, groupResults: GroupResult[]) => {
+      const patch = (item: InboxMessage): InboxMessage =>
+        item.id === messageId ? { ...item, groupResults } : item;
+      setMessages((old) => old.map(patch));
+      setThreads((old) =>
+        old.map((thread) =>
+          thread.latest.id === messageId
+            ? { ...thread, latest: { ...thread.latest, groupResults } }
+            : thread,
+        ),
+      );
+      setChildren((old) => {
+        let changed = false;
+        const copy = new Map(old);
+        for (const [key, list] of copy) {
+          if (list.some((item) => item.id === messageId)) {
+            copy.set(key, list.map(patch));
+            changed = true;
+          }
+        }
+        return changed ? copy : old;
+      });
+      setHits((old) =>
+        old.map((hit) =>
+          hit.message.id === messageId ? { ...hit, message: { ...hit.message, groupResults } } : hit,
+        ),
+      );
+      setSelectedMessage((old) =>
+        old && old.id === messageId ? { ...old, groupResults } : old,
+      );
+      setMessageMenu((old) =>
+        old && old.message.id === messageId
+          ? { ...old, message: { ...old.message, groupResults } }
+          : old,
+      );
+    },
+    [],
+  );
+
+  /** 手动改完某组后取一次权威结果，保证读信页和列表同一时刻更新。 */
+  const refreshMessageGroups = useCallback(async (messageId: number) => {
+    try {
+      const fresh = await api.getInboxMessage(messageId);
+      if (fresh) applyClassificationUpdate(messageId, fresh.groupResults);
+    } catch {
+      // 读回失败不把已经写成功的操作改成报错；列表刷新仍会继续。
+    }
+  }, [applyClassificationUpdate]);
+
   /** 总览与文件夹：第一次进来拉一次，之后点刷新再拉。 */
   const refreshSidebar = useCallback(async () => {
     try {
@@ -1081,7 +1139,10 @@ export default function InboxPanel({
         api.previewClassifyMessages([message.id]),
       ]);
       if (settings.classifySkipManualConfirm) {
-        await api.classifyMessages(preview.authorizationToken);
+        const results = await api.classifyMessages(preview.authorizationToken);
+        for (const result of results) {
+          applyClassificationUpdate(result.messageId, result.groupResults);
+        }
         await load(true);
       } else {
         setClassifySkipNext(false);
@@ -1092,7 +1153,7 @@ export default function InboxPanel({
     } finally {
       setClassifyBusy(false);
     }
-  }, [load]);
+  }, [load, applyClassificationUpdate]);
 
   /**
    * 确认框里点「确认分类」：这时才真正外发；勾了「下次不要提醒」就先记住这个偏好。
@@ -1106,7 +1167,10 @@ export default function InboxPanel({
       if (classifySkipNext) {
         await api.setClassifySkipManualConfirm(true);
       }
-      await api.classifyMessages(classifyConfirm.preview.authorizationToken);
+      const results = await api.classifyMessages(classifyConfirm.preview.authorizationToken);
+      for (const result of results) {
+        applyClassificationUpdate(result.messageId, result.groupResults);
+      }
       setClassifyConfirm(undefined);
       setClassifySkipNext(false);
       await load(true);
@@ -1115,7 +1179,7 @@ export default function InboxPanel({
     } finally {
       setClassifyBusy(false);
     }
-  }, [classifyConfirm, classifySkipNext, load]);
+  }, [classifyConfirm, classifySkipNext, load, applyClassificationUpdate]);
 
   /** 右键菜单里点某组的某个值：写入手动结果（该组从此锁定），再刷新列表。 */
   const setGroupValue = useCallback(
@@ -1125,12 +1189,13 @@ export default function InboxPanel({
       setMessageMenu(undefined);
       try {
         await api.setMessageGroupValue(messageId, groupId, labelId, scoreValue);
+        await refreshMessageGroups(messageId);
         await load(true);
       } catch (caught) {
         setError(describeError(caught));
       }
     },
-    [messageMenu, load],
+    [messageMenu, load, refreshMessageGroups],
   );
 
   /** 右键菜单里点「清除本组结果」：删掉该组结果并解锁，再刷新列表。 */
@@ -1141,12 +1206,13 @@ export default function InboxPanel({
       setMessageMenu(undefined);
       try {
         await api.clearMessageGroupValue(messageId, groupId);
+        await refreshMessageGroups(messageId);
         await load(true);
       } catch (caught) {
         setError(describeError(caught));
       }
     },
-    [messageMenu, load],
+    [messageMenu, load, refreshMessageGroups],
   );
 
   /**
@@ -1574,6 +1640,39 @@ export default function InboxPanel({
     };
   }, [refreshAll]);
 
+  // 后台分类完成后推一条结果事件：直接更新胶囊，不要求用户再点邮件，也不整页重载。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    const start = async () => {
+      try {
+        const off = await listen<{ messageId: number; groupResults: GroupResult[] }>(
+          "inbox:classification-updated",
+          (event) => {
+            const messageId = event.payload?.messageId;
+            const groupResults = event.payload?.groupResults;
+            if (!Number.isSafeInteger(messageId) || messageId <= 0 || !Array.isArray(groupResults)) {
+              return;
+            }
+            applyClassificationUpdate(messageId, groupResults);
+          },
+        );
+        if (cancelled) {
+          off();
+        } else {
+          unlisten = off;
+        }
+      } catch {
+        // 单元测试与浏览器预览里没有 Tauri 事件总线，忽略即可。
+      }
+    };
+    void start();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [applyClassificationUpdate]);
+
   // 回调跟着当前筛选更新；事件本身只订阅一次，避免刷新时出现监听空档。
   const notificationHandlers = useRef({ openMessage, onNotificationOpen });
   useEffect(() => {
@@ -1705,6 +1804,7 @@ export default function InboxPanel({
 
   const accounts: AccountInboxSummary[] = summary?.accounts ?? [];
   const menuAccount = accountMenu?.account;
+  const sidebarCompact = isSidebarCompact(widths.sidebar);
 
   return (
     <>
@@ -1712,7 +1812,7 @@ export default function InboxPanel({
         <AppTitleBar
           leading={<AppBrand />}
           leadingWidth={widths.sidebar}
-          className="inbox-titlebar"
+          className={sidebarCompact ? "inbox-titlebar is-sidebar-compact" : "inbox-titlebar"}
           center={
             <div className="inbox-search">
               {composeRequest && readingNotification && (
@@ -1893,11 +1993,17 @@ export default function InboxPanel({
             gridTemplateColumns: `${widths.sidebar}px ${RESIZER_WIDTH}px ${widths.list}px ${RESIZER_WIDTH}px minmax(0, 1fr)`,
           }}
         >
-          <aside className="inbox-sidebar" aria-label={t("邮箱栏")} onContextMenu={openSidebarMenu}>
+          <aside
+            className={sidebarCompact ? "inbox-sidebar is-sidebar-compact" : "inbox-sidebar"}
+            aria-label={t("邮箱栏")}
+            onContextMenu={openSidebarMenu}
+          >
             <div className="inbox-sidebar-scroll">
         <button
           type="button"
           className="sidebar-compose"
+          aria-label={t("写邮件")}
+          title={t("写邮件")}
           onClick={() => setComposeRequest({ kind: "new" })}
         >
           <svg
@@ -1909,7 +2015,7 @@ export default function InboxPanel({
             <path d="M4 20h4L18.5 9.5a2.12 2.12 0 0 0-3-3L5 17v3Z" />
             <path d="m13.5 7.5 3 3" />
           </svg>
-          <span>{t("写邮件")}</span>
+          <span className="sidebar-compose-label">{t("写邮件")}</span>
         </button>
 
         {UNIFIED_VIEWS.map((view) => {
@@ -1927,6 +2033,8 @@ export default function InboxPanel({
                   ? "sidebar-item sidebar-view-item active"
                   : "sidebar-item sidebar-view-item"
               }
+              aria-label={t(view.label)}
+              title={t(view.label)}
               onClick={() => {
                 setSelectedAccount(undefined);
                 setSelectedFolder(undefined);
@@ -1951,6 +2059,8 @@ export default function InboxPanel({
                   ? "sidebar-item sidebar-account-item active"
                   : "sidebar-item sidebar-account-item"
               }
+              aria-label={account.displayName || account.email}
+              title={account.displayName || account.email}
               onClick={() => {
                 setSelectedAccount(account.accountId);
                 setSelectedFolder(undefined);
@@ -1988,6 +2098,7 @@ export default function InboxPanel({
                           ? "sidebar-item sidebar-folder active"
                           : "sidebar-item sidebar-folder"
                       }
+                      aria-label={t("红旗邮件")}
                       title={t("这个账号里所有标红的邮件")}
                       onClick={() => {
                         setSelectedAccount(account.accountId);
@@ -2007,6 +2118,8 @@ export default function InboxPanel({
                           ? "sidebar-item sidebar-folder active"
                           : "sidebar-item sidebar-folder"
                       }
+                      aria-label={folderLabel(entry.folder)}
+                      title={folderLabel(entry.folder)}
                       onContextMenu={(event) => openFolderMenu(event, entry.folder)}
                       onClick={() => {
                         setSelectedAccount(entry.folder.accountId);
@@ -2029,8 +2142,11 @@ export default function InboxPanel({
             <button
               type="button"
               className="sidebar-item sidebar-add-account"
+              aria-label={t("＋ 添加邮箱")}
+              title={t("＋ 添加邮箱")}
               onClick={() => setAddAccountOpen(true)}
             >
+              <SidebarEntryIcon kind="add" />
               <span className="sidebar-item-title">{t("＋ 添加邮箱")}</span>
             </button>
             </div>

@@ -3591,7 +3591,7 @@ pub struct GroupResultDto {
 }
 
 impl GroupResultDto {
-    fn from_result(result: &MessageGroupResult) -> Self {
+    pub(crate) fn from_result(result: &MessageGroupResult) -> Self {
         let kind = result.group.kind.as_str().to_string();
         match &result.label {
             Some(label) => Self {

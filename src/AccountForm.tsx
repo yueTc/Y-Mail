@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   api,
@@ -16,6 +16,7 @@ import {
   type ServerConfig,
 } from "./api";
 import type { AccountDialogSource } from "./AccountDialog";
+import { recommendAccountColor } from "./accountColor";
 import { t } from "./i18n";
 
 /** 表单状态；授权码只存在这个内存对象里，不写 localStorage、不回显已保存的值。 */
@@ -270,6 +271,8 @@ export default function AccountForm({
   const [serversEdited, setServersEdited] = useState(account !== null);
   /** 用户有没有自己改过认证方式或 OAuth2 服务商；改过就不再自动覆盖。 */
   const [authEdited, setAuthEdited] = useState(false);
+  /** 用户亲手挑过颜色后，异步读到的账号列表不能再把选择改回去。 */
+  const colorEdited = useRef(false);
 
   useEffect(() => {
     setOauthClientSecret("");
@@ -302,6 +305,25 @@ export default function AccountForm({
       cancelled = true;
     };
   }, [proxiesVersion]);
+
+  // 新建账号时读一次已有色标，推荐一个尚未使用的颜色；读取失败保持默认值。
+  useEffect(() => {
+    if (account !== null) return;
+    let cancelled = false;
+    api
+      .listAccounts()
+      .then((accounts) => {
+        if (cancelled || colorEdited.current) return;
+        const recommendation = recommendAccountColor(accounts.map((item) => item.color));
+        setForm((current) =>
+          current.color === recommendation ? current : { ...current, color: recommendation },
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [account]);
 
   // 编辑 OAuth2 账号时顺手查一次授权状态，界面上直接显示。
   useEffect(() => {
@@ -588,7 +610,10 @@ export default function AccountForm({
           {t("色标")}<input
             type="color"
             value={form.color || "#3b82f6"}
-            onChange={(event) => patch({ color: event.target.value })}
+            onChange={(event) => {
+              colorEdited.current = true;
+              patch({ color: event.target.value });
+            }}
           />
         </label>
       </div>

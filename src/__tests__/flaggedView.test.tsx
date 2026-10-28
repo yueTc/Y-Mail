@@ -14,8 +14,14 @@ import type {
 } from "../api";
 import { api } from "../api";
 
+const events = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
+  listen: vi.fn(async (name: string, handler: (event: { payload: unknown }) => void) => {
+    events.set(name, handler);
+    return () => {
+      if (events.get(name) === handler) events.delete(name);
+    };
+  }),
 }));
 
 vi.mock("../ComposePanel", () => ({
@@ -137,6 +143,7 @@ function folder(overrides: Partial<InboxFolder> = {}): InboxFolder {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  events.clear();
   vi.mocked(api.inboxSummary).mockResolvedValue({
     accounts: [
       {
@@ -178,7 +185,10 @@ beforeEach(() => {
   vi.mocked(api.listLabelGroups).mockResolvedValue([]);
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.removeItem("ymail.pane-widths.v1");
+});
 
 /** 展开账号的文件夹列表，返回可见的文件夹按钮文字。 */
 async function openAccount(): Promise<string[]> {
@@ -277,6 +287,81 @@ describe("顶部统一区入口", () => {
         button.querySelector('svg.sidebar-view-icon[aria-hidden="true"]'),
       ),
     ).toBe(true);
+  });
+
+  it("邮箱栏缩到图标模式时只留图标，账号入口排在设置上方", async () => {
+    localStorage.setItem(
+      "ymail.pane-widths.v1",
+      JSON.stringify({ sidebar: 48, list: 420 }),
+    );
+    render(<InboxPanel />);
+    await screen.findByRole("button", { name: "测试账号" });
+
+    const sidebar = screen.getByRole("complementary", { name: "邮箱栏" });
+    expect(sidebar.classList.contains("is-sidebar-compact")).toBe(true);
+    expect(document.querySelector(".inbox-titlebar")?.classList.contains("is-sidebar-compact")).toBe(true);
+    expect(screen.getByRole("button", { name: "写邮件" }).getAttribute("title")).toBe("写邮件");
+
+    const footerButtons = Array.from(
+      sidebar.querySelectorAll<HTMLButtonElement>(".mailbox-footer button"),
+    );
+    expect(footerButtons[0]?.classList.contains("mailbox-account-button")).toBe(true);
+    expect(footerButtons[1]?.classList.contains("mailbox-settings-button")).toBe(true);
+  });
+
+  it("后台分类结果事件到达后立刻更新胶囊，不用再点邮件", async () => {
+    vi.mocked(api.listInboxMessages).mockResolvedValue({
+      items: [{
+        id: 9,
+        accountId: 1,
+        folderId: 10,
+        uid: 9,
+        threadKey: "thread-9",
+        subject: "待分类邮件",
+        fromName: "发件人",
+        fromAddr: "sender@example.com",
+        dateUtc: "2026-10-28T00:00:00Z",
+        size: 100,
+        hasAttachments: false,
+        isRead: true,
+        isFlagged: false,
+        snippet: "",
+        accountEmail: "a@example.com",
+        accountName: "测试账号",
+        accountColor: "#3366ff",
+        folderPath: "INBOX",
+        groupResults: [],
+      }],
+      total: 1,
+      offset: 0,
+      limit: 200,
+    });
+    render(<InboxPanel />);
+    expect(await screen.findByText("待分类邮件")).toBeTruthy();
+    expect(screen.queryByText("账单")).toBeNull();
+    await waitFor(() => expect(events.has("inbox:classification-updated")).toBe(true));
+
+    await act(async () => {
+      events.get("inbox:classification-updated")?.({
+        payload: {
+          messageId: 9,
+          groupResults: [{
+            groupId: 1,
+            groupName: "内容",
+            kind: "choice",
+            labelId: 2,
+            labelName: "账单",
+            labelColor: "orange",
+            scoreMin: null,
+            scoreMax: null,
+            scoreValue: null,
+          }],
+        },
+      });
+    });
+
+    expect(await screen.findByText("账单")).toBeTruthy();
+    expect(api.listInboxMessages).toHaveBeenCalledTimes(1);
   });
 
   it("点「草稿箱」按文件夹类型查，点「红旗邮件」按红旗查", async () => {

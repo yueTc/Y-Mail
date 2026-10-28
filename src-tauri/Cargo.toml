@@ -32,8 +32,6 @@ tauri.workspace = true
 tauri-plugin-notification.workspace = true
 # 自己弹通知：插件在开发模式下不传应用编号，通知会被算到 PowerShell 名下。
 notify-rust.workspace = true
-# 把通知里的应用名登记进当前用户注册表。
-winreg.workspace = true
 tauri-plugin-dialog.workspace = true
 tauri-plugin-autostart.workspace = true
 # 应用内更新：查新版本、下载签名包、装完重启。
@@ -48,6 +46,8 @@ tauri-plugin-single-instance = "2.5.2"
 
 # 复制验证码到系统剪贴板（只在 Windows 用到）。
 [target.'cfg(windows)'.dependencies]
+# 把通知里的应用名登记进当前用户注册表。
+winreg.workspace = true
 arboard = { version = "3", default-features = false }
 # 直接保留系统点击回调，避免横幅消失后丢失通知中心的点击。
 tauri-winrt-notification = "0.8.1"

@@ -27,6 +27,7 @@ use tauri::{AppHandle, Emitter, Manager};
 #[cfg(not(windows))]
 use tauri_plugin_notification::NotificationExt;
 
+use crate::commands::GroupResultDto;
 use crate::state::AppState;
 
 /// 轮询间隔；规格要求新邮件十秒内出现，这里取五秒留余量。
@@ -46,6 +47,8 @@ const MAIN_WINDOW_LABEL: &str = "main";
 pub const NEW_MAIL_EVENT: &str = "inbox:new-mail";
 /// 通知被点击事件名；界面监听它定位并打开那封邮件。
 pub const OPEN_MESSAGE_EVENT: &str = "inbox:open-message";
+/// 后台分类完成事件名；只带结果展示字段，界面据此原地刷新胶囊。
+pub const CLASSIFICATION_UPDATED_EVENT: &str = "inbox:classification-updated";
 
 /// 通知里显示的应用名；也是这个软件的名字。
 #[cfg(windows)]
@@ -73,6 +76,16 @@ pub struct NewMailEvent {
 pub struct OpenMessageEvent {
     /// 本地邮件编号。
     pub message_id: i64,
+}
+
+/// 一封邮件分类完成后的刷新事件；不含正文、提示词或凭据。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassificationUpdatedEvent {
+    /// 本地邮件编号。
+    pub message_id: i64,
+    /// 最新分类结果，按组的显示顺序排列。
+    pub group_results: Vec<GroupResultDto>,
 }
 
 /// 启动后台提醒循环。
@@ -198,7 +211,24 @@ async fn drain_classify_queue(app: &AppHandle, enabled: &AtomicBool, retry_at: &
         // 每封按当前开启的标签组分类；门槛从各组的配置读，不看全局百分比。
         // 已有结果的组在编排层直接跳过，绝不覆盖用户手改的结果。
         match engine.classify_message_if_untagged(message_id).await {
-            Ok(_) => {
+            Ok(true) => {
+                retry_at.remove(&message_id);
+                match engine.message_group_results(message_id) {
+                    Ok(results) => {
+                        let event = ClassificationUpdatedEvent {
+                            message_id,
+                            group_results: results.iter().map(GroupResultDto::from_result).collect(),
+                        };
+                        if let Err(error) = app.emit(CLASSIFICATION_UPDATED_EVENT, event) {
+                            tracing::debug!(error = %error, message_id, "推送分类结果事件失败");
+                        }
+                    }
+                    Err(error) => {
+                        tracing::debug!(error = %error, message_id, "读取分类结果用于刷新失败");
+                    }
+                }
+            }
+            Ok(false) => {
                 retry_at.remove(&message_id);
             }
             Err(error) => {
@@ -342,6 +372,7 @@ async fn identify_verification(app: &AppHandle, item: &NewMailEvent) -> Option<V
 }
 
 /// 把识别结果排成通知正文的两行：第一行优先放验证码，第二行放验证链接。
+#[cfg_attr(not(windows), allow(dead_code))]
 fn verification_lines(finding: &VerificationFinding) -> (String, String) {
     match (
         finding.code.as_deref().map(|code| format!("验证码：{code}")),
@@ -380,6 +411,7 @@ fn notify_verification(app: &AppHandle, item: &NewMailEvent, finding: Verificati
 }
 
 /// 用户点击通知按钮后要执行的动作；只有通过本地校验的值才会走到这里。
+#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SafeAction {
     /// 点击通知本身，只打开内部提供编号的邮件。
@@ -395,6 +427,7 @@ enum SafeAction {
 ///
 /// 点击时再校验一遍：只认内部约定的两个标识，值还要过一次本地白名单，
 /// 校验不过就什么都不做，绝不复制、绝不打开。这条函数不碰系统接口，方便单测。
+#[cfg_attr(not(windows), allow(dead_code))]
 fn safe_action_value(action: &str, code: Option<&str>, link: Option<&str>) -> Option<SafeAction> {
     match action {
         "copy_code" => code.and_then(mail_core::sanitize_code).map(SafeAction::Copy),
@@ -502,6 +535,7 @@ fn copy_to_clipboard(text: &str) -> Result<(), String> {
 /// 通知归属用的应用编号：用安装标识，不用中文名。
 ///
 /// 改名之后编号不变，用户此前在系统里对该应用的通知设置（开关、提示音）还能对上。
+#[cfg_attr(not(windows), allow(dead_code))]
 fn notification_app_id(app: &AppHandle) -> String {
     app.config().identifier.clone()
 }
@@ -895,6 +929,19 @@ mod tests {
             take_classify_batch(ids),
             vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
         );
+    }
+
+    #[test]
+    fn 分类刷新事件只带编号和展示结果() {
+        let event = super::ClassificationUpdatedEvent {
+            message_id: 42,
+            group_results: Vec::new(),
+        };
+        let value = serde_json::to_value(event).expect("分类事件应能序列化");
+        assert_eq!(value["messageId"], 42);
+        assert_eq!(value["groupResults"], serde_json::json!([]));
+        assert!(value.get("body").is_none());
+        assert!(value.get("prompt").is_none());
     }
 
     #[test]

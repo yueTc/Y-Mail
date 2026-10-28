@@ -10,8 +10,10 @@ import {
   LIST_LIMITS,
   READER_MIN_WIDTH,
   RESIZER_WIDTH,
+  SIDEBAR_COMPACT_WIDTH,
   SIDEBAR_LIMITS,
   fitPaneWidths,
+  isSidebarCompact,
   paneBudget,
 } from "../usePaneWidths";
 
@@ -46,6 +48,12 @@ describe("三栏宽度计算", () => {
       sidebar: SIDEBAR_LIMITS.min,
       list: LIST_LIMITS.min,
     });
+  });
+
+  it("邮箱栏下限放宽到图标宽度，并只在窄栏启用图标模式", () => {
+    expect(SIDEBAR_LIMITS.min).toBe(48);
+    expect(isSidebarCompact(SIDEBAR_COMPACT_WIDTH)).toBe(true);
+    expect(isSidebarCompact(SIDEBAR_COMPACT_WIDTH + 1)).toBe(false);
   });
 
   it("空间不够时先挤邮件列表，再挤邮箱栏", () => {

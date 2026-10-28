@@ -15,7 +15,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use mail_core::{
     AiFunction, AiProviderInput, AiProviderKind, AiThinkingLevel, InboxQuery, MailEngine, McpDraftInput,
-    McpError, McpRecipient, MemorySecretStore, NewOutbox, OutboxKind, OutboxState, SearchQuery,
+    McpError, McpRecipient, MemorySecretStore, NewOutbox, OutboxKind, OutboxState, SearchQuery, SyncState,
 };
 use mail_domain::account::{AccountDraft, AccountProxyMode, AuthType, OAuthProvider, Security, ServerConfig};
 use mail_domain::proxy::Secret;
@@ -580,6 +580,23 @@ async fn wait_for_inbox(engine: &MailEngine, expected: i64) {
     }
 }
 
+async fn wait_for_sync_idle(engine: &MailEngine, account_id: i64) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        if engine
+            .sync_statuses()
+            .iter()
+            .any(|status| status.account_id == account_id && status.state == SyncState::IdleWaiting)
+        {
+            return;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("等待同步进入空闲状态超时");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 fn data_dir_contains(dir: &std::path::Path, needle: &[u8]) -> bool {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return false;
@@ -809,6 +826,7 @@ async fn 验收_重启后断点续传不重复拉取已入库邮件() {
             .expect("建账号");
         assert_eq!(engine.start_sync(Some(account.id.0)).expect("启动同步"), 1);
         wait_for_inbox(&engine, 3).await;
+        wait_for_sync_idle(&engine, account.id.0).await;
         engine.stop_sync(Some(account.id.0)).await;
 
         // 快照把断点落在最小 UID 上，重启后能从它接着走。
@@ -841,7 +859,7 @@ async fn 验收_重启后断点续传不重复拉取已入库邮件() {
     );
 
     assert_eq!(engine.start_sync(Some(account_id)).expect("重启后继续同步"), 1);
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    wait_for_sync_idle(&engine, account_id).await;
     engine.stop_sync(Some(account_id)).await;
 
     let page = engine.inbox_messages(&InboxQuery::default()).expect("收件箱");

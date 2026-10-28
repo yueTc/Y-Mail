@@ -645,6 +645,16 @@ textarea:focus {
   white-space: nowrap;
 }
 
+/* 邮箱栏收成图标栏后，标题栏左侧也只留应用图标，避免品牌文字溢出。 */
+.inbox-titlebar.is-sidebar-compact .app-titlebar-leading {
+  justify-content: center;
+  padding: 0;
+}
+
+.inbox-titlebar.is-sidebar-compact .app-brand-name {
+  display: none;
+}
+
 .app-titlebar-center {
   display: flex;
   flex: 0 1 auto;
@@ -1086,6 +1096,71 @@ textarea:focus {
   display: flex;
   flex-direction: column;
   gap: 1px;
+}
+
+/* 图标模式：文字收起，图标居中；未读数变成角标，账号色标缩成圆点。 */
+.inbox-sidebar.is-sidebar-compact {
+  padding-inline: 4px;
+}
+
+.inbox-sidebar.is-sidebar-compact .inbox-sidebar-scroll {
+  overflow-x: hidden;
+}
+
+.inbox-sidebar.is-sidebar-compact .sidebar-compose {
+  display: flex;
+  justify-content: center;
+  padding: 0;
+}
+
+.inbox-sidebar.is-sidebar-compact .sidebar-compose-label,
+.inbox-sidebar.is-sidebar-compact .sidebar-item-title {
+  display: none;
+}
+
+.inbox-sidebar.is-sidebar-compact .sidebar-compose-icon {
+  justify-self: auto;
+}
+
+.inbox-sidebar.is-sidebar-compact .sidebar-item {
+  position: relative;
+  justify-content: center;
+  gap: 0;
+  padding: 6px;
+}
+
+.inbox-sidebar.is-sidebar-compact .sidebar-view-item,
+.inbox-sidebar.is-sidebar-compact .sidebar-account-item,
+.inbox-sidebar.is-sidebar-compact .sidebar-folder {
+  min-height: 40px;
+}
+
+.inbox-sidebar.is-sidebar-compact .sidebar-count {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 17px;
+  min-height: 17px;
+  padding: 0 4px;
+  font-size: 10px;
+}
+
+.inbox-sidebar.is-sidebar-compact .sidebar-account-item .dot {
+  width: 10px;
+  height: 10px;
+  margin: 0;
+  border-radius: 50%;
+}
+
+.inbox-sidebar.is-sidebar-compact .sidebar-folders {
+  margin-left: 0;
+}
+
+.inbox-sidebar.is-sidebar-compact .mailbox-footer {
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+  padding-inline: 0;
 }
 
 

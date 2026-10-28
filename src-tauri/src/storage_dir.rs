@@ -662,8 +662,11 @@ mod tests {
         assert!(dir.join("ymail.db").exists());
         assert!(!outcome.skipped.is_empty(), "要说明为什么跳过");
 
-        // 盘符根目录认得出；普通目录不能误判成根。
+        // 当前平台的根目录认得出；普通目录不能误判成根。
+        #[cfg(windows)]
         assert!(is_filesystem_root(std::path::Path::new("E:\\")));
+        #[cfg(not(windows))]
+        assert!(is_filesystem_root(std::path::Path::new("/")));
         assert!(!is_filesystem_root(&dir));
     }
 

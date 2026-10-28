@@ -1,6 +1,6 @@
 //! 常用邮箱自动填回归：离开邮箱框或按回车自动补齐，手工改过的服务器参数不被覆盖。
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import AccountForm from "../AccountForm";
@@ -9,6 +9,7 @@ import { api, type Account, type OAuthOutcome } from "../api";
 vi.mock("../api", () => ({
   describeError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
   api: {
+    listAccounts: vi.fn(),
     listProxies: vi.fn(),
     oauthStatus: vi.fn(),
     cancelOAuthAuthorize: vi.fn(),
@@ -33,6 +34,7 @@ function renderForm() {
 }
 
 beforeEach(() => {
+  vi.mocked(api.listAccounts).mockResolvedValue([]);
   vi.mocked(api.listProxies).mockResolvedValue([]);
   vi.mocked(api.cancelOAuthAuthorize).mockResolvedValue(true);
   vi.mocked(api.beginOAuthAuthorize).mockResolvedValue({
@@ -48,6 +50,31 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+describe("新建账号色标推荐", () => {
+  it("读取已有账号后优先选择没用过的颜色", async () => {
+    vi.mocked(api.listAccounts).mockResolvedValue([
+      { color: "#3b82f6" } as Account,
+    ]);
+    renderForm();
+    await waitFor(() => expect(input("色标").value).toBe("#10b981"));
+  });
+
+  it("用户亲手选色后，异步返回的推荐不覆盖", async () => {
+    let finishLoad!: (accounts: Account[]) => void;
+    vi.mocked(api.listAccounts).mockReturnValue(
+      new Promise((resolve) => {
+        finishLoad = resolve;
+      }),
+    );
+    renderForm();
+    fireEvent.change(input("色标"), { target: { value: "#ff0000" } });
+    await act(async () => {
+      finishLoad([{ color: "#3b82f6" } as Account]);
+    });
+    expect(input("色标").value).toBe("#ff0000");
+  });
 });
 
 describe("谷歌应用密钥", () => {

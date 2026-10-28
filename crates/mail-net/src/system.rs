@@ -29,6 +29,7 @@ pub fn read_system_proxy() -> Result<SystemProxy, ConnectionError> {
 ///
 /// 只有「确认没开代理」时才静默直连；开关开着但地址读不出来必须明确报错，
 /// 免得用户以为走了代理、实际却是直连。
+#[cfg_attr(not(windows), allow(dead_code))]
 fn decide_system_proxy(enabled: bool, server: &str, auto_url: &str) -> Result<SystemProxy, ConnectionError> {
     if enabled {
         if let Some((kind, host, port)) = parse_proxy_server(server) {
